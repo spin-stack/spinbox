@@ -32,11 +32,6 @@ variable "GO_LDFLAGS" {
   default = ""
 }
 
-# Linting configuration
-variable "GOLANGCI_LINT_MULTIPLATFORM" {
-  default = ""
-}
-
 # ============================================================================
 # Common Build Configuration
 # ============================================================================
@@ -107,46 +102,8 @@ target "dev" {
 }
 
 # ============================================================================
-# Validation and Linting Targets
+# Validation Targets
 # ============================================================================
-
-# Run all validation checks
-group "validate" {
-  targets = ["lint", "validate-dockerfile"]
-}
-
-# Run linting (golangci-lint, yamllint, golangci config verify)
-target "lint" {
-  name = "lint-${build.name}"
-  inherits = ["_common"]
-  output = ["type=cacheonly"]
-  target = build.target
-  args = {
-    TARGETNAME = build.name
-    GOLANGCI_FROM_SOURCE = "true"
-  }
-  # Enable multi-platform linting for golangci-lint when requested
-  platforms = (build.target == "golangci-lint") && (GOLANGCI_LINT_MULTIPLATFORM != null) ? [
-    "linux/amd64",
-    "darwin/arm64",
-  ] : []
-  matrix = {
-    build = [
-      {
-        name = "default",
-        target = "golangci-lint",
-      },
-      {
-        name = "golangci-verify",
-        target = "golangci-verify",
-      },
-      {
-        name = "yaml",
-        target = "yamllint",
-      },
-    ]
-  }
-}
 
 # Validate Dockerfile syntax
 target "validate-dockerfile" {
