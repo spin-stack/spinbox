@@ -37,7 +37,7 @@ const (
 	maxLogBytes         = 4096 // Maximum log output to include in errors
 )
 
-func newInstance(ctx context.Context, binaryPath, state string, resourceCfg *VMResourceConfig) (*Instance, error) {
+func newInstance(ctx context.Context, binaryPath, stateDir string, resourceCfg *VMResourceConfig) (*Instance, error) {
 	kernelPath, err := findKernel()
 	if err != nil {
 		return nil, err
@@ -76,18 +76,18 @@ func newInstance(ctx context.Context, binaryPath, state string, resourceCfg *VMR
 	// - Cloud Hypervisor creates a single Unix socket at the specified path
 	// - Host connects to that socket and sends "CONNECT <port>\n" to specify the vsock port
 	// - The same socket is used for all vsock port connections (multiplexed)
-	vsockSocketPath := filepath.Join(state, "vsock")
+	vsockSocketPath := filepath.Join(stateDir, "vsock")
 
 	// Use state directory for console log to avoid collision between instances
-	containerID := filepath.Base(state)
-	consolePath := filepath.Join(state, "console.log")
+	containerID := filepath.Base(stateDir)
+	consolePath := filepath.Join(stateDir, "console.log")
 
 	inst := &Instance{
 		binaryPath:    binaryPath,
-		state:         state,
+		stateDir:      stateDir,
 		kernelPath:    kernelPath,
 		initrdPath:    initrdPath,
-		apiSocketPath: filepath.Join(state, "api.sock"),
+		apiSocketPath: filepath.Join(stateDir, "api.sock"),
 		vsockRPCPath:  vsockSocketPath, // Single socket for all vsock connections
 		streamPath:    vsockSocketPath, // Same socket, different port via CONNECT header
 		consolePath:   consolePath,
@@ -290,8 +290,8 @@ func (ch *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}).Debug("cloud-hypervisor: kernel command line prepared")
 
 	// Build command-line arguments for Cloud Hypervisor
-	containerID := filepath.Base(filepath.Dir(ch.state))
-	chLogPath := filepath.Join("/tmp", fmt.Sprintf("cloud-hypervisor-%s.log", containerID))
+	containerID := filepath.Base(filepath.Dir(ch.stateDir))
+	chLogPath := filepath.Join(ch.stateDir, "cloud-hypervisor.log")
 
 	args := []string{
 		"--api-socket", ch.apiSocketPath,
@@ -370,7 +370,7 @@ func (ch *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		},
 		Serial: &ConsoleConfig{
 			Mode: "File",
-			File: filepath.Join("/tmp", "serial.log"),
+			File: filepath.Join(ch.stateDir, "serial.log"),
 		},
 		Console: &ConsoleConfig{
 			Mode: "File",
@@ -581,8 +581,7 @@ func (ch *Instance) logDebugInfo(ctx context.Context) {
 	}
 
 	// Try to read Cloud Hypervisor log
-	containerID := filepath.Base(ch.state)
-	chLogPath := filepath.Join("/tmp", fmt.Sprintf("cloud-hypervisor-%s.log", containerID))
+	chLogPath := filepath.Join(ch.stateDir, "cloud-hypervisor.log")
 	if chLogData, err := os.ReadFile(chLogPath); err == nil && len(chLogData) > 0 {
 		if len(chLogData) > maxLogBytes {
 			chLogData = chLogData[len(chLogData)-maxLogBytes:]

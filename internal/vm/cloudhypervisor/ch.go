@@ -22,10 +22,13 @@ const (
 
 // Instance represents a Cloud Hypervisor VM instance.
 type Instance struct {
+	// mu protects fields that are read/written concurrently during configuration
+	// and startup: disks, filesystems, nets, cmd, api, client, vsockConn.
+	// State transitions are managed via vmState atomic.
 	mu            sync.Mutex
 	vmState       atomic.Uint32 // Current VM state (vmState)
 	binaryPath    string
-	state         string // State directory path
+	stateDir      string // State directory path for sockets, logs, and other runtime files
 	kernelPath    string
 	initrdPath    string
 	apiSocketPath string
@@ -33,11 +36,11 @@ type Instance struct {
 	streamPath    string
 	consolePath   string
 
-	cmd      *exec.Cmd
-	api      *CloudHypervisorClient
-	client   *ttrpc.Client
+	cmd       *exec.Cmd
+	api       *CloudHypervisorClient
+	client    *ttrpc.Client
 	vsockConn net.Conn // Connection to vsock RPC server
-	streamC  uint32
+	streamC   uint32
 
 	// Configuration collected before Start()
 	disks       []*DiskConfig
