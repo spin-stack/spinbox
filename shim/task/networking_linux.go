@@ -71,12 +71,23 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 
 	log.G(ctx).WithField("tap", env.NetworkInfo.TapName).Info("TAP device attached to VM")
 
+	// Use the gateway as DNS server. The host bridge (10.88.0.1) will handle DNS forwarding.
+	// This avoids complexity of parsing /etc/resolv.conf, handling systemd-resolved (127.0.0.53),
+	// dnsmasq (127.0.0.1), and other local DNS proxies. Let the host handle DNS resolution.
+	// Fallback to Google DNS if for some reason there's no gateway.
+	dnsServers := []string{env.NetworkInfo.Gateway.String()}
+	if env.NetworkInfo.Gateway.IsUnspecified() {
+		dnsServers = []string{"8.8.8.8", "8.8.4.4"}
+	}
+
+	log.G(ctx).WithField("dns", dnsServers).Debug("configured DNS servers")
+
 	// Return network configuration for VM kernel
 	return &vm.NetworkConfig{
 		InterfaceName: "eth0",
 		IP:            env.NetworkInfo.IP.String(),
 		Gateway:       env.NetworkInfo.Gateway.String(),
 		Netmask:       env.NetworkInfo.Netmask,
-		DNS:           []string{"8.8.8.8", "8.8.4.4"}, // TODO: Make configurable
+		DNS:           dnsServers,
 	}, nil
 }
