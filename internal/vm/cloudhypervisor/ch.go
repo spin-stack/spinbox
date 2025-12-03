@@ -1,19 +1,31 @@
 package cloudhypervisor
 
 import (
-	"context"
+	"net"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aledbf/beacon/containerd/internal/vm"
 	"github.com/containerd/ttrpc"
 )
 
+// vmState represents the lifecycle state of a VM instance.
+type vmState uint32
+
+const (
+	vmStateNew      vmState = iota // Instance created, not started
+	vmStateStarting                // Start() in progress
+	vmStateRunning                 // VM is running
+	vmStateShutdown                // Shutdown() called
+)
+
 // Instance represents a Cloud Hypervisor VM instance.
 type Instance struct {
 	mu            sync.Mutex
+	vmState       atomic.Uint32 // Current VM state (vmState)
 	binaryPath    string
-	state         string
+	state         string // State directory path
 	kernelPath    string
 	initrdPath    string
 	apiSocketPath string
@@ -21,10 +33,11 @@ type Instance struct {
 	streamPath    string
 	consolePath   string
 
-	cmd     *exec.Cmd
-	api     *CloudHypervisorClient
-	client  *ttrpc.Client
-	streamC uint32
+	cmd      *exec.Cmd
+	api      *CloudHypervisorClient
+	client   *ttrpc.Client
+	vsockConn net.Conn // Connection to vsock RPC server
+	streamC  uint32
 
 	// Configuration collected before Start()
 	disks       []*DiskConfig
@@ -32,8 +45,6 @@ type Instance struct {
 	nets        []*NetConfig
 	networkCfg  *vm.NetworkConfig // CNI network configuration (IP, gateway, netmask)
 	resourceCfg *VMResourceConfig // CPU and memory resource configuration
-
-	shutdownCallbacks []func(context.Context) error
 }
 
 // VMResourceConfig holds the CPU and memory configuration for a VM instance
