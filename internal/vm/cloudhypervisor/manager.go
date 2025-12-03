@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 
 	"github.com/aledbf/beacon/containerd/internal/paths"
 )
@@ -28,69 +26,29 @@ func NewInstance(ctx context.Context, state string, resourceCfg *VMResourceConfi
 	return newInstance(ctx, binaryPath, state, resourceCfg)
 }
 
-// findCloudHypervisor locates the cloud-hypervisor binary
+// findCloudHypervisor returns the path to the cloud-hypervisor binary
 func findCloudHypervisor() (string, error) {
-	// 1. Check environment variable
-	if path := os.Getenv("CLOUD_HYPERVISOR_PATH"); path != "" {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-		return "", fmt.Errorf("CLOUD_HYPERVISOR_PATH set to %q but file not found", path)
-	}
-
-	// 2. Search in PATH
-	if path, err := exec.LookPath("cloud-hypervisor"); err == nil {
+	path := paths.CloudHypervisorPath()
+	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
-
-	// 3. Check common installation locations
-	commonPaths := []string{
-		"/usr/local/bin/cloud-hypervisor",
-		"/usr/bin/cloud-hypervisor",
-		"/opt/cloud-hypervisor/bin/cloud-hypervisor",
-	}
-
-	for _, path := range commonPaths {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-	}
-
-	return "", fmt.Errorf("cloud-hypervisor binary not found in PATH or common locations; install cloud-hypervisor or set CLOUD_HYPERVISOR_PATH")
+	return "", fmt.Errorf("cloud-hypervisor binary not found at %s", path)
 }
 
-// findKernel locates the kernel binary for Cloud Hypervisor
+// findKernel returns the path to the kernel binary for Cloud Hypervisor
 func findKernel() (string, error) {
-	kernelName := paths.KernelName()
-
-	// Search through all configured paths
-	for _, dir := range paths.KernelSearchPaths() {
-		if dir == "" {
-			dir = "."
-		}
-		path := filepath.Join(dir, kernelName)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
+	path := paths.KernelPath()
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
 	}
-
-	return "", fmt.Errorf("kernel %q not found in search paths (use BEACON_SHARE_DIR or install to %s)", kernelName, paths.ShareDir)
+	return "", fmt.Errorf("kernel not found at %s (use BEACON_SHARE_DIR to override)", path)
 }
 
-// findInitrd locates the initrd for Cloud Hypervisor
+// findInitrd returns the path to the initrd for Cloud Hypervisor
 func findInitrd() (string, error) {
-	initrdName := paths.InitrdName()
-
-	// Search through all configured paths
-	for _, dir := range paths.KernelSearchPaths() {
-		if dir == "" {
-			dir = "."
-		}
-		path := filepath.Join(dir, initrdName)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
+	path := paths.InitrdPath()
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
 	}
-
-	return "", fmt.Errorf("initrd %q not found in search paths (use BEACON_SHARE_DIR or install to %s)", initrdName, paths.ShareDir)
+	return "", fmt.Errorf("initrd not found at %s (use BEACON_SHARE_DIR to override)", path)
 }

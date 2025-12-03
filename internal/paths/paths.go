@@ -40,39 +40,22 @@ func GetLogDir() string {
 	return LogDir
 }
 
-// KernelSearchPaths returns the list of directories to search for kernel binaries
-func KernelSearchPaths() []string {
-	paths := []string{}
-
-	// 1. Add PATH environment variable
-	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
-		paths = append(paths, filepath.SplitList(pathEnv)...)
-	}
-
-	// 2. Add beacon share directories
-	paths = append(paths,
-		GetShareDir(),
-		"/usr/share/beacon",
-		"/usr/local/share/beacon",
-		// Legacy beaconbox paths for compatibility
-		"/usr/share/beaconbox",
-		"/usr/local/share/beaconbox",
-	)
-
-	return paths
-}
-
 // NetworkDBPath returns the path to the network allocation database
 func NetworkDBPath() string {
 	return filepath.Join(GetStateDir(), "network.db")
 }
 
-// KernelName returns the kernel binary name for the current architecture
-func KernelName() string {
-	return "beacon-kernel-x86_64"
+// KernelPath returns the full path to the kernel binary
+func KernelPath() string {
+	return filepath.Join(GetShareDir(), "beacon-kernel-x86_64")
 }
 
-// InitrdName returns the initrd binary name
-func InitrdName() string {
-	return "beacon-initrd"
+// InitrdPath returns the full path to the initrd binary
+func InitrdPath() string {
+	return filepath.Join(GetShareDir(), "beacon-initrd")
+}
+
+// CloudHypervisorPath returns the full path to the cloud-hypervisor binary
+func CloudHypervisorPath() string {
+	return filepath.Join(GetStateDir(), "bin", "cloud-hypervisor")
 }

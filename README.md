@@ -388,9 +388,10 @@ nft list ruleset | grep beacon_runner
 # Enable debug logging in containerd
 containerd --log-level debug
 
-# Check Cloud Hypervisor is available
-which cloud-hypervisor
-cloud-hypervisor --version
+# Check binaries are installed
+ls -la /usr/share/beacon/beacon-kernel-x86_64
+ls -la /usr/share/beacon/beacon-initrd
+ls -la /var/lib/beacon/bin/cloud-hypervisor
 
 # Verify KVM access
 ls -la /dev/kvm
@@ -404,17 +405,22 @@ ss -x | grep vsock
 
 **Common issues:**
 
-1. **"cloud-hypervisor binary not found"**
-   - Install Cloud Hypervisor or set `CLOUD_HYPERVISOR_PATH`
+1. **"cloud-hypervisor binary not found at /var/lib/beacon/bin/cloud-hypervisor"**
+   - Install Cloud Hypervisor to `/var/lib/beacon/bin/cloud-hypervisor`
+   - Or use `BEACON_STATE_DIR` environment variable to override the location
 
-2. **"Permission denied on /dev/kvm"**
+2. **"kernel not found at /usr/share/beacon/beacon-kernel-x86_64"**
+   - Install the kernel to `/usr/share/beacon/beacon-kernel-x86_64`
+   - Or use `BEACON_SHARE_DIR` environment variable to override the location
+
+3. **"Permission denied on /dev/kvm"**
    - Add user to `kvm` group: `sudo usermod -aG kvm $USER`
 
-3. **"Network device beacon0 not found"**
+4. **"Network device beacon0 not found"**
    - Network manager creates bridge on first container
    - Check logs for initialization errors
 
-4. **"IP allocation failed"**
+5. **"IP allocation failed"**
    - Check available IPs: `ls /var/lib/beacon/`
    - Reconciliation runs every minute to clean stale leases
 
@@ -435,15 +441,16 @@ The results will be in the `_output` directory:
 
 ### Installation Paths
 
-beacon uses the following standardized paths:
+beacon uses the following standardized paths - these are **not** searched, they must exist at these exact locations:
 
 - **Binaries and config**: `/usr/share/beacon/`
-  - `beacon-kernel-x86_64` - VM kernel
-  - `beacon-initrd` - Initial ramdisk
+  - `/usr/share/beacon/beacon-kernel-x86_64` - VM kernel
+  - `/usr/share/beacon/beacon-initrd` - Initial ramdisk
 
 - **State files**: `/var/lib/beacon/`
-  - `network.db` - Network allocation database
-  - Per-container state directories
+  - `/var/lib/beacon/network.db` - Network allocation database
+  - `/var/lib/beacon/bin/cloud-hypervisor` - Cloud Hypervisor binary
+  - Per-container state directories under `/var/lib/beacon/`
 
 - **Logs**: `/var/log/beacon/`
   - VM and container logs
@@ -453,11 +460,14 @@ These paths can be overridden using environment variables:
 - `BEACON_STATE_DIR` - Override `/var/lib/beacon`
 - `BEACON_LOG_DIR` - Override `/var/log/beacon`
 
+**Note**: Binaries are not searched for in `$PATH` or other locations. They must be installed at the exact paths shown above.
+
 ### Prerequisites
 
 - Linux host with KVM support (`/dev/kvm` accessible)
 - containerd 1.7 or later
-- Cloud Hypervisor binary (installed in PATH or set via `CLOUD_HYPERVISOR_PATH`)
+- Cloud Hypervisor binary installed at `/var/lib/beacon/bin/cloud-hypervisor`
+- Kernel and initrd installed at `/usr/share/beacon/`
 - erofs-utils for EROFS snapshot support
 
 ### Configuring containerd
@@ -505,16 +515,19 @@ ctr run -t --rm --snapshotter erofs --runtime io.containerd.beaconbox.v1 \
 
 ### Installing Cloud Hypervisor
 
-Download and install Cloud Hypervisor:
+Download and install Cloud Hypervisor to the beacon state directory:
 
 ```bash
+# Create the bin directory
+sudo mkdir -p /var/lib/beacon/bin
+
 # Download the latest release
 wget https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/cloud-hypervisor
 chmod +x cloud-hypervisor
-sudo mv cloud-hypervisor /usr/local/bin/
+sudo mv cloud-hypervisor /var/lib/beacon/bin/
 
-# Or set a custom path
-export CLOUD_HYPERVISOR_PATH=/path/to/cloud-hypervisor
+# Verify installation
+ls -la /var/lib/beacon/bin/cloud-hypervisor
 ```
 
 ### Current Limitations
