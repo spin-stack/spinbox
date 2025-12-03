@@ -9,7 +9,7 @@ import (
 	"github.com/containerd/errdefs"
 
 	systemapi "github.com/aledbf/beacon/containerd/api/services/system/v1"
-	"github.com/aledbf/beacon/containerd/internal/vm/cloudhypervisor"
+	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
 )
 
 func TestSystemInfo(t *testing.T) {

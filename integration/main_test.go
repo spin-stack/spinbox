@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aledbf/beacon/containerd/internal/vm/cloudhypervisor"
+	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
 )
 
 func TestMain(m *testing.M) {

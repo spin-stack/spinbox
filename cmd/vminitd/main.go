@@ -26,15 +26,14 @@ import (
 	"github.com/mdlayher/vsock"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/beacon/containerd/internal/systools"
-	"github.com/aledbf/beacon/containerd/plugins"
+	"github.com/aledbf/beacon/containerd/vminit"
+	"github.com/aledbf/beacon/containerd/vminit/systools"
 
-	_ "github.com/aledbf/beacon/containerd/plugins/services/bundle"
-	_ "github.com/aledbf/beacon/containerd/plugins/services/system"
+	_ "github.com/aledbf/beacon/containerd/api/services/bundle/v1"
+	_ "github.com/aledbf/beacon/containerd/api/services/system/v1"
 
-	_ "github.com/aledbf/beacon/containerd/plugins/vminit/events"
-	_ "github.com/aledbf/beacon/containerd/plugins/vminit/streaming"
-	_ "github.com/aledbf/beacon/containerd/plugins/vminit/task"
+	_ "github.com/aledbf/beacon/containerd/vminit/events"
+	_ "github.com/aledbf/beacon/containerd/vminit/streaming"
 )
 
 func main() {
@@ -349,7 +348,7 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 		if reg.Config != nil {
 			// TODO: Allow plugin config?
 			if vc, ok := reg.Config.(interface{ SetVsock(uint32, uint32) }); ok {
-				if reg.Type == plugins.StreamingPlugin {
+				if reg.Type == vminit.StreamingPlugin {
 					vc.SetVsock(uint32(config.VSockContextID), uint32(config.StreamPort))
 				}
 			}

@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	"github.com/aledbf/beacon/containerd/internal/shim/manager"
-	_ "github.com/aledbf/beacon/containerd/plugins/shim/task"
+	"github.com/aledbf/beacon/containerd/shim/manager"
+	_ "github.com/aledbf/beacon/containerd/shim"
 	"github.com/containerd/containerd/v2/pkg/shim"
 )
 
