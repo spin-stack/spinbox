@@ -39,37 +39,32 @@ func (c *CloudHypervisorClient) {{name}}(ctx context.Context{{#arg}}, arg {{arg}
     {{#arg}}
     reqBody, err := json.Marshal(arg)
     if err != nil {
-        return {{#ret}}nil, {{/ret}}fmt.Errorf("encode request: %s", err)
+        return {{#ret}}nil, {{/ret}}fmt.Errorf("encode request: %w", err)
     }
     {{/arg}}
 
     req, err := http.NewRequestWithContext(ctx, "{{method}}", "http://localhost/api/v1{{path}}", {{#arg}}bytes.NewBuffer(reqBody){{/arg}}{{^arg}}nil{{/arg}})
     if err != nil {
-        return {{#ret}}nil, {{/ret}}fmt.Errorf("build request: %s", err)
+        return {{#ret}}nil, {{/ret}}fmt.Errorf("build request: %w", err)
     }
 
     resp, err := c.httpClient.Do(req)
     if err != nil {
-        return {{#ret}}nil, {{/ret}}fmt.Errorf("do request: %s", err)
+        return {{#ret}}nil, {{/ret}}fmt.Errorf("do request: %w", err)
     }
 
-    defer func() {
-      // Drain and close body to prevent connection leaks
-      if resp.Body != nil {
-          _, _ = io.Copy(io.Discard, resp.Body)
-          resp.Body.Close()
-      }
-    }()
-
+    // Handle error responses before setting up defer
     if resp.StatusCode >= 400 {
         body, _ := io.ReadAll(resp.Body)
+        resp.Body.Close()
         return {{#ret}}nil, {{/ret}}fmt.Errorf("request failed: %d %s: %s", resp.StatusCode, http.StatusText(resp.StatusCode), string(body))
     }
+    defer resp.Body.Close()
 
     {{#ret}}
     var ret {{ret}}
     if err := json.NewDecoder(resp.Body).Decode(&ret); err != nil {
-        return {{#ret}}nil, {{/ret}}fmt.Errorf("decode response: %s", err)
+        return nil, fmt.Errorf("decode response: %w", err)
     }
     {{/ret}}
 
