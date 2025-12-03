@@ -4,7 +4,7 @@
 
 # Kernel configuration
 variable "KERNEL_VERSION" {
-  default = "6.17.9"
+  default = "6.18"
 }
 
 variable "KERNEL_ARCH" {
@@ -74,6 +74,7 @@ target "menuconfig" {
 target "kernel" {
   inherits = ["_common"]
   target = "kernel"
+  platforms = ["linux/amd64"]
   output = ["${DESTDIR}"]
 }
 
@@ -81,6 +82,7 @@ target "kernel" {
 target "initrd" {
   inherits = ["_common"]
   target = "initrd"
+  platforms = ["linux/amd64"]
   output = ["${DESTDIR}"]
 }
 
@@ -88,6 +90,7 @@ target "initrd" {
 target "shim" {
   inherits = ["_common"]
   target = "shim"
+  platforms = ["linux/amd64"]
   output = ["${DESTDIR}"]
 }
 

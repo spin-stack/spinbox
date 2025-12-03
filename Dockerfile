@@ -18,10 +18,8 @@ ARG RUST_IMAGE="rust:1.89.0-slim-${BASE_DEBIAN_DISTRO}"
 # Base Images
 # ============================================================================
 
-# xx is a helper for cross-compilation
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:${XX_VERSION} AS xx
-
-FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS base
+# We only support x86_64/amd64 - platform is set via docker-bake.hcl
+FROM ${GOLANG_IMAGE} AS base
 
 RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 RUN apt-get update && apt-get install --no-install-recommends -y file apparmor curl
@@ -93,8 +91,11 @@ EOT
 # Compile the kernel (separate from base to allow config construction from fragments in the future)
 FROM kernel-build-base AS kernel-build
 
+ARG KERNEL_ARCH
+ARG KERNEL_NPROC
+
 # Compile the kernel and modules
-RUN cd linux && make -j${KERNEL_NPROC} all
+RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} all
 
 RUN <<EOT
     set -e
@@ -102,11 +103,13 @@ RUN <<EOT
     mkdir /build
     cp .config /build/kernel-config
 
-    case $(uname -m) in
-        x86_64) cp vmlinux /build/kernel ;;
-        aarch64) cp arch/arm64/boot/Image /build/kernel ;;
-        *) echo "Unsupported architecture: $(uname -m)" ; exit 1 ;;
-    esac
+    # Only x86_64 is supported
+    if [ "${KERNEL_ARCH}" != "x86_64" ]; then
+        echo "ERROR: Only x86_64 architecture is supported, got: ${KERNEL_ARCH}"
+        exit 1
+    fi
+
+    cp vmlinux /build/kernel
 EOT
 
 # ============================================================================
