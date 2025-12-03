@@ -1,4 +1,8 @@
-# Build the Linux kernel, initrd ,and containerd shim for running nerbox
+# Build the Linux kernel, initrd, and containerd shim for running beaconbox
+# This multi-stage build produces:
+# - Custom Linux kernel with container/virtualization support
+# - initrd with vminitd and crun
+# - containerd shim for beaconbox runtime
 
 ARG XX_VERSION=1.6.1
 ARG GO_VERSION=1.25.4
@@ -10,6 +14,10 @@ ARG DOCKER_VERSION=28.4.0
 ARG DOCKER_IMAGE="docker:${DOCKER_VERSION}-cli"
 ARG RUST_IMAGE="rust:1.89.0-slim-${BASE_DEBIAN_DISTRO}"
 
+# ============================================================================
+# Base Images
+# ============================================================================
+
 # xx is a helper for cross-compilation
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:${XX_VERSION} AS xx
 
@@ -17,6 +25,10 @@ FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS base
 
 RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 RUN apt-get update && apt-get install --no-install-recommends -y file apparmor curl
+
+# ============================================================================
+# Kernel Build Stages
+# ============================================================================
 
 FROM base AS kernel-build-base
 
@@ -30,7 +42,7 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=kernel-aptcache,target=/var/cache/apt \
         apt-get update && apt-get install -y build-essential libncurses-dev flex bison libssl-dev libelf-dev bc cpio git wget xz-utils curl
 
-ARG KERNEL_VERSION="6.17.9"
+ARG KERNEL_VERSION="6.18"
 ARG KERNEL_ARCH="x86_64"
 ARG KERNEL_NPROC="16"
 
@@ -49,7 +61,7 @@ RUN wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.ta
     mv linux-${KERNEL_VERSION} linux
 
 # Copy kernel config from repository
-COPY kernel/config-6.17.9-x86_64 /usr/src/linux/.config
+COPY kernel/config-6.18-x86_64 /usr/src/linux/.config
 
 RUN <<EOT
     set -e
@@ -75,11 +87,10 @@ RUN <<EOT
     echo "Verifying kernel config for Docker support..."
     /usr/local/bin/check-docker-config.sh /usr/src/linux/.config || (echo "Kernel config verification failed!" ; exit 1)
 
-    echo "Using kernel config from kernel/config-6.17.9-x86_64"
+    echo "Using kernel config from kernel/config-6.18-x86_64"
 EOT
 
-# Build the kernel
-# Seperate from base to allow config construction from fragments in the future
+# Compile the kernel (separate from base to allow config construction from fragments in the future)
 FROM kernel-build-base AS kernel-build
 
 # Compile the kernel and modules
@@ -97,6 +108,10 @@ RUN <<EOT
         *) echo "Unsupported architecture: $(uname -m)" ; exit 1 ;;
     esac
 EOT
+
+# ============================================================================
+# Go Binary Build Stages
+# ============================================================================
 
 FROM base AS shim-build
 
@@ -128,17 +143,15 @@ RUN --mount=type=bind,target=.,rw \
     go build ${GO_DEBUG_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o /build/vminitd -ldflags '-extldflags \"-static\" -s -w' -tags 'osusergo netgo static_build no_grpc'  ./cmd/vminitd
 
 FROM base AS crun-build
+ARG TARGETARCH
 WORKDIR /usr/src/crun
 
-RUN <<EOT
-    mkdir /build
-    case $(uname -m) in
-        x86_64) ARCH=amd64 ;;
-        aarch64) ARCH=arm64 ;;
-        *) echo "Unsupported architecture: $(uname -m)" ; exit 1 ;;
-    esac
-    wget -O /build/crun https://github.com/containers/crun/releases/download/1.25.1/crun-1.25.1-linux-${ARCH}-disable-systemd
-EOT
+RUN mkdir /build && \
+    wget -O /build/crun https://github.com/containers/crun/releases/download/1.25.1/crun-1.25.1-linux-${TARGETARCH}-disable-systemd
+
+# ============================================================================
+# initrd Build Stage
+# ============================================================================
 
 FROM base AS initrd-build
 WORKDIR /usr/src/init
@@ -168,9 +181,12 @@ RUN <<EOT
     (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/beacon-initrd
 EOT
 
+# ============================================================================
+# Output Stages (minimal scratch images with artifacts)
+# ============================================================================
+
 FROM scratch AS kernel
 ARG KERNEL_ARCH="x86_64"
-COPY --from=kernel-build /build/kernel /beacon-kernel-${KERNEL_ARCH}
 COPY --from=kernel-build /build/kernel /beacon-kernel-${KERNEL_ARCH}
 COPY --from=kernel-build /build/kernel-config /kernel-config
 
@@ -179,6 +195,10 @@ COPY --from=initrd-build /build/beacon-initrd /beacon-initrd
 
 FROM scratch AS shim
 COPY --from=shim-build /build/containerd-shim-beaconbox-v1 /containerd-shim-beaconbox-v1
+
+# ============================================================================
+# Development Environment
+# ============================================================================
 
 FROM "${DOCKER_IMAGE}" AS docker-cli
 
@@ -207,6 +227,9 @@ COPY --from=dlv /go/bin/dlv /usr/local/bin/dlv
 
 VOLUME /var/lib/containerd
 
+# ============================================================================
+# Linting and Validation Stages
+# ============================================================================
 
 FROM base AS golangci-build
 WORKDIR /src
@@ -251,16 +274,13 @@ RUN --mount=target=/go/src/github.com/containerd/beaconbox \
   golangci-lint run -c .golangci.yml && \
   touch /golangci-lint.done
 
-FROM lint-base AS golangci-verify-false
+FROM lint-base AS golangci-verify
+ARG GOLANGCI_FROM_SOURCE
 RUN --mount=target=/go/src/github.com/containerd/beaconbox \
-  golangci-lint config verify && \
+  if [ "${GOLANGCI_FROM_SOURCE}" != "true" ]; then \
+    golangci-lint config verify; \
+  fi && \
   touch /golangci-verify.done
-
-FROM scratch AS golangci-verify-true
-COPY <<EOF /golangci-verify.done
-EOF
-
-FROM golangci-verify-${GOLANGCI_FROM_SOURCE} AS golangci-verify
 
 FROM lint-base AS yamllint
 RUN --mount=target=/go/src/github.com/containerd/beaconbox \

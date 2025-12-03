@@ -124,18 +124,24 @@ tasks:
         msg: "KERNEL_VERSION environment variable must be set"
       - sh: "[ -n \"${KERNEL_ARCH:-}\" ]"
         msg: "KERNEL_ARCH environment variable must be set"
+    interactive: true
     cmds:
       - |
         set -eou pipefail
         echo "🐳 Building menuconfig environment..."
         {{.BUILDX}} bake menuconfig
         echo "🐳 Starting kernel menuconfig..."
+        echo "   Use arrow keys to navigate, Space to select, Enter to confirm"
+        echo "   Press '/' to search for options"
+        echo ""
+      - |
         {{.DOCKER}} run --rm -it \
           -v ./kernel:/config \
           -w /usr/src/linux \
           -e KCONFIG_CONFIG=/config/config-${KERNEL_VERSION}-${KERNEL_ARCH} \
+          -e TERM=${TERM:-xterm-256color} \
           beacon-menuconfig \
-          make menuconfig
+          bash -c "make ARCH=${KERNEL_ARCH} menuconfig && cp .config /config/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
 
   # ==========================================================================
   # Validation Tasks
