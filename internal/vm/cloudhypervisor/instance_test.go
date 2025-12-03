@@ -76,66 +76,71 @@ func TestCHInstance_AddTAPNIC_MultipleCalls(t *testing.T) {
 }
 
 func TestFindCloudHypervisor(t *testing.T) {
-	// This test tries to find cloud-hypervisor binary
-	// It will succeed if the binary is in PATH, otherwise skip
-
 	path, err := findCloudHypervisor()
 	if err != nil {
-		t.Skipf("cloud-hypervisor not found: %v", err)
+		t.Skipf("cloud-hypervisor not found (expected if not installed): %v", err)
+		return
 	}
 
 	if path == "" {
-		t.Skip("cloud-hypervisor not found in PATH")
+		t.Fatal("findCloudHypervisor returned empty path without error")
 	}
 
 	t.Logf("Found cloud-hypervisor at: %s", path)
 }
 
 func TestFindKernel(t *testing.T) {
-	// Test kernel detection
 	path, err := findKernel()
 	if err != nil {
-		t.Logf("No kernel found (expected on macOS): %v", err)
+		t.Skipf("No kernel found (expected if not installed): %v", err)
 		return
 	}
 
 	if path == "" {
-		t.Log("No kernel found in default locations (expected on macOS)")
-	} else {
-		t.Logf("Found kernel at: %s", path)
+		t.Fatal("findKernel returned empty path without error")
 	}
+
+	t.Logf("Found kernel at: %s", path)
 }
 
 func TestFindInitrd(t *testing.T) {
-	// Test initrd detection
 	path, err := findInitrd()
 	if err != nil {
-		t.Logf("No initrd found (expected on macOS): %v", err)
+		t.Skipf("No initrd found (expected if not installed): %v", err)
 		return
 	}
 
 	if path == "" {
-		t.Log("No initrd found in default locations (expected on macOS)")
-	} else {
-		t.Logf("Found initrd at: %s", path)
+		t.Fatal("findInitrd returned empty path without error")
 	}
+
+	t.Logf("Found initrd at: %s", path)
 }
 
 func TestNewInstance(t *testing.T) {
-	// This test requires cloud-hypervisor to be available
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 
 	instance, err := NewInstance(ctx, tmpDir, nil)
-
-	// We expect this to fail on macOS or if cloud-hypervisor is not installed
-	// But we can verify the error handling
 	if err != nil {
-		t.Logf("NewInstance failed (expected without cloud-hypervisor): %v", err)
+		t.Skipf("NewInstance failed (expected without cloud-hypervisor or kernel/initrd): %v", err)
 		return
 	}
 
 	if instance == nil {
-		t.Error("instance should not be nil when err is nil")
+		t.Fatal("instance should not be nil when err is nil")
+	}
+
+	// Verify instance was configured correctly
+	if instance.stateDir != tmpDir {
+		t.Errorf("stateDir = %q, want %q", instance.stateDir, tmpDir)
+	}
+
+	// Verify resource defaults were applied
+	if instance.resourceCfg == nil {
+		t.Fatal("resourceCfg should not be nil")
+	}
+	if instance.resourceCfg.BootCPUs != defaultBootCPUs {
+		t.Errorf("BootCPUs = %d, want %d", instance.resourceCfg.BootCPUs, defaultBootCPUs)
 	}
 }

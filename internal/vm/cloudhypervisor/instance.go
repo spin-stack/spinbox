@@ -290,7 +290,6 @@ func (ch *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}).Debug("cloud-hypervisor: kernel command line prepared")
 
 	// Build command-line arguments for Cloud Hypervisor
-	containerID := filepath.Base(filepath.Dir(ch.stateDir))
 	chLogPath := filepath.Join(ch.stateDir, "cloud-hypervisor.log")
 
 	args := []string{
@@ -309,7 +308,8 @@ func (ch *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Start Cloud Hypervisor
 	ch.cmd = exec.CommandContext(ctx, ch.binaryPath, args...)
 
-	ch.cmd.Stdout = os.Stderr
+	// Cloud Hypervisor logs to --log-file, so we don't need stdout/stderr
+	ch.cmd.Stdout = nil
 	ch.cmd.Stderr = os.Stderr
 	ch.cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
@@ -422,6 +422,11 @@ func (ch *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 }
 
 func (ch *Instance) Client() *ttrpc.Client {
+	// Return nil if VM is shutdown, preventing use after close
+	if vmState(ch.vmState.Load()) == vmStateShutdown {
+		return nil
+	}
+
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 	return ch.client
@@ -436,7 +441,15 @@ func (ch *Instance) Shutdown(ctx context.Context) error {
 
 	var errs []error
 
-	// Close vsock connection
+	// Close TTRPC client first to stop any in-flight requests
+	if ch.client != nil {
+		if err := ch.client.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close ttrpc client: %w", err))
+		}
+		ch.client = nil
+	}
+
+	// Close vsock connection before shutting down VM
 	if ch.vsockConn != nil {
 		if err := ch.vsockConn.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close vsock connection: %w", err))
@@ -463,9 +476,21 @@ func (ch *Instance) Shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// StartStream creates a new stream connection to the VM for I/O operations.
+//
+// Cloud Hypervisor vsock stream protocol:
+// 1. Connect to the vsock Unix socket (multiplexed for all vsock ports)
+// 2. Send "CONNECT <port>\n" to Cloud Hypervisor to specify vsock stream port
+// 3. Wait for "OK <port>\n" acknowledgment from Cloud Hypervisor
+// 4. Send 4-byte stream ID (big-endian uint32) to vminitd
+// 5. Wait for 4-byte stream ID acknowledgment from vminitd
+// 6. Connection is ready for bidirectional streaming
+//
+// Returns a unique stream ID and the connection, or an error if setup fails.
 func (ch *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 	const timeIncrement = 10 * time.Millisecond
 	for d := timeIncrement; d < time.Second; d += timeIncrement {
+		// Generate unique stream ID (wraps at uint32 max, checked for exhaustion)
 		sid := atomic.AddUint32(&ch.streamC, 1)
 		if sid == 0 {
 			return 0, nil, fmt.Errorf("exhausted stream identifiers: %w", errdefs.ErrUnavailable)
@@ -483,16 +508,16 @@ func (ch *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 				return 0, nil, fmt.Errorf("failed to connect to stream server: %w", err)
 			}
 
-			// Send CONNECT header to specify vsock stream port
+			// Step 1: Send CONNECT header to Cloud Hypervisor vsock muxer
 			connectHeader := fmt.Sprintf("CONNECT %d\n", vsockStreamPort)
 			if _, err := conn.Write([]byte(connectHeader)); err != nil {
 				conn.Close()
 				return 0, nil, fmt.Errorf("failed to send CONNECT header: %w", err)
 			}
 
-			// Read the "OK <port>\n" acknowledgment from Cloud Hypervisor muxer
+			// Step 2: Read "OK <port>\n" acknowledgment from Cloud Hypervisor
 			connectAckBuf := make([]byte, 32)
-			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			conn.SetReadDeadline(time.Now().Add(connectAckTimeout))
 			n, err := conn.Read(connectAckBuf)
 			if err != nil {
 				conn.Close()
@@ -505,7 +530,7 @@ func (ch *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 			}
 			conn.SetReadDeadline(time.Time{}) // Clear deadline
 
-			// Now send stream ID
+			// Step 3: Send stream ID to vminitd (4 bytes, big-endian)
 			var vs [4]byte
 			binary.BigEndian.PutUint32(vs[:], sid)
 			if _, err := conn.Write(vs[:]); err != nil {
@@ -513,7 +538,7 @@ func (ch *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 				return 0, nil, fmt.Errorf("failed to write stream id: %w", err)
 			}
 
-			// Wait for stream ack from vminitd
+			// Step 4: Wait for stream ID acknowledgment from vminitd
 			var streamAck [4]byte
 			if _, err := io.ReadFull(conn, streamAck[:]); err != nil {
 				conn.Close()
