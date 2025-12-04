@@ -35,34 +35,16 @@ import (
 )
 
 func main() {
-	t1 := time.Now()
-	var (
-		config ServiceConfig
-		dev    = flag.Bool("dev", false, "Development mode with graceful exit")
-	)
-	flag.BoolVar(&config.Debug, "debug", true, "Debug log level")
+	var config ServiceConfig
+	flag.BoolVar(&config.Debug, "debug", false, "Debug log level")
 	flag.IntVar(&config.RPCPort, "vsock-rpc-port", 1025, "vsock port to listen for rpc on")
 	flag.IntVar(&config.StreamPort, "vsock-stream-port", 1026, "vsock port to listen for streams on")
 	flag.IntVar(&config.VSockContextID, "vsock-cid", 3, "vsock context ID for vsock listen")
 	args := os.Args[1:]
-	// Strip "tsi_hijack" added by libkrun
-	if len(args) > 0 && args[0] == "tsi_hijack" {
-		args = args[1:]
-	}
+
 	flag.CommandLine.Parse(args)
 
-	/*
-		c, err := os.OpenFile("/dev/console", os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to open /dev/console: %v\n", err)
-			os.Exit(1)
-		}
-		defer c.Close()
-		log.L.Logger.SetOutput(c)
-	*/
-	var err error
-
-	if *dev || config.Debug {
+	if config.Debug {
 		log.SetLevel("debug")
 	}
 
@@ -71,28 +53,30 @@ func main() {
 	log.G(ctx).WithField("args", args).WithField("env", os.Environ()).Debug("starting vminitd")
 
 	defer func() {
-		if err != nil {
-			log.G(ctx).WithError(err).Error("exiting with error")
-		} else if p := recover(); p != nil {
+		if p := recover(); p != nil {
 			log.G(ctx).WithField("panic", p).Error("recovered from panic")
-		} else {
-			log.G(ctx).Debug("exiting cleanly")
 		}
 
-		if !*dev {
-			// Trigger VM shutdown via reboot syscall
-			// This will cause Cloud Hypervisor to exit cleanly
-			log.G(ctx).Info("powering off VM")
-			if err := unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF); err != nil {
-				log.G(ctx).WithError(err).Error("failed to power off VM")
-			}
+		// Trigger VM shutdown via reboot syscall
+		// This will cause Cloud Hypervisor to exit cleanly
+		log.G(ctx).Info("powering off VM")
+		if err := unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF); err != nil {
+			log.G(ctx).WithError(err).Error("failed to power off VM")
 		}
 	}()
 
+	if err := run(ctx, config); err != nil {
+		log.G(ctx).WithError(err).Error("exiting with error")
+	}
+}
+
+func run(ctx context.Context, config ServiceConfig) error {
+	t1 := time.Now()
+
 	ctx, config.Shutdown = shutdown.WithShutdown(ctx)
-	err = systemInit(ctx, config)
-	if err != nil {
-		return
+
+	if err := systemInit(ctx, config); err != nil {
+		return err
 	}
 
 	if config.Debug {
@@ -101,11 +85,14 @@ func main() {
 
 	service, err := New(ctx, config)
 	if err != nil {
-		return
+		return err
 	}
 
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
+	// Limit GOMAXPROCS to 2 for VM environment
+	// Cloud Hypervisor VMs typically have 2 vCPUs allocated
+	// This prevents scheduler overhead and improves cache locality
 	runtime.GOMAXPROCS(2)
 
 	serviceErr := make(chan error, 1)
@@ -113,7 +100,7 @@ func main() {
 		serviceErr <- service.Run(ctx)
 	}()
 
-	s := make(chan os.Signal, 16)
+	s := make(chan os.Signal, 1)
 	signal.Notify(s, unix.SIGKILL, unix.SIGINT, unix.SIGTERM, unix.SIGHUP, unix.SIGQUIT, unix.SIGCHLD)
 	for {
 		select {
@@ -121,10 +108,10 @@ func main() {
 			if err := config.Shutdown.Err(); err != nil && !errors.Is(err, shutdown.ErrShutdown) {
 				log.G(ctx).WithError(err).Error("shutdown error")
 			}
-			return
+			return nil
 		case err := <-serviceErr:
 			log.G(ctx).WithError(err).Error("service exited")
-			return
+			return err
 		case sig := <-s:
 			switch sig {
 			case unix.SIGCHLD:
@@ -140,24 +127,19 @@ func main() {
 				log.G(ctx).WithField("signal", sig).Debug("received unhandled signal")
 			}
 		}
-
 	}
-
 }
 
-// systemInit initializes the system and returns a function to renew DHCP
-// leases.
-func systemInit(ctx context.Context, config ServiceConfig) error {
+// systemInit initializes the system
+func systemInit(ctx context.Context, _ ServiceConfig) error {
 	if err := systemMounts(); err != nil {
 		return err
 	}
 
 	// Wait for virtio block devices to appear
 	// This is necessary because the kernel may not have probed all virtio devices yet
-	if err := waitForBlockDevices(ctx); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to wait for block devices")
-		// Don't fail - devices might appear later or not be needed
-	}
+	// Not fatal if devices don't appear - they might appear later or not be needed
+	waitForBlockDevices(ctx)
 
 	if err := setupCgroupControl(); err != nil {
 		return err
@@ -172,14 +154,20 @@ func systemInit(ctx context.Context, config ServiceConfig) error {
 
 // waitForBlockDevices waits for virtio block devices to appear in /dev
 // The kernel needs time to probe PCI devices and create device nodes
-func waitForBlockDevices(ctx context.Context) error {
+// This is a best-effort operation - if devices don't appear, we continue anyway
+func waitForBlockDevices(ctx context.Context) {
 	timeout := 5 * time.Second
-	pollInterval := 50 * time.Millisecond
-	deadline := time.Now().Add(timeout)
+	pollInterval := 10 * time.Millisecond
 
 	log.G(ctx).Debug("waiting for virtio block devices to appear")
 
-	for time.Now().Before(deadline) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
 		// Check /sys/block for all block devices
 		entries, err := os.ReadDir("/sys/block")
 		if err == nil {
@@ -204,23 +192,22 @@ func waitForBlockDevices(ctx context.Context) error {
 						devNodes = append(devNodes, devPath)
 					}
 				}
-				log.G(ctx).WithField("dev_nodes", devNodes).Info("virtio block device nodes ready")
 
 				if len(devNodes) > 0 {
-					return nil
+					log.G(ctx).WithField("dev_nodes", devNodes).Info("virtio block device nodes ready")
+					return
 				}
 			}
 		}
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
+			log.G(ctx).Warn("timeout waiting for virtio block devices, continuing anyway")
+			return
+		case <-ticker.C:
+			// continue polling
 		}
 	}
-
-	log.G(ctx).Warn("timeout waiting for virtio block devices, continuing anyway")
-	return fmt.Errorf("timeout waiting for block devices")
 }
 
 func systemMounts() error {
