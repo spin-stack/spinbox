@@ -37,44 +37,44 @@ fi
 echo "🛑 Stopping services..."
 
 # Stop and disable services
-if systemctl is-active --quiet containerd; then
-    echo "  → Stopping containerd service..."
-    systemctl stop containerd
-    echo -e "    ${GREEN}✓${NC} containerd stopped"
+if systemctl is-active --quiet beacon-containerd; then
+    echo "  → Stopping beacon-containerd service..."
+    systemctl stop beacon-containerd
+    echo -e "    ${GREEN}✓${NC} beacon-containerd stopped"
 fi
 
-if systemctl is-enabled --quiet containerd 2>/dev/null; then
-    echo "  → Disabling containerd service..."
-    systemctl disable containerd
-    echo -e "    ${GREEN}✓${NC} containerd disabled"
+if systemctl is-enabled --quiet beacon-containerd 2>/dev/null; then
+    echo "  → Disabling beacon-containerd service..."
+    systemctl disable beacon-containerd
+    echo -e "    ${GREEN}✓${NC} beacon-containerd disabled"
 fi
 
-if systemctl is-active --quiet buildkit; then
-    echo "  → Stopping buildkit service..."
-    systemctl stop buildkit
-    echo -e "    ${GREEN}✓${NC} buildkit stopped"
+if systemctl is-active --quiet beacon-buildkit; then
+    echo "  → Stopping beacon-buildkit service..."
+    systemctl stop beacon-buildkit
+    echo -e "    ${GREEN}✓${NC} beacon-buildkit stopped"
 fi
 
-if systemctl is-enabled --quiet buildkit 2>/dev/null; then
-    echo "  → Disabling buildkit service..."
-    systemctl disable buildkit
-    echo -e "    ${GREEN}✓${NC} buildkit disabled"
+if systemctl is-enabled --quiet beacon-buildkit 2>/dev/null; then
+    echo "  → Disabling beacon-buildkit service..."
+    systemctl disable beacon-buildkit
+    echo -e "    ${GREEN}✓${NC} beacon-buildkit disabled"
 fi
 
 echo ""
 echo "🗑️  Removing files..."
 
-# Remove systemd service files
-if [ -f /etc/systemd/system/containerd.service ]; then
-    echo "  → Removing containerd.service..."
-    rm -f /etc/systemd/system/containerd.service
-    echo -e "    ${GREEN}✓${NC} containerd.service removed"
+# Remove systemd service symlinks
+if [ -L /etc/systemd/system/beacon-containerd.service ]; then
+    echo "  → Removing beacon-containerd.service symlink..."
+    rm -f /etc/systemd/system/beacon-containerd.service
+    echo -e "    ${GREEN}✓${NC} beacon-containerd.service symlink removed"
 fi
 
-if [ -f /etc/systemd/system/buildkit.service ]; then
-    echo "  → Removing buildkit.service..."
-    rm -f /etc/systemd/system/buildkit.service
-    echo -e "    ${GREEN}✓${NC} buildkit.service removed"
+if [ -L /etc/systemd/system/beacon-buildkit.service ]; then
+    echo "  → Removing beacon-buildkit.service symlink..."
+    rm -f /etc/systemd/system/beacon-buildkit.service
+    echo -e "    ${GREEN}✓${NC} beacon-buildkit.service symlink removed"
 fi
 
 systemctl daemon-reload

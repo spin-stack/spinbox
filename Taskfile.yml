@@ -266,19 +266,19 @@ tasks:
         # Clean and create release directory structure
         rm -rf _output/release
         mkdir -p "${RELEASE_DIR}/usr/share/beacon/bin"
+        mkdir -p "${RELEASE_DIR}/usr/share/beacon/kernel"
         mkdir -p "${RELEASE_DIR}/usr/share/beacon/config"
-        mkdir -p "${RELEASE_DIR}/var/lib/beacon/bin"
 
         echo "📂 Copying artifacts to release structure..."
 
-        # Copy kernel and initrd to /usr/share/beacon/bin
+        # Copy kernel and initrd to /usr/share/beacon/kernel
         if [ -f "_output/beacon-kernel-x86_64" ]; then
-          cp _output/beacon-kernel-x86_64 "${RELEASE_DIR}/usr/share/beacon/bin/"
+          cp _output/beacon-kernel-x86_64 "${RELEASE_DIR}/usr/share/beacon/kernel/"
           echo "  ✓ beacon-kernel-x86_64"
         fi
 
         if [ -f "_output/beacon-initrd" ]; then
-          cp _output/beacon-initrd "${RELEASE_DIR}/usr/share/beacon/bin/"
+          cp _output/beacon-initrd "${RELEASE_DIR}/usr/share/beacon/kernel/"
           echo "  ✓ beacon-initrd"
         fi
 
@@ -288,24 +288,38 @@ tasks:
           echo "  ✓ containerd-shim-beaconbox-v1"
         fi
 
-        # Copy cloud-hypervisor if available
-        if [ -f "_output/cloud-hypervisor" ]; then
-          cp _output/cloud-hypervisor "${RELEASE_DIR}/var/lib/beacon/bin/"
-          echo "  ✓ cloud-hypervisor"
+        # Download and install cloud-hypervisor
+        echo "📥 Downloading cloud-hypervisor..."
+        CH_VERSION="49.0"
+        CH_URL="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/cloud-hypervisor-static"
+        CH_REMOTE_URL="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/ch-remote-static"
+
+        if [ ! -f "_output/cloud-hypervisor-static" ]; then
+          curl -L -o "_output/cloud-hypervisor-static" "${CH_URL}"
+          chmod +x "_output/cloud-hypervisor-static"
         fi
+
+        if [ ! -f "_output/ch-remote-static" ]; then
+          curl -L -o "_output/ch-remote-static" "${CH_REMOTE_URL}"
+          chmod +x "_output/ch-remote-static"
+        fi
+
+        cp _output/cloud-hypervisor-static "${RELEASE_DIR}/usr/share/beacon/bin/cloud-hypervisor"
+        cp _output/ch-remote-static "${RELEASE_DIR}/usr/share/beacon/bin/ch-remote"
+        echo "  ✓ cloud-hypervisor v${CH_VERSION}"
 
         # Copy configuration files
         echo "📂 Copying configuration files..."
         cp -r release/config/* "${RELEASE_DIR}/usr/share/beacon/config/"
         echo "  ✓ config files (buildkit, containerd)"
 
-        # Copy systemd service files
+        # Copy systemd service files to /usr/share/beacon/systemd
         echo "📂 Copying systemd services..."
-        mkdir -p "${RELEASE_DIR}/systemd"
-        cp release/systemd/*.service "${RELEASE_DIR}/systemd/"
+        mkdir -p "${RELEASE_DIR}/usr/share/beacon/systemd"
+        cp release/systemd/*.service "${RELEASE_DIR}/usr/share/beacon/systemd/"
         echo "  ✓ systemd services"
 
-        # Copy install/uninstall scripts
+        # Copy install/uninstall scripts to tarball root (for easy access)
         echo "📂 Copying install scripts..."
         cp release/install.sh "${RELEASE_DIR}/"
         cp release/uninstall.sh "${RELEASE_DIR}/"
@@ -323,13 +337,23 @@ tasks:
           curl -L -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
         fi
 
-        echo "📂 Extracting nerdctl and CNI plugins..."
-        # Extract nerdctl binary to /usr/share/beacon/bin
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/" bin/nerdctl
-        echo "  ✓ nerdctl"
+        echo "📂 Extracting nerdctl-full components..."
+        # Extract core binaries to /usr/share/beacon/bin
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/" \
+          bin/nerdctl \
+          bin/containerd \
+          bin/containerd-shim-runc-v2 \
+          bin/ctr \
+          bin/runc
+        echo "  ✓ containerd, runc, ctr, nerdctl"
 
-        # Extract CNI plugins to /usr/share/beacon/bin
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/bin" --strip-components=2 \
+        # Extract buildkitd and buildctl to /usr/share/beacon/bin
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/" bin/buildkitd bin/buildctl
+        echo "  ✓ buildkit"
+
+        # Extract CNI plugins to /usr/share/beacon/libexec/cni
+        mkdir -p "${RELEASE_DIR}/usr/share/beacon/libexec/cni"
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/libexec/cni" --strip-components=2 \
           libexec/cni/bandwidth \
           libexec/cni/bridge \
           libexec/cni/dhcp \

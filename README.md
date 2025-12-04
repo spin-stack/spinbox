@@ -389,9 +389,9 @@ nft list ruleset | grep beacon_runner
 containerd --log-level debug
 
 # Check binaries are installed
-ls -la /usr/share/beacon/beacon-kernel-x86_64
-ls -la /usr/share/beacon/beacon-initrd
-ls -la /var/lib/beacon/bin/cloud-hypervisor
+ls -la /usr/share/beacon/kernel/beacon-kernel-x86_64
+ls -la /usr/share/beacon/kernel/beacon-initrd
+ls -la /usr/share/beacon/bin/cloud-hypervisor
 
 # Verify KVM access
 ls -la /dev/kvm
@@ -405,12 +405,12 @@ ss -x | grep vsock
 
 **Common issues:**
 
-1. **"cloud-hypervisor binary not found at /var/lib/beacon/bin/cloud-hypervisor"**
-   - Install Cloud Hypervisor to `/var/lib/beacon/bin/cloud-hypervisor`
-   - Or use `BEACON_STATE_DIR` environment variable to override the location
+1. **"cloud-hypervisor binary not found at /usr/share/beacon/bin/cloud-hypervisor"**
+   - Install Cloud Hypervisor to `/usr/share/beacon/bin/cloud-hypervisor`
+   - Or use `BEACON_SHARE_DIR` environment variable to override the location
 
-2. **"kernel not found at /usr/share/beacon/beacon-kernel-x86_64"**
-   - Install the kernel to `/usr/share/beacon/beacon-kernel-x86_64`
+2. **"kernel not found at /usr/share/beacon/kernel/beacon-kernel-x86_64"**
+   - Install the kernel to `/usr/share/beacon/kernel/beacon-kernel-x86_64`
    - Or use `BEACON_SHARE_DIR` environment variable to override the location
 
 3. **"Permission denied on /dev/kvm"**
@@ -444,12 +444,22 @@ The results will be in the `_output` directory:
 beacon uses the following standardized paths - these are **not** searched, they must exist at these exact locations:
 
 - **Binaries and config**: `/usr/share/beacon/`
-  - `/usr/share/beacon/beacon-kernel-x86_64` - VM kernel
-  - `/usr/share/beacon/beacon-initrd` - Initial ramdisk
+  - `/usr/share/beacon/bin/` - Executable binaries
+    - `containerd`, `ctr`, `runc` - Container runtime components
+    - `nerdctl` - Docker-compatible CLI
+    - `buildkitd`, `buildctl` - BuildKit components
+    - `cloud-hypervisor`, `ch-remote` - VM hypervisor
+    - `containerd-shim-beaconbox-v1` - Beacon runtime shim
+  - `/usr/share/beacon/kernel/` - Kernel files
+    - `beacon-kernel-x86_64` - VM kernel
+    - `beacon-initrd` - Initial ramdisk
+  - `/usr/share/beacon/libexec/cni/` - CNI plugins
+  - `/usr/share/beacon/config/` - Configuration files
+  - `/usr/share/beacon/systemd/` - Systemd service files
 
 - **State files**: `/var/lib/beacon/`
   - `/var/lib/beacon/network.db` - Network allocation database
-  - `/var/lib/beacon/bin/cloud-hypervisor` - Cloud Hypervisor binary
+  - `/var/lib/beacon/containerd/` - containerd state
   - Per-container state directories under `/var/lib/beacon/`
 
 - **Logs**: `/var/log/beacon/`
