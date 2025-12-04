@@ -4,7 +4,6 @@ package bundle
 
 import (
 	context "context"
-
 	ttrpc "github.com/containerd/ttrpc"
 )
 
