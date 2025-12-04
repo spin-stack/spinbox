@@ -426,12 +426,34 @@ ss -x | grep vsock
 
 ## Getting Started
 
-Building requires Docker with buildx installed.
+### Prerequisites
 
-Run `make` to build the shim, kernel, and initrd:
+Building requires:
+- Go 1.23+
+- Docker with buildx installed
+- Task runner (https://taskfile.dev) - `go install github.com/go-task/task/v3/cmd/task@latest`
+
+### First-time Setup
+
+Install all required development tools (protoc, protobuf generators, etc.):
 
 ```bash
-make
+task setup
+```
+
+This will install:
+- Protocol buffer compiler (protoc)
+- Go protobuf code generators (protoc-gen-go, protoc-gen-go-ttrpc)
+- Protobuild tool and utilities
+
+If you see warnings about `/usr/local/include`, run the suggested sudo commands to complete the setup.
+
+### Building
+
+Build the shim, kernel, and initrd:
+
+```bash
+task build
 ```
 
 The results will be in the `_output` directory:
@@ -472,12 +494,11 @@ These paths can be overridden using environment variables:
 
 **Note**: Binaries are not searched for in `$PATH` or other locations. They must be installed at the exact paths shown above.
 
-### Prerequisites
+### Runtime Prerequisites
 
 - Linux host with KVM support (`/dev/kvm` accessible)
 - containerd 1.7 or later
-- Cloud Hypervisor binary installed at `/var/lib/beacon/bin/cloud-hypervisor`
-- Kernel and initrd installed at `/usr/share/beacon/`
+- All beacon components installed at the paths listed above (use the release tarball and run `install.sh`)
 - erofs-utils for EROFS snapshot support
 
 ### Configuring containerd

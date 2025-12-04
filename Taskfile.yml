@@ -163,6 +163,84 @@ tasks:
         echo "✓ Linting passed"
 
   # ==========================================================================
+  # Setup and Tool Installation
+  # ==========================================================================
+
+  setup:
+    desc: Install all required development tools
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Installing development tools..."
+
+        # Install Go protobuf tools
+        echo "  → Installing Go protobuf tools..."
+        go install github.com/containerd/protobuild@v0.3.0
+        go install github.com/containerd/protobuild/cmd/go-fix-acronym@v0.3.0
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28.1
+        go install github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc@v1.2.5
+        echo "    ✓ Go protobuf tools installed"
+
+        # Install protoc compiler
+        echo "  → Installing protoc compiler..."
+        PROTOBUF_VERSION=3.20.1
+        PROTOBUF_DIR=$(mktemp -d)
+        GOOS=$(go env GOOS)
+        GOARCH=$(go env GOARCH)
+
+        # Determine target platform for protoc download
+        case "${GOOS}-${GOARCH}" in
+          darwin-amd64)  TARGET="osx-x86_64" ;;
+          darwin-arm64)  TARGET="osx-aarch_64" ;;
+          linux-amd64)   TARGET="linux-x86_64" ;;
+          linux-arm64)   TARGET="linux-aarch_64" ;;
+          linux-386)     TARGET="linux-x86_32" ;;
+          linux-ppc64le) TARGET="linux-ppcle_64" ;;
+          windows-amd64) TARGET="win64" ;;
+          windows-386)   TARGET="win32" ;;
+          *)
+            echo "    ⚠ Unsupported platform: ${GOOS}-${GOARCH}"
+            echo "    Please install protoc manually from:"
+            echo "    https://github.com/protocolbuffers/protobuf/releases"
+            exit 1
+            ;;
+        esac
+
+        # Download and install protoc
+        mkdir -p bin
+        curl -sL -o "${PROTOBUF_DIR}/protobuf.zip" \
+          "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-${TARGET}.zip"
+        unzip -qo "${PROTOBUF_DIR}/protobuf.zip" -d bin/
+        rm -rf "${PROTOBUF_DIR}"
+
+        # Install protobuf includes system-wide (requires sudo on most systems)
+        # Try to install, and if it fails due to permissions, show instructions
+        if [ -d /usr/local/include ] && [ -w /usr/local/include ]; then
+          # We have write access
+          cp -r bin/include/google /usr/local/include/
+          mkdir -p /usr/local/include/google/rpc
+          curl -sL \
+            https://raw.githubusercontent.com/grpc/grpc/v1.45.2/src/proto/grpc/status/status.proto \
+            -o /usr/local/include/google/rpc/status.proto
+          echo "    ✓ Protobuf includes installed to /usr/local/include"
+        else
+          # Need sudo
+          echo "    ⚠ Cannot write to /usr/local/include - sudo required"
+          echo ""
+          echo "    Please run the following commands to complete setup:"
+          echo ""
+          echo "      sudo mkdir -p /usr/local/include"
+          echo "      sudo cp -r bin/include/google /usr/local/include/"
+          echo "      sudo mkdir -p /usr/local/include/google/rpc"
+          echo "      sudo curl -L https://raw.githubusercontent.com/grpc/grpc/v1.45.2/src/proto/grpc/status/status.proto -o /usr/local/include/google/rpc/status.proto"
+          echo ""
+        fi
+
+        echo "    ✓ protoc compiler installed to bin/bin/protoc"
+        echo ""
+        echo "✓ Setup complete!"
+
+  # ==========================================================================
   # Protobuf Tasks (optional)
   # ==========================================================================
 
@@ -172,9 +250,35 @@ tasks:
       - |
         set -eou pipefail
         echo "🐳 Generating protobufs..."
-        cd api && PATH="$(pwd)/../bin:${PATH}" protobuild --quiet $(go list -m)/api/...
+
+        # protobuild requires GOPATH mode - ensure symlinks exist
+        MODULE_PATH=$(grep '^module ' go.mod | awk '{print $2}')
+        GOPATH_DIR="${HOME}/go/src/${MODULE_PATH}"
+
+        if [ ! -d "${GOPATH_DIR}" ]; then
+          echo "  → Creating GOPATH symlink for protobuild..."
+          mkdir -p "$(dirname "${GOPATH_DIR}")"
+          ln -sfn "$(pwd)" "${GOPATH_DIR}"
+          echo "    ✓ Symlink created: ${GOPATH_DIR} -> $(pwd)"
+        fi
+
+        # Create symlink for containerd/api dependency (needed for proto imports)
+        CONTAINERD_API_DIR="${HOME}/go/src/github.com/containerd/containerd/api"
+        if [ ! -d "${CONTAINERD_API_DIR}" ]; then
+          echo "  → Creating containerd/api symlink for proto imports..."
+          CONTAINERD_API_MOD=$(go list -m -f '{{.Dir}}' github.com/containerd/containerd/api)
+          mkdir -p "$(dirname "${CONTAINERD_API_DIR}")"
+          ln -sfn "${CONTAINERD_API_MOD}" "${CONTAINERD_API_DIR}"
+          echo "    ✓ Symlink created: ${CONTAINERD_API_DIR}"
+        fi
+
+        # Run protobuild from GOPATH location (required for correct import paths)
+        cd "${GOPATH_DIR}/api" && PATH="$(pwd)/../bin/bin:${HOME}/go/bin:${PATH}" protobuild --quiet ${MODULE_PATH}/api/...
+
+        # Fix Go acronyms in generated files
         go-fix-acronym -w -a '^Os' $(find api/ -name '*.pb.go')
         go-fix-acronym -w -a '(Id|Io|Uuid|Os)$$' $(find api/ -name '*.pb.go')
+
         echo "✓ Protobufs generated"
 
   check:protos:
