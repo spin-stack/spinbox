@@ -272,8 +272,19 @@ tasks:
           echo "    ✓ Symlink created: ${CONTAINERD_API_DIR}"
         fi
 
+        # Save original directory
+        ORIGINAL_DIR="$(pwd)"
+
         # Run protobuild from GOPATH location (required for correct import paths)
-        cd "${GOPATH_DIR}/api" && PATH="$(pwd)/../bin/bin:${HOME}/go/bin:${PATH}" protobuild --quiet ${MODULE_PATH}/api/...
+        # Note: We must run in a subshell with PWD set to prevent symlink resolution
+        (
+          cd "${GOPATH_DIR}/api"
+          export PATH="${GOPATH_DIR}/bin/bin:${HOME}/go/bin:${PATH}"
+          export PWD="${GOPATH_DIR}/api"
+
+          # Run protobuild - it should use GOPATH paths
+          protobuild --quiet ${MODULE_PATH}/api/...
+        )
 
         # Fix Go acronyms in generated files
         go-fix-acronym -w -a '^Os' $(find api/ -name '*.pb.go')
