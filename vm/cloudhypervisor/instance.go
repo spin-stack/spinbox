@@ -279,6 +279,8 @@ func (ch *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		"noreplace-smp",
 		"rw",
 		"net.ifnames=0", "biosdevname=0",
+		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2 (unified hierarchy)
+		"cgroup_no_v1=all",                   // Disable cgroup v1 entirely
 	}
 
 	if len(netConfigs) > 0 {
