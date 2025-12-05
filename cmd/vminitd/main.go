@@ -274,19 +274,26 @@ type Runnable interface {
 }
 
 type ServiceConfig struct {
-	VSockContextID int
-	RPCPort        int
-	StreamPort     int
-	Shutdown       shutdown.Service
-	Debug          bool
+	VSockContextID  int
+	RPCPort         int
+	StreamPort      int
+	Shutdown        shutdown.Service
+	Debug           bool
+	DisabledPlugins []string
 }
 
 func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 	var (
 		initializedPlugins = plugin.NewPluginSet()
 		disabledPlugins    = map[string]struct{}{}
-		// TODO: service config?
 	)
+
+	// Build disabled plugins map from config
+	if len(config.DisabledPlugins) > 0 {
+		for _, p := range config.DisabledPlugins {
+			disabledPlugins[p] = struct{}{}
+		}
+	}
 
 	l, err := vsock.ListenContextID(uint32(config.VSockContextID), uint32(config.RPCPort), &vsock.Config{})
 	if err != nil {
@@ -311,13 +318,6 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 			return config.Shutdown, nil
 		},
 	})
-
-	// TODO: Allow disabling plugins
-	//if len(cfg.DisabledPlugins) > 0 {
-	//	for _, p := range cfg.DisabledPlugins {
-	//		disabledPlugins[p] = struct{}{}
-	//	}
-	//}
 
 	for _, reg := range registry.Graph(func(*plugin.Registration) bool { return false }) {
 		id := reg.URI()

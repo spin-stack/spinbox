@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -71,21 +72,49 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 						return fmt.Errorf("unknown mkdir mount option %q", o)
 					}
 					part := strings.SplitN(o[len(prefix):], ":", 4)
+					var dir string
+					var mode os.FileMode = 0755
+					var uid, gid int = -1, -1
+
 					switch len(part) {
 					case 4:
-						// TODO: Support setting uid/gid
+						// Format: path:mode:uid:gid
+						var err error
+						gid, err = strconv.Atoi(part[3])
+						if err != nil {
+							return fmt.Errorf("invalid gid %q in mkdir option: %w", part[3], err)
+						}
 						fallthrough
 					case 3:
+						// Format: path:mode:uid
+						var err error
+						uid, err = strconv.Atoi(part[2])
+						if err != nil {
+							return fmt.Errorf("invalid uid %q in mkdir option: %w", part[2], err)
+						}
 						fallthrough
 					case 2:
+						// Format: path:mode
+						m, err := strconv.ParseUint(part[1], 8, 32)
+						if err != nil {
+							return fmt.Errorf("invalid mode %q in mkdir option: %w", part[1], err)
+						}
+						mode = os.FileMode(m)
 						fallthrough
 					case 1:
-						dir := part[0]
+						// Format: path
+						dir = part[0]
 						if !strings.HasPrefix(dir, mdir) {
 							return fmt.Errorf("mkdir mount source %q must be under %q", dir, mdir)
 						}
-						if err := os.MkdirAll(dir, 0755); err != nil {
+						if err := os.MkdirAll(dir, mode); err != nil {
 							return err
+						}
+						// Set ownership if uid/gid were specified
+						if uid != -1 || gid != -1 {
+							if err := os.Chown(dir, uid, gid); err != nil {
+								return fmt.Errorf("failed to chown %q to %d:%d: %w", dir, uid, gid, err)
+							}
 						}
 					default:
 						return fmt.Errorf("invalid mkdir mount option %q", o)

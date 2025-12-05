@@ -164,9 +164,8 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (ch <-chan *even
 			case ev := <-channel.C:
 				env, ok := ev.(*events.Envelope)
 				if !ok {
-					// TODO(stevvooe): For the most part, we are well protected
-					// from this condition. Both Forward and Publish protect
-					// from this.
+					// This should not happen in practice - both Forward and Publish
+					// methods ensure only *events.Envelope types are sent to this channel.
 					err = fmt.Errorf("invalid envelope encountered %#v; please file a bug", ev)
 					break
 				}

@@ -94,11 +94,18 @@ func transformMounts(ctx context.Context, vmi vm.Instance, id string, ms []*type
 			if len(disk) > 36 {
 				disk = disk[:36]
 			}
-			// TODO: Check read only option
+			// Check if mount should be read-only
+			readOnly := false
+			for _, opt := range m.Options {
+				if opt == "ro" || opt == "readonly" {
+					readOnly = true
+					break
+				}
+			}
 			addDisks = append(addDisks, diskOptions{
 				name:     disk,
 				source:   m.Source,
-				readOnly: false,
+				readOnly: readOnly,
 				vmdk:     false,
 			})
 			am = append(am, &types.Mount{
