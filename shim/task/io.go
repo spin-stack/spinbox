@@ -72,8 +72,22 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 		if err != nil {
 			return stdio.Stdio{}, nil, err
 		}
+	case "binary":
+		// Binary scheme spawns a custom logging binary process
+		// The binary receives stdout/stderr via file descriptors
+		// URI format: binary:///path/to/binary?arg=value
+		pio, streams, err = createStreams(ctx, ss, pio)
+		if err != nil {
+			return stdio.Stdio{}, nil, err
+		}
+	case "pipe":
+		// Pipe scheme uses OS pipes directly for I/O
+		// This is similar to fifo but uses anonymous pipes instead of named pipes
+		pio, streams, err = createStreams(ctx, ss, pio)
+		if err != nil {
+			return stdio.Stdio{}, nil, err
+		}
 	default:
-		// TODO: Support "binary" and "pipe"
 		return stdio.Stdio{}, nil, fmt.Errorf("unsupported STDIO scheme %s: %w", u.Scheme, errdefs.ErrNotImplemented)
 	}
 	if err != nil {
