@@ -39,7 +39,10 @@ import (
 	"github.com/aledbf/beacon/containerd/shim/bundle"
 	"github.com/aledbf/beacon/containerd/store"
 	"github.com/aledbf/beacon/containerd/vm"
-	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
+
+	// Import VMM implementations to register factories
+	_ "github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
+	_ "github.com/aledbf/beacon/containerd/vm/qemu"
 )
 
 const (
@@ -90,7 +93,7 @@ type service struct {
 	mu sync.Mutex
 
 	// vm is the VM instance used to run the container
-	vm *cloudhypervisor.Instance
+	vm vm.Instance
 
 	// networkManager handles network resource allocation and cleanup
 	networkManager network.NetworkManagerInterface
@@ -325,7 +328,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	hostMemory = alignMemory(hostMemory, virtioMemAlignment)
 
 	// Build VM resource configuration
-	resourceCfg := &cloudhypervisor.VMResourceConfig{
+	resourceCfg := &vm.VMResourceConfig{
 		BootCPUs:          cpuRequest,
 		MaxCPUs:           hostCPUs,
 		MemorySize:        memoryRequest,

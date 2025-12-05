@@ -7,7 +7,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/ttrpc"
 
-	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
+	"github.com/aledbf/beacon/containerd/vm"
 )
 
 func (s *service) client() (*ttrpc.Client, error) {
@@ -23,12 +23,21 @@ func (s *service) client() (*ttrpc.Client, error) {
 	return client, nil
 }
 
-func (s *service) vmInstance(ctx context.Context, containerID, state string, resourceCfg *cloudhypervisor.VMResourceConfig) (*cloudhypervisor.Instance, error) {
+func (s *service) vmInstance(ctx context.Context, containerID, state string, resourceCfg *vm.VMResourceConfig) (vm.Instance, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.vm == nil {
-		var err error
-		s.vm, err = cloudhypervisor.NewInstance(ctx, containerID, state, resourceCfg)
+		// Get VMM type from environment or default
+		vmmType := vm.GetVMType()
+
+		// Create factory for selected VMM
+		factory, err := vm.NewFactory(ctx, vmmType)
+		if err != nil {
+			return nil, err
+		}
+
+		// Create instance
+		s.vm, err = factory.NewInstance(ctx, containerID, state, resourceCfg)
 		if err != nil {
 			return nil, err
 		}

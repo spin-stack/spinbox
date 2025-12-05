@@ -36,7 +36,7 @@ const (
 	maxLogBytes         = 4096 // Maximum log output to include in errors
 )
 
-func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, resourceCfg *VMResourceConfig) (*Instance, error) {
+func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, resourceCfg *vm.VMResourceConfig) (*Instance, error) {
 	kernelPath, err := findKernel()
 	if err != nil {
 		return nil, err
@@ -49,7 +49,7 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 
 	// Provide default resource configuration if none specified
 	if resourceCfg == nil {
-		resourceCfg = &VMResourceConfig{
+		resourceCfg = &vm.VMResourceConfig{
 			BootCPUs:          defaultBootCPUs,
 			MaxCPUs:           defaultMaxCPUs,
 			MemorySize:        defaultMemorySize,

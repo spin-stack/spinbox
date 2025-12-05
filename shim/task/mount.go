@@ -13,7 +13,6 @@ import (
 
 	"github.com/aledbf/beacon/containerd/erofs"
 	"github.com/aledbf/beacon/containerd/vm"
-	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
 )
 
 type diskOptions struct {
@@ -25,7 +24,7 @@ type diskOptions struct {
 
 // transformMounts does not perform any local mounts but transforms
 // the mounts to be used inside the VM via virtio
-func transformMounts(ctx context.Context, vmi *cloudhypervisor.Instance, id string, ms []*types.Mount) ([]*types.Mount, error) {
+func transformMounts(ctx context.Context, vmi vm.Instance, id string, ms []*types.Mount) ([]*types.Mount, error) {
 	var (
 		disks    byte = 'a'
 		addDisks []diskOptions

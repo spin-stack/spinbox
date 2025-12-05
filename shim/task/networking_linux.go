@@ -12,7 +12,6 @@ import (
 
 	"github.com/aledbf/beacon/containerd/network"
 	"github.com/aledbf/beacon/containerd/vm"
-	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
 )
 
 // generateGuestMAC generates a unique MAC address for the VM guest interface
@@ -34,7 +33,7 @@ func generateGuestMAC(id string) net.HardwareAddr {
 // and TAP device management. NetworkManager handles bridge creation, IP allocation,
 // TAP device lifecycle, and NFTables rules.
 // Returns the network configuration that should be passed to the VM kernel
-func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vmi *cloudhypervisor.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
+func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vmi vm.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
 	log.G(ctx).WithField("id", containerID).Info("setting up NetworkManager-based networking")
 
 	// Create environment for this container

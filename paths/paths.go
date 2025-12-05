@@ -59,3 +59,20 @@ func InitrdPath() string {
 func CloudHypervisorPath() string {
 	return filepath.Join(GetShareDir(), "bin", "cloud-hypervisor")
 }
+
+// QemuPath returns the full path to the qemu-system-x86_64 binary
+func QemuPath() string {
+	// Check custom path first
+	if path := os.Getenv("BEACON_QEMU_PATH"); path != "" {
+		return path
+	}
+
+	// Check beacon share directory
+	customPath := filepath.Join(GetShareDir(), "bin", "qemu-system-x86_64")
+	if _, err := os.Stat(customPath); err == nil {
+		return customPath
+	}
+
+	// Fall back to system QEMU
+	return "/usr/bin/qemu-system-x86_64"
+}

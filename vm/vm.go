@@ -1,6 +1,13 @@
 // Package vm defines shared types for VM implementations.
-// Concrete VM implementations are in subpackages (e.g., cloudhypervisor).
+// Concrete VM implementations are in subpackages (e.g., cloudhypervisor, qemu).
 package vm
+
+import (
+	"context"
+	"net"
+
+	"github.com/containerd/ttrpc"
+)
 
 type NetworkMode int
 
@@ -16,6 +23,14 @@ type NetworkConfig struct {
 	Gateway       string   // Gateway IP (e.g., "10.88.0.1")
 	Netmask       string   // Netmask (e.g., "255.255.255.0")
 	DNS           []string // DNS servers
+}
+
+// VMResourceConfig defines VM resource limits (shared across all VMM backends).
+type VMResourceConfig struct {
+	BootCPUs          int   // Initial vCPUs (default: 1)
+	MaxCPUs           int   // Max vCPUs for hotplug (default: 2)
+	MemorySize        int64 // Initial memory in bytes (default: 512 MiB)
+	MemoryHotplugSize int64 // Max memory for hotplug in bytes (default: 2 GiB)
 }
 
 // StartOpts defines configuration options for starting a VM.
@@ -66,7 +81,7 @@ func WithVmdk() MountOpt {
 
 // VMInfo contains metadata about the VMM backend
 type VMInfo struct {
-	// Type identifies the VMM backend (e.g., "libkrun", "cloudhypervisor")
+	// Type identifies the VMM backend (e.g., "cloudhypervisor", "qemu")
 	Type string
 
 	// SupportsTAP indicates whether the VMM supports TAP device networking
@@ -74,4 +89,25 @@ type VMInfo struct {
 
 	// SupportsVSOCK indicates whether the VMM supports vsock for communication
 	SupportsVSOCK bool
+}
+
+// Instance represents a VM instance that can run containers.
+// This interface abstracts the VMM backend (Cloud Hypervisor, QEMU, etc.)
+type Instance interface {
+	// Device configuration (called before Start)
+	AddDisk(ctx context.Context, blockID, mountPath string, opts ...MountOpt) error
+	AddTAPNIC(ctx context.Context, tapName string, mac net.HardwareAddr) error
+	AddFS(ctx context.Context, tag, mountPath string, opts ...MountOpt) error
+	AddNIC(ctx context.Context, endpoint string, mac net.HardwareAddr, mode NetworkMode, features, flags uint32) error
+
+	// Lifecycle management
+	Start(ctx context.Context, opts ...StartOpt) error
+	Shutdown(ctx context.Context) error
+
+	// Communication with guest
+	Client() *ttrpc.Client
+	StartStream(ctx context.Context) (uint32, net.Conn, error)
+
+	// Metadata
+	VMInfo() VMInfo
 }

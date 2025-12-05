@@ -6,13 +6,16 @@ import (
 	"os"
 
 	"github.com/aledbf/beacon/containerd/paths"
+	"github.com/aledbf/beacon/containerd/vm"
 )
 
 // NewInstance creates a new Cloud Hypervisor VM instance.
 // The containerID parameter uniquely identifies this VM for logging purposes.
 // The state parameter is the directory where VM state files will be stored.
 // The resourceCfg parameter specifies CPU and memory configuration.
-func NewInstance(ctx context.Context, containerID, state string, resourceCfg *VMResourceConfig) (*Instance, error) {
+//
+// Deprecated: Use vm.NewFactory(vm.VMTypeCloudHypervisor) instead.
+func NewInstance(ctx context.Context, containerID, state string, resourceCfg *vm.VMResourceConfig) (*Instance, error) {
 	// Locate cloud-hypervisor binary
 	binaryPath, err := findCloudHypervisor()
 	if err != nil {

@@ -9,10 +9,10 @@ import (
 	"github.com/containerd/errdefs"
 
 	"github.com/aledbf/beacon/containerd/mountutil"
-	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
+	"github.com/aledbf/beacon/containerd/vm"
 )
 
-func setupMounts(ctx context.Context, vmi *cloudhypervisor.Instance, id string, m []*types.Mount, rootfs, lmounts string) ([]*types.Mount, error) {
+func setupMounts(ctx context.Context, vmi vm.Instance, id string, m []*types.Mount, rootfs, lmounts string) ([]*types.Mount, error) {
 	// Handle mounts
 
 	// Cloud Hypervisor doesn't support AddFS (virtiofs requires shared memory + virtiofsd)
