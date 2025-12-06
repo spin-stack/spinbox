@@ -208,19 +208,21 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	qemuArgs := q.buildQemuCommandLine(cmdlineArgs)
 
 	// Print full command for manual testing
-	fullCmd := fmt.Sprintf("%s %s", q.binaryPath, strings.Join(qemuArgs, " "))
 	log.G(ctx).WithFields(log.Fields{
 		"binary":  q.binaryPath,
 		"cmdline": strings.Join(qemuArgs, " "),
-	}).Info("qemu: starting microvm")
+	}).Debug("qemu: starting vm")
 
-	// DEBUG: Print command for reference
-	fmt.Printf("\n\n=== QEMU COMMAND ===\n%s\n=== END COMMAND ===\n\n", fullCmd)
+	// Create QEMU log file for stdout/stderr
+	qemuLogFile, err := os.Create(q.qemuLogPath)
+	if err != nil {
+		return fmt.Errorf("failed to create qemu log file: %w", err)
+	}
 
 	// Start QEMU
-	// Note: With -serial stdio, we let the serial console output go to our stdout/stderr
-	// instead of redirecting to a log file
 	q.cmd = exec.CommandContext(ctx, q.binaryPath, qemuArgs...)
+	q.cmd.Stdout = qemuLogFile
+	q.cmd.Stderr = qemuLogFile
 	q.cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
@@ -318,13 +320,15 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	// Convert memory from bytes to MB
 	memoryMB := q.resourceCfg.MemorySize / (1024 * 1024)
+	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
 
 	args := []string{
-		"-M", "q35",
+		"-machine", "q35",
 		"-enable-kvm",
-		"-cpu", "host",
-		"-m", fmt.Sprintf("%dg", memoryMB/1024),
-		"-smp", fmt.Sprintf("%d", q.resourceCfg.BootCPUs),
+
+		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
+		"-m", fmt.Sprintf("%d,slots=16,maxmem=%dM", memoryMB, memoryMaxMB),
+		"-cpu", "host,migratable=on",
 
 		// Kernel boot
 		"-kernel", q.kernelPath,
@@ -332,9 +336,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		"-append", cmdlineArgs,
 
 		// Defaults
-		"-nodefaults",
-		"-no-user-config",
-		"-nographic",
+		"-nodefaults", "-no-user-config", "-nographic",
 
 		// Serial console - redirect to log file
 		"-serial", fmt.Sprintf("file:%s", q.consolePath),
