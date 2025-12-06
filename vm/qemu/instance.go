@@ -18,6 +18,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	"github.com/mdlayher/vsock"
 
 	"github.com/aledbf/beacon/containerd/vm"
 )
@@ -335,8 +336,8 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		"-no-user-config",
 		"-nographic",
 
-		// Serial console
-		"-serial", "stdio",
+		// Serial console - redirect to log file
+		"-serial", fmt.Sprintf("file:%s", q.consolePath),
 
 		// Vsock for guest communication (using vhost-vsock kernel module)
 		"-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", vsockCID),
@@ -350,7 +351,15 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 
 	// Add disks
 	for i, disk := range q.disks {
-		driveArgs := fmt.Sprintf("file=%s,if=none,id=blk%d,format=raw", disk.Path, i)
+		// Detect format based on file extension
+		format := "raw"
+		if strings.HasSuffix(disk.Path, ".vmdk") {
+			format = "vmdk"
+		} else if strings.HasSuffix(disk.Path, ".qcow2") {
+			format = "qcow2"
+		}
+
+		driveArgs := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s", disk.Path, i, format)
 		if disk.Readonly {
 			driveArgs += ",readonly=on"
 		}
@@ -449,12 +458,9 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 		default:
 		}
 
-		if _, err := os.Stat(q.vsockPath); err == nil {
-			conn, err := net.Dial("unix", q.vsockPath)
-			if err != nil {
-				return 0, nil, fmt.Errorf("failed to connect to stream server: %w", err)
-			}
-
+		// Connect directly via vsock stream port
+		conn, err := vsock.Dial(vsockCID, vsockStreamPort, nil)
+		if err == nil {
 			// Send stream ID to vminitd (4 bytes, big-endian)
 			var vs [4]byte
 			binary.BigEndian.PutUint32(vs[:], sid)
@@ -486,16 +492,13 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 
 // connectVsockRPC establishes a connection to the vsock RPC server (vminitd)
 func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
-	log.G(ctx).WithField("socket", q.vsockPath).Info("qemu: connecting to vsock RPC socket")
-
-	// Wait for vsock socket to appear
-	if err := waitForSocket(ctx, q.vsockPath, vmStartTimeout); err != nil {
-		q.logDebugInfo(ctx)
-		return nil, err
-	}
+	log.G(ctx).WithFields(log.Fields{
+		"cid":  vsockCID,
+		"port": vsockRPCPort,
+	}).Info("qemu: connecting to vsock RPC port")
 
 	// Wait a bit for vminitd to fully initialize
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	retryStart := time.Now()
 	pingDeadline := 50 * time.Millisecond
@@ -511,9 +514,10 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 			return nil, fmt.Errorf("timeout waiting for vminitd to accept connections")
 		}
 
-		conn, err := net.Dial("unix", q.vsockPath)
+		// Connect directly via vsock using kernel's vhost-vsock driver
+		conn, err := vsock.Dial(vsockCID, vsockRPCPort, nil)
 		if err != nil {
-			log.G(ctx).WithError(err).Debug("qemu: failed to dial vsock socket")
+			log.G(ctx).WithError(err).Debug("qemu: failed to dial vsock")
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}

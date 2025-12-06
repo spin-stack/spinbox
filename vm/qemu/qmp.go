@@ -98,14 +98,14 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 		"micro": greeting.QMP.Version.QEMU.Micro,
 	}).Debug("qemu: connected to QMP")
 
+	// Start event loop in background BEFORE sending commands
+	go qmp.eventLoop(ctx)
+
 	// Enter command mode
 	if err := qmp.execute(ctx, "qmp_capabilities", nil); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to negotiate QMP capabilities: %w", err)
 	}
-
-	// Start event loop in background
-	go qmp.eventLoop(ctx)
 
 	return qmp, nil
 }
