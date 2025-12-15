@@ -308,9 +308,12 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	// Build kernel command line
 	cmdlineParts := []string{
 		"console=ttyS0",
-		"net.ifnames=0", "biosdevname=0",
+		"quiet",                          // Reduce boot messages for faster boot
+		"loglevel=3",                     // Minimal kernel logging (errors only)
+		"net.ifnames=0", "biosdevname=0", // Predictable network naming
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
 		"cgroup_no_v1=all",                   // Disable cgroup v1
+		"nohz=off",                           // Disable tickless kernel (reduces overhead for short-lived VMs)
 	}
 
 	if len(netConfigs) > 0 {
@@ -328,24 +331,40 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	memoryMB := q.resourceCfg.MemorySize / (1024 * 1024)
 	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
 
+	// Calculate memory hotplug slots needed (0-16 based on usage)
+	memorySlots := 8 // Reduced from 16 - adequate for most workloads
+	if q.resourceCfg.MemoryHotplugSize <= q.resourceCfg.MemorySize {
+		memorySlots = 0 // No hotplug needed if max equals initial
+	}
+
 	args := []string{
 		// BIOS/firmware path - must come first
 		"-L", q.qemuSharePath,
 
-		"-machine", "q35",
-		"-enable-kvm",
-
-		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
-		"-m", fmt.Sprintf("%d,slots=16,maxmem=%dM", memoryMB, memoryMaxMB),
+		"-machine", "q35,accel=kvm,kernel-irqchip=on", // Optimize: use kernel IRQ chip
 		"-cpu", "host,migratable=on",
 
+		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
+	}
+
+	// Memory configuration - optimize slots based on hotplug needs
+	if memorySlots > 0 {
+		args = append(args, "-m", fmt.Sprintf("%d,slots=%d,maxmem=%dM", memoryMB, memorySlots, memoryMaxMB))
+	} else {
+		args = append(args, "-m", fmt.Sprintf("%d", memoryMB))
+	}
+
+	args = append(args,
 		// Kernel boot
 		"-kernel", q.kernelPath,
 		"-initrd", q.initrdPath,
 		"-append", cmdlineArgs,
 
-		// Defaults
-		"-nodefaults", "-no-user-config", "-nographic",
+		// Optimization: disable unnecessary devices
+		"-nodefaults",
+		"-no-user-config",
+		"-nographic",
+		"-no-hpet", // Disable High Precision Event Timer (not needed for containers)
 
 		// Serial console - redirect to log file
 		"-serial", fmt.Sprintf("file:%s", q.consolePath),
@@ -356,9 +375,9 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		// QMP for VM control
 		"-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", q.qmpSocketPath),
 
-		// RNG device
+		// RNG device for entropy
 		"-device", "virtio-rng-pci",
-	}
+	)
 
 	// Add disks
 	for i, disk := range q.disks {
