@@ -10,9 +10,35 @@ import (
 	boltstore "github.com/aledbf/beacon/containerd/store"
 )
 
+// NetworkMode represents the network management mode.
+type NetworkMode string
+
+const (
+	// NetworkModeLegacy uses the built-in NetworkManager.
+	NetworkModeLegacy NetworkMode = "legacy"
+
+	// NetworkModeCNI uses CNI plugin chains (not supported on Darwin).
+	NetworkModeCNI NetworkMode = "cni"
+)
+
 // NetworkConfig defines network configuration
 type NetworkConfig struct {
 	Subnet string
+	Mode   NetworkMode
+
+	// CNI fields (not used on Darwin)
+	CNIConfDir     string
+	CNIBinDir      string
+	CNINetworkName string
+}
+
+// LoadNetworkConfig loads network configuration.
+// On Darwin, always returns legacy mode as CNI is not supported.
+func LoadNetworkConfig() NetworkConfig {
+	return NetworkConfig{
+		Subnet: "10.88.0.0/16",
+		Mode:   NetworkModeLegacy,
+	}
 }
 
 // NetworkInfo holds internal network configuration

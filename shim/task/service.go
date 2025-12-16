@@ -165,9 +165,12 @@ func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, e
 		return nil, fmt.Errorf("create IP store: %w", err)
 	}
 
+	// Load network configuration (detects CNI vs legacy mode from environment)
+	netCfg := network.LoadNetworkConfig()
+
 	// Create NetworkManager
 	nm, err := network.NewNetworkManager(
-		network.NetworkConfig{Subnet: "10.88.0.0/16"},
+		netCfg,
 		networkConfigStore,
 		ipStore,
 		nil, // Use default module checker
@@ -181,7 +184,7 @@ func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, e
 		return nil, fmt.Errorf("create network manager: %w", err)
 	}
 
-	log.G(ctx).Info("NetworkManager initialized")
+	log.G(ctx).WithField("mode", netCfg.Mode).Info("NetworkManager initialized")
 	return nm, nil
 }
 

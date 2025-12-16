@@ -15,8 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aledbf/beacon/containerd/store"
+	"github.com/aledbf/beacon/containerd/network/cni"
 	"github.com/aledbf/beacon/containerd/network/ipallocator"
+	"github.com/aledbf/beacon/containerd/store"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
@@ -51,8 +52,80 @@ const (
 	ctStateMask        = ctStateEstablished | ctStateRelated
 )
 
+// NetworkMode represents the network management mode.
+type NetworkMode string
+
+const (
+	// NetworkModeLegacy uses the built-in NetworkManager with BoltDB IP allocation.
+	NetworkModeLegacy NetworkMode = "legacy"
+
+	// NetworkModeCNI uses CNI plugin chains for network configuration.
+	NetworkModeCNI NetworkMode = "cni"
+)
+
 type NetworkConfig struct {
+	// Subnet is the network subnet (legacy mode only).
 	Subnet string
+
+	// Mode specifies whether to use legacy or CNI mode.
+	// Default: NetworkModeLegacy
+	Mode NetworkMode
+
+	// CNI-specific configuration (only used when Mode == NetworkModeCNI)
+
+	// CNIConfDir is the directory containing CNI network configuration files.
+	// Default: /etc/cni/net.d
+	CNIConfDir string
+
+	// CNIBinDir is the directory containing CNI plugin binaries.
+	// Default: /opt/cni/bin
+	CNIBinDir string
+
+	// CNINetworkName is the name of the CNI network to use.
+	// Default: beacon-net
+	CNINetworkName string
+}
+
+// LoadNetworkConfig loads network configuration from environment variables.
+//
+// Environment variables:
+//   - BEACON_CNI_MODE=1: Enable CNI mode (default: legacy mode)
+//   - BEACON_CNI_CONF_DIR: CNI configuration directory (default: /etc/cni/net.d)
+//   - BEACON_CNI_BIN_DIR: CNI plugin binary directory (default: /opt/cni/bin)
+//   - BEACON_CNI_NETWORK: CNI network name (default: beacon-net)
+//
+// In legacy mode, uses the default subnet (10.88.0.0/16).
+// In CNI mode, the subnet is determined by the CNI IPAM plugin.
+func LoadNetworkConfig() NetworkConfig {
+	cfg := NetworkConfig{
+		Subnet:         bridgeSubnet, // Default subnet for legacy mode
+		Mode:           NetworkModeLegacy,
+		CNIConfDir:     "/etc/cni/net.d",
+		CNIBinDir:      "/opt/cni/bin",
+		CNINetworkName: "beacon-net",
+	}
+
+	// Check if CNI mode is enabled
+	if os.Getenv("BEACON_CNI_MODE") == "1" {
+		cfg.Mode = NetworkModeCNI
+	}
+
+	// Override CNI config directory if specified
+	if confDir := os.Getenv("BEACON_CNI_CONF_DIR"); confDir != "" {
+		cfg.CNIConfDir = confDir
+	}
+
+	// Override CNI bin directory if specified
+	if binDir := os.Getenv("BEACON_CNI_BIN_DIR"); binDir != "" {
+		cfg.CNIBinDir = binDir
+	}
+
+	// Override CNI network name if specified
+	if networkName := os.Getenv("BEACON_CNI_NETWORK"); networkName != "" {
+		cfg.CNINetworkName = networkName
+	}
+
+	return cfg
 }
 
 // NetworkInfo holds internal network configuration
@@ -94,9 +167,17 @@ type NetworkManager struct {
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 
+	// Legacy mode fields
 	netOp           NetworkOperator
 	nftOp           NFTablesOperator
 	iptablesChecker *IptablesChecker
+
+	// CNI mode fields
+	cniManager *cni.CNIManager
+
+	// CNI state storage (maps VM ID to CNI result for cleanup)
+	cniResults map[string]*cni.CNIResult
+	cniMu      sync.RWMutex
 }
 
 func NewNetworkManager(
@@ -110,6 +191,15 @@ func NewNetworkManager(
 ) (NetworkManagerInterface, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Log the network mode
+	slog.InfoContext(ctx, "Initializing network manager", "mode", config.Mode)
+
+	// CNI mode initialization
+	if config.Mode == NetworkModeCNI {
+		return newCNINetworkManager(ctx, cancel, config, networkConfigStore)
+	}
+
+	// Legacy mode initialization
 	if moduleChecker == nil {
 		moduleChecker = DefaultModuleChecker
 	}
@@ -182,6 +272,14 @@ func (nm *NetworkManager) Close() error {
 		nm.cancelFunc()
 	}
 
+	// CNI mode cleanup
+	if nm.config.Mode == NetworkModeCNI {
+		// CNI resources are cleaned up per-VM via ReleaseNetworkResources
+		// No global cleanup needed for CNI mode
+		return nil
+	}
+
+	// Legacy mode cleanup
 	// Cleanup iptables FORWARD rules
 	if nm.iptablesChecker != nil {
 		if err := nm.iptablesChecker.CleanupBeaconForwardRules(nm.ctx); err != nil {
@@ -241,6 +339,12 @@ func (nm *NetworkManager) validateSubnet() error {
 // The function is thread-safe and uses a mutex to prevent concurrent modifications.
 // If any step fails, it will clean up any partially allocated resources.
 func (nm *NetworkManager) EnsureNetworkResources(env *Environment) error {
+	// Route to CNI implementation if in CNI mode
+	if nm.config.Mode == NetworkModeCNI {
+		return nm.ensureNetworkResourcesCNI(env)
+	}
+
+	// Legacy mode implementation below
 	// Quick check with read lock
 	nm.mu.RLock()
 	if env.NetworkInfo != nil && env.NetworkInfo.TapName != "" {
@@ -332,6 +436,12 @@ func (nm *NetworkManager) EnsureNetworkResources(env *Environment) error {
 }
 
 func (nm *NetworkManager) ReleaseNetworkResources(env *Environment) error {
+	// Route to CNI implementation if in CNI mode
+	if nm.config.Mode == NetworkModeCNI {
+		return nm.releaseNetworkResourcesCNI(env)
+	}
+
+	// Legacy mode implementation
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 

@@ -61,11 +61,17 @@ Override with environment variables:
 - **VM RESOURCES**: Configurable CPU and memory via `vm.VMResourceConfig`
 
 ### `network/` - Network Management
+- **Dual-mode architecture**: Legacy (default) or CNI (opt-in)
+- **Legacy mode**: Direct TAP creation, BoltDB IP allocation, beacon0 bridge
+- **CNI mode**: Standard CNI plugin chains for network configuration
 - Creates `beacon0` bridge (10.88.0.0/16)
-- Allocates IPs from pool (stored in BoltDB)
+- Allocates IPs from pool (BoltDB in legacy mode, CNI IPAM in CNI mode)
 - Creates TAP devices per VM
 - Configures nftables rules for NAT
-- **Key file**: `network/network.go:Setup()` - Network initialization
+- **Key files**:
+  - `network/network.go` - Network manager with mode routing
+  - `network/manager_cni.go` - CNI mode implementation
+  - `network/cni/` - CNI plugin execution package
 
 ### `services/` - VM Services
 - `services/bundle.go` - OCI bundle creation
@@ -127,6 +133,8 @@ go test -v -timeout 10m ./integration/...
 ## Common Operations
 
 ### Debugging VM Networking
+
+**Legacy Mode**:
 ```bash
 # Check bridge
 ip link show beacon0
@@ -140,6 +148,45 @@ ls -la /var/lib/beacon/network.db
 
 # Check nftables rules
 nft list ruleset | grep beacon_runner
+```
+
+**CNI Mode**:
+```bash
+# Check if CNI mode is active
+journalctl -u beacon-containerd -f | grep -i cni
+
+# Verify CNI configuration
+ls /etc/cni/net.d/
+cat /etc/cni/net.d/10-beacon.conflist | jq .
+
+# Check CNI plugins
+ls -la /opt/cni/bin/
+
+# Check CNI IPAM state (host-local)
+ls -la /var/lib/cni/networks/beacon-net/
+
+# Check TAP devices (if using tc-redirect-tap)
+ip link show | grep -E "tap|beacon"
+
+# Test CNI plugin manually
+CNI_COMMAND=ADD CNI_CONTAINERID=test CNI_NETNS=/var/run/netns/test \
+CNI_IFNAME=eth0 CNI_PATH=/opt/cni/bin \
+/opt/cni/bin/bridge < /etc/cni/net.d/10-beacon.conflist
+```
+
+**Common CNI Issues**:
+```bash
+# Plugin not found
+ls /opt/cni/bin/bridge || echo "Install CNI plugins"
+
+# Config file not found
+ls /etc/cni/net.d/*.conflist || echo "Create CNI config"
+
+# Permission denied
+sudo chmod +x /opt/cni/bin/*
+
+# IP allocation conflicts
+sudo rm -rf /var/lib/cni/networks/beacon-net/
 ```
 
 ### Debugging VM Startup
@@ -179,10 +226,15 @@ ps aux | grep qemu-system-x86_64
 1. `shim/task/service.go` - Shim service implementation
 2. `vminit/task/service.go` - VM init service
 3. `vm/qemu/instance.go` - QEMU integration
-4. `network/network.go` - Network management
-5. `integration/vm_test.go` - Integration test examples
+4. `network/network.go` - Network manager with dual-mode routing
+5. `network/manager_cni.go` - CNI mode implementation
+6. `network/cni/cni.go` - CNI plugin executor
+7. `integration/vm_test.go` - Integration test examples
 
-Read `containerd/README.md` for comprehensive architecture documentation.
+**Documentation**:
+- `containerd/README.md` - Comprehensive architecture documentation
+- `containerd/docs/CNI_SETUP.md` - CNI setup and configuration guide
+- `containerd/examples/cni/` - Example CNI configurations
 
 ---
 
@@ -235,12 +287,61 @@ sudo usermod -aG kvm $USER
 - Verify nftables is installed
 
 ### "IP allocation failed"
+
+**Legacy Mode**:
 ```bash
 # Check network database
 ls -la /var/lib/beacon/network.db
 
 # Reconciliation runs every minute to clean stale leases
 # Wait or manually trigger by restarting shim
+```
+
+**CNI Mode**:
+```bash
+# Check CNI IPAM state
+ls -la /var/lib/cni/networks/beacon-net/
+
+# Clear stale allocations
+sudo rm -rf /var/lib/cni/networks/beacon-net/*
+
+# Restart containerd
+systemctl restart beacon-containerd
+```
+
+### "CNI plugin not found"
+```bash
+# Error: failed to execute CNI plugin chain: exec: "bridge": executable file not found
+
+# Solution 1: Install CNI plugins
+mkdir -p /opt/cni/bin
+wget https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz
+tar -xzf cni-plugins-linux-amd64-v1.4.0.tgz -C /opt/cni/bin
+
+# Solution 2: Verify BEACON_CNI_BIN_DIR points to correct directory
+echo $BEACON_CNI_BIN_DIR
+ls $BEACON_CNI_BIN_DIR
+
+# Solution 3: Check permissions
+sudo chmod +x /opt/cni/bin/*
+```
+
+### "No TAP device found in CNI result"
+```bash
+# Error: CNI plugins created veth pair but no TAP device
+
+# Solution 1: Install tc-redirect-tap plugin
+git clone https://github.com/firecracker-microvm/firecracker-go-sdk
+cd firecracker-go-sdk/cni/tc-redirect-tap
+go build -o /opt/cni/bin/tc-redirect-tap
+chmod +x /opt/cni/bin/tc-redirect-tap
+
+# Solution 2: Add tc-redirect-tap to CNI configuration
+# Edit /etc/cni/net.d/10-beacon.conflist
+# Add: {"type": "tc-redirect-tap"} to plugins array
+
+# Solution 3: Use a CNI plugin that directly creates TAP devices
+# (Alternative to tc-redirect-tap)
 ```
 
 ---
@@ -312,14 +413,95 @@ From `vminit/task/service.go`:
 
 ## Network Architecture
 
+### Network Modes
+
+Beacon supports two network modes:
+
+#### Legacy Mode (Default)
+- Built-in NetworkManager with custom TAP device creation
+- BoltDB-based IP allocation (bitmap allocator)
+- Direct netlink calls for network configuration
+- Fixed subnet: 10.88.0.0/16
+- **Advantages**: Fast (~10-15ms network setup), simple configuration
+- **Use case**: Existing deployments, performance-critical workloads
+
+#### CNI Mode (Opt-in)
+- Standard CNI plugin chains for network configuration
+- Integration with CNI ecosystem (Calico, Cilium, etc.)
+- Support for multiple networks, custom routing, network policies
+- Firecracker-compatible via tc-redirect-tap plugin
+- **Advantages**: Standard ecosystem, advanced features
+- **Use case**: Advanced networking requirements, multiple networks
+- **See**: `docs/CNI_SETUP.md` for detailed setup guide
+
+### Enabling CNI Mode
+
+Set environment variables before starting containerd:
+
+```bash
+# Enable CNI mode
+export BEACON_CNI_MODE=1
+
+# Optional: Override default paths
+export BEACON_CNI_CONF_DIR=/etc/cni/net.d
+export BEACON_CNI_BIN_DIR=/opt/cni/bin
+export BEACON_CNI_NETWORK=beacon-net
+
+# Restart containerd shim
+systemctl restart beacon-containerd
+```
+
+**CNI Plugin Installation**:
+```bash
+# Install standard CNI plugins
+mkdir -p /opt/cni/bin /etc/cni/net.d
+wget https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz
+tar -xzf cni-plugins-linux-amd64-v1.4.0.tgz -C /opt/cni/bin
+
+# (Optional) Install tc-redirect-tap for Firecracker pattern
+git clone https://github.com/firecracker-microvm/firecracker-go-sdk
+cd firecracker-go-sdk/cni/tc-redirect-tap
+go build -o /opt/cni/bin/tc-redirect-tap
+```
+
+**Example CNI Configuration** (`/etc/cni/net.d/10-beacon.conflist`):
+```json
+{
+  "cniVersion": "1.0.0",
+  "name": "beacon-net",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "beacon0",
+      "isGateway": true,
+      "ipMasq": true,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [[{"subnet": "10.88.0.0/16", "gateway": "10.88.0.1"}]],
+        "routes": [{"dst": "0.0.0.0/0"}]
+      }
+    },
+    {"type": "firewall"},
+    {"type": "tc-redirect-tap"}
+  ]
+}
+```
+
+See `examples/cni/` for more configuration examples.
+
 ### Subnet and IP Allocation
 
+**Legacy Mode**:
 ```
 beacon0 bridge: 10.88.0.1/16
 Container IPs:  10.88.0.2 - 10.88.255.254 (65,533 addresses)
 ```
-
 **Persistent storage**: `/var/lib/beacon/network.db` (BoltDB)
+
+**CNI Mode**:
+- IP allocation managed by CNI IPAM plugins (host-local, static, dhcp)
+- Subnet and range configured in CNI configuration file
+- State stored by CNI plugin (typically `/var/lib/cni/networks/`)
 
 ### Firewall Rules
 
@@ -331,6 +513,8 @@ nft list ruleset | grep beacon_runner
 # - beacon_runner_filter (forwarding)
 # - beacon_runner_nat (postrouting NAT)
 ```
+
+**CNI Mode**: Firewall rules managed by CNI firewall plugin (iptables/nftables)
 
 ---
 

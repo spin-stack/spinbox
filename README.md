@@ -9,7 +9,7 @@ Linux containers with enhanced security and isolation.
  - EROFS support for efficient container image layers
  - One VM per container for maximum isolation
  - Simplified architecture using Cloud Hypervisor
- - Integrated network management with TAP/bridge networking
+ - Dual-mode networking: Legacy (default) or CNI (opt-in) for advanced features
 
 beaconbox is a **non-core** sub-project of containerd.
 
@@ -83,11 +83,14 @@ graph TB
 - Coordinates with vminitd inside VM using TTRPC protocol
 
 **Network Manager**
-- Manages the `beacon0` bridge (10.88.0.0/16 subnet)
-- Allocates unique IP addresses from pool using persistent key-value store
-- Creates TAP devices for each VM (named `beacon-<hash>`)
-- Configures nftables rules for NAT and forwarding
+- **Dual-mode architecture**: Legacy (default) or CNI (opt-in via `BEACON_CNI_MODE=1`)
+- **Legacy mode**: Manages the `beacon0` bridge (10.88.0.0/16 subnet), BoltDB IP allocation, direct TAP creation
+- **CNI mode**: Executes standard CNI plugin chains (bridge, firewall, tc-redirect-tap, IPAM)
+- Allocates unique IP addresses (BoltDB in legacy mode, CNI IPAM plugins in CNI mode)
+- Creates TAP devices for each VM (named `beacon-<hash>` in legacy, plugin-specific in CNI)
+- Configures nftables rules for NAT and forwarding (legacy mode)
 - Automatically reconciles and cleans up stale resources
+- See `docs/CNI_SETUP.md` for CNI configuration guide
 
 **Cloud Hypervisor**
 - Lightweight KVM-based virtual machine monitor
@@ -174,14 +177,18 @@ graph TB
 
 **Why TAP/bridge networking?**
 - Standard Linux networking model
-- Compatible with existing CNI plugins
-- Simple IP allocation and routing
+- **CNI plugin compatibility**: Opt-in CNI mode supports standard CNI plugins (Calico, Cilium, etc.)
+- **Legacy mode**: Simple IP allocation and routing with built-in NetworkManager
 - Full protocol support (TCP, UDP, ICMP, IPv6)
-- Easy integration with host firewall rules
+- Easy integration with host firewall rules (nftables in legacy mode, CNI firewall plugin in CNI mode)
 
 ### Network Architecture
 
-The network manager creates a single `beacon0` bridge that all VMs connect to:
+beaconbox supports two network modes:
+
+#### Legacy Mode (Default)
+
+The built-in network manager creates a single `beacon0` bridge that all VMs connect to:
 
 ```
 Internet
@@ -209,6 +216,98 @@ beacon0 bridge (10.88.0.1/16)
 - NAT table: `beacon_runner_nat` with postrouting chain
 - Priorities set to run before UFW rules
 - Connection tracking for stateful filtering
+
+**Performance:**
+- Fast network setup (~10-15ms)
+- Simple configuration, no additional dependencies
+- Ideal for existing deployments and performance-critical workloads
+
+#### CNI Mode (Opt-in)
+
+CNI mode integrates with the standard CNI plugin ecosystem, inspired by Firecracker-containerd:
+
+```
+Internet
+    ↓
+Host network interface
+    ↓
+CNI Firewall Plugin (iptables/nftables)
+    ↓
+beacon0 bridge (CNI-managed)
+    ├─ tapXXX (CNI tc-redirect-tap) → VM 1
+    ├─ tapYYY (CNI tc-redirect-tap) → VM 2
+    └─ tapZZZ (CNI tc-redirect-tap) → VM 3
+```
+
+**Enabling CNI Mode:**
+
+```bash
+# Set environment variables
+export BEACON_CNI_MODE=1
+export BEACON_CNI_CONF_DIR=/etc/cni/net.d     # Optional, default shown
+export BEACON_CNI_BIN_DIR=/opt/cni/bin        # Optional, default shown
+export BEACON_CNI_NETWORK=beacon-net          # Optional, default shown
+
+# Restart containerd
+systemctl restart beacon-containerd
+```
+
+**Features:**
+- Standard CNI plugin support (bridge, macvlan, ipvlan, Calico, Cilium, etc.)
+- Multiple networks per deployment
+- Advanced IPAM (host-local, static, dhcp, cloud-provider-specific)
+- Network policies via Calico/Cilium
+- Firecracker-compatible via tc-redirect-tap plugin
+- Custom routing and overlay networks
+
+**Setup:**
+
+1. Install CNI plugins:
+```bash
+mkdir -p /opt/cni/bin /etc/cni/net.d
+wget https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz
+tar -xzf cni-plugins-linux-amd64-v1.4.0.tgz -C /opt/cni/bin
+```
+
+2. (Optional) Install tc-redirect-tap for Firecracker pattern:
+```bash
+git clone https://github.com/firecracker-microvm/firecracker-go-sdk
+cd firecracker-go-sdk/cni/tc-redirect-tap
+go build -o /opt/cni/bin/tc-redirect-tap
+```
+
+3. Create CNI configuration `/etc/cni/net.d/10-beacon.conflist`:
+```json
+{
+  "cniVersion": "1.0.0",
+  "name": "beacon-net",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "beacon0",
+      "isGateway": true,
+      "ipMasq": true,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [[{"subnet": "10.88.0.0/16", "gateway": "10.88.0.1"}]],
+        "routes": [{"dst": "0.0.0.0/0"}]
+      }
+    },
+    {"type": "firewall"},
+    {"type": "tc-redirect-tap"}
+  ]
+}
+```
+
+**Documentation:**
+- Comprehensive setup guide: `docs/CNI_SETUP.md`
+- Example configurations: `examples/cni/`
+- Architecture details: See CLAUDE.md
+
+**Performance:**
+- Slower network setup (~35-80ms due to plugin chain execution)
+- Additional CNI plugin dependencies
+- Best for advanced networking requirements
 
 ### Container Lifecycle Sequence
 
@@ -371,16 +470,37 @@ beaconbox uses [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hype
 ### Troubleshooting
 
 **Check VM networking:**
+
+Legacy mode:
 ```bash
 # List bridge and TAP devices
 ip link show beacon0
 ip link show | grep beacon-
 
 # Check IP allocations
-ls -la /var/lib/beacon/
+ls -la /var/lib/beacon/network.db
 
 # View nftables rules
 nft list ruleset | grep beacon_runner
+```
+
+CNI mode:
+```bash
+# Check if CNI mode is active
+journalctl -u beacon-containerd | grep -i cni
+
+# Verify CNI configuration
+ls /etc/cni/net.d/
+cat /etc/cni/net.d/10-beacon.conflist | jq .
+
+# Check CNI plugins
+ls -la /opt/cni/bin/
+
+# Check CNI IPAM state
+ls -la /var/lib/cni/networks/beacon-net/
+
+# Check TAP devices (if using tc-redirect-tap)
+ip link show | grep -E "tap|beacon"
 ```
 
 **Debug container creation:**
@@ -421,8 +541,18 @@ ss -x | grep vsock
    - Check logs for initialization errors
 
 5. **"IP allocation failed"**
-   - Check available IPs: `ls /var/lib/beacon/`
-   - Reconciliation runs every minute to clean stale leases
+   - Legacy mode: Check available IPs: `ls /var/lib/beacon/network.db`; reconciliation runs every minute to clean stale leases
+   - CNI mode: Check CNI IPAM state: `ls /var/lib/cni/networks/beacon-net/`; clear stale allocations: `sudo rm -rf /var/lib/cni/networks/beacon-net/*`
+
+6. **"CNI plugin not found"** (CNI mode only)
+   - Install CNI plugins: See CNI Mode setup section above
+   - Verify `BEACON_CNI_BIN_DIR` points to `/opt/cni/bin`
+   - Check permissions: `sudo chmod +x /opt/cni/bin/*`
+
+7. **"No TAP device found in CNI result"** (CNI mode only)
+   - Install tc-redirect-tap plugin: See CNI Mode setup section above
+   - Add `{"type": "tc-redirect-tap"}` to CNI configuration plugins array
+   - See `docs/CNI_SETUP.md` for detailed troubleshooting
 
 ## Getting Started
 
@@ -569,11 +699,10 @@ ls -la /var/lib/beacon/bin/cloud-hypervisor
 - No macOS or Windows support (no nested virtualization)
 
 **Networking:**
-- Single bridge networking model (beacon0)
-- Fixed subnet (10.88.0.0/16)
-- No CNI plugin support yet (planned)
+- Legacy mode: Single bridge networking model (beacon0), fixed subnet (10.88.0.0/16)
+- CNI mode: Opt-in support for standard CNI plugins (see docs/CNI_SETUP.md)
 - No IPv6-only mode
-- Requires host NAT configuration for internet access
+- Requires host NAT configuration for internet access (or CNI plugin-managed routing)
 
 **Resource Management:**
 - One VM per container (cannot share VMs between containers)
