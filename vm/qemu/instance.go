@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	"github.com/vishvananda/netlink"
 	"github.com/mdlayher/vsock"
 	"github.com/vishvananda/netns"
 
@@ -184,6 +185,18 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	defer func() {
 		if !success {
 			q.vmState.Store(uint32(vmStateNew))
+			// If we moved TAPs to init ns and failed to start, move them back so CNI teardown can proceed.
+			if q.tapNetns != "" {
+				for _, nic := range q.nets {
+					if err := moveTapToNetns(ctx, nic.TapName, q.tapNetns); err != nil {
+						log.G(ctx).WithError(err).WithFields(log.Fields{
+							"tap": nic.TapName,
+							"ns":  q.tapNetns,
+						}).Warn("failed to move tap back after start failure")
+					}
+				}
+				q.tapNetns = ""
+			}
 		}
 	}()
 
@@ -229,17 +242,19 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		Setpgid: true,
 	}
 
-	// If a network namespace is specified, start QEMU inside it
-	// This allows QEMU to access TAP devices created by CNI in that netns
+	// If a network namespace is specified, move TAPs into the init netns so QEMU
+	// (which must stay in init ns for vhost-vsock) can attach them.
 	if startOpts.NetworkNamespace != "" {
-		log.G(ctx).WithField("netns", startOpts.NetworkNamespace).Info("qemu: starting inside network namespace")
-		if err := q.startInNetNS(ctx, startOpts.NetworkNamespace); err != nil {
-			return fmt.Errorf("failed to start qemu in netns: %w", err)
+		for _, nic := range q.nets {
+			if err := moveTapToInitNS(ctx, nic.TapName, startOpts.NetworkNamespace); err != nil {
+				return fmt.Errorf("failed to move tap %s to init netns: %w", nic.TapName, err)
+			}
 		}
-	} else {
-		if err := q.cmd.Start(); err != nil {
-			return fmt.Errorf("failed to start qemu: %w", err)
-		}
+		q.tapNetns = startOpts.NetworkNamespace
+	}
+
+	if err := q.cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start qemu: %w", err)
 	}
 
 	log.G(ctx).Info("qemu: process started, waiting for QMP socket...")
@@ -609,6 +624,19 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		}
 	}
 
+	// Move TAPs back to their original netns (best effort) so CNI teardown can see them.
+	if q.tapNetns != "" {
+		for _, nic := range q.nets {
+			if err := moveTapToNetns(ctx, nic.TapName, q.tapNetns); err != nil {
+				log.G(ctx).WithError(err).WithFields(log.Fields{
+					"tap": nic.TapName,
+					"ns":  q.tapNetns,
+				}).Warn("failed to move tap back to sandbox netns")
+			}
+		}
+		q.tapNetns = ""
+	}
+
 	return errors.Join(errs...)
 }
 
@@ -824,6 +852,96 @@ func (q *Instance) forceQuit(ctx context.Context) {
 }
 
 // Helper functions
+
+// moveTapToInitNS moves a TAP device from a sandbox netns into the init netns so
+// QEMU (which must stay in init netns for vhost-vsock) can open it.
+func moveTapToInitNS(ctx context.Context, tapName, netnsPath string) error {
+	targetNS, err := netns.GetFromPath(netnsPath)
+	if err != nil {
+		return fmt.Errorf("get target netns: %w", err)
+	}
+	defer targetNS.Close()
+
+	initNS, err := netns.Get()
+	if err != nil {
+		return fmt.Errorf("get init netns: %w", err)
+	}
+	defer initNS.Close()
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	if err := netns.Set(targetNS); err != nil {
+		return fmt.Errorf("set target netns: %w", err)
+	}
+
+	link, err := netlink.LinkByName(tapName)
+	if err != nil {
+		_ = netns.Set(initNS)
+		return fmt.Errorf("lookup tap %s: %w", tapName, err)
+	}
+
+	if err := netlink.LinkSetNsFd(link, int(initNS)); err != nil {
+		_ = netns.Set(initNS)
+		return fmt.Errorf("move tap %s to init ns: %w", tapName, err)
+	}
+
+	if err := netns.Set(initNS); err != nil {
+		return fmt.Errorf("restore init netns: %w", err)
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"tap":   tapName,
+		"srcNS": netnsPath,
+	}).Info("moved tap to init netns for vhost-vsock")
+
+	return nil
+}
+
+// moveTapToNetns moves a TAP device from init netns back to the provided netns path.
+// Best effort: used on shutdown to ease CNI teardown.
+func moveTapToNetns(ctx context.Context, tapName, netnsPath string) error {
+	targetNS, err := netns.GetFromPath(netnsPath)
+	if err != nil {
+		return fmt.Errorf("get target netns: %w", err)
+	}
+	defer targetNS.Close()
+
+	initNS, err := netns.Get()
+	if err != nil {
+		return fmt.Errorf("get init netns: %w", err)
+	}
+	defer initNS.Close()
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	if err := netns.Set(initNS); err != nil {
+		return fmt.Errorf("set init netns: %w", err)
+	}
+
+	link, err := netlink.LinkByName(tapName)
+	if err != nil {
+		_ = netns.Set(initNS)
+		return fmt.Errorf("lookup tap %s in init ns: %w", tapName, err)
+	}
+
+	if err := netlink.LinkSetNsFd(link, int(targetNS)); err != nil {
+		_ = netns.Set(initNS)
+		return fmt.Errorf("move tap %s to target ns: %w", tapName, err)
+	}
+
+	if err := netns.Set(initNS); err != nil {
+		return fmt.Errorf("restore init netns: %w", err)
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"tap": tapName,
+		"ns":  netnsPath,
+	}).Info("moved tap back to sandbox netns")
+
+	return nil
+}
 
 // waitForSocket waits for a Unix socket to appear
 func waitForSocket(ctx context.Context, socketPath string, timeout time.Duration) error {

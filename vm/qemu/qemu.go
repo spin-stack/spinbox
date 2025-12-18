@@ -67,6 +67,9 @@ type Instance struct {
 	runCtx    context.Context
 	runCancel context.CancelFunc
 
+	// Netns where TAPs were originally created (CNI); used to move them back on shutdown.
+	tapNetns string
+
 	// Device tracking (configured before Start)
 	disks      []*DiskConfig
 	nets       []*NetConfig
