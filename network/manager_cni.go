@@ -5,8 +5,9 @@ package network
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
+
+	"github.com/containerd/log"
 
 	"github.com/aledbf/beacon/containerd/network/cni"
 	boltstore "github.com/aledbf/beacon/containerd/store"
@@ -35,11 +36,11 @@ func newCNINetworkManager(
 		return nil, fmt.Errorf("failed to create CNI manager: %w", err)
 	}
 
-	slog.InfoContext(ctx, "CNI mode enabled",
-		"confDir", config.CNIConfDir,
-		"binDir", config.CNIBinDir,
-		"network", config.CNINetworkName,
-	)
+	log.G(ctx).WithFields(log.Fields{
+		"confDir": config.CNIConfDir,
+		"binDir":  config.CNIBinDir,
+		"network": config.CNINetworkName,
+	}).Info("CNI mode enabled")
 
 	nm := &NetworkManager{
 		config:             config,
@@ -59,7 +60,10 @@ func (nm *NetworkManager) ensureNetworkResourcesCNI(env *Environment) error {
 	nm.cniMu.RLock()
 	if result, exists := nm.cniResults[env.ID]; exists {
 		nm.cniMu.RUnlock()
-		slog.DebugContext(nm.ctx, "CNI resources already allocated", "vmID", env.ID, "tap", result.TAPDevice)
+		log.G(nm.ctx).WithFields(log.Fields{
+			"vmID": env.ID,
+			"tap":  result.TAPDevice,
+		}).Debug("CNI resources already allocated")
 		return nil
 	}
 	nm.cniMu.RUnlock()
@@ -78,8 +82,8 @@ func (nm *NetworkManager) ensureNetworkResourcesCNI(env *Environment) error {
 
 		// Check if this is a veth name conflict error
 		if isVethConflictError(err) {
-			slog.WarnContext(nm.ctx, "CNI setup failed due to existing veth pair, attempting cleanup",
-				"vmID", env.ID, "error", err)
+			log.G(nm.ctx).WithError(err).WithField("vmID", env.ID).
+				Warn("CNI setup failed due to existing veth pair, attempting cleanup")
 
 			// Try to clean up any orphaned resources for this container ID
 			// Create a temporary netns for cleanup
@@ -95,12 +99,12 @@ func (nm *NetworkManager) ensureNetworkResourcesCNI(env *Environment) error {
 		return fmt.Errorf("failed to setup CNI network: %w", err)
 	}
 
-	slog.InfoContext(nm.ctx, "CNI network configured",
-		"vmID", env.ID,
-		"tap", result.TAPDevice,
-		"ip", result.IPAddress,
-		"gateway", result.Gateway,
-	)
+	log.G(nm.ctx).WithFields(log.Fields{
+		"vmID":    env.ID,
+		"tap":     result.TAPDevice,
+		"ip":      result.IPAddress,
+		"gateway": result.Gateway,
+	}).Info("CNI network configured")
 
 	// Store CNI result for teardown
 	nm.cniMu.Lock()
@@ -132,7 +136,8 @@ func (nm *NetworkManager) releaseNetworkResourcesCNI(env *Environment) error {
 	nm.cniMu.RUnlock()
 
 	if !exists {
-		slog.WarnContext(nm.ctx, "No CNI result found for VM, attempting cleanup anyway", "vmID", env.ID)
+		log.G(nm.ctx).WithField("vmID", env.ID).
+			Warn("No CNI result found for VM, attempting cleanup anyway")
 		// Even if we don't have the result in memory, try to clean up
 		// This handles the case where the shim restarted and lost the in-memory state
 	}
@@ -143,12 +148,14 @@ func (nm *NetworkManager) releaseNetworkResourcesCNI(env *Environment) error {
 
 	// Check if the netns exists
 	if !cni.NetNSExists(env.ID) {
-		slog.WarnContext(nm.ctx, "Netns does not exist, creating temporary one for CNI teardown", "vmID", env.ID)
+		log.G(nm.ctx).WithField("vmID", env.ID).
+			Warn("Netns does not exist, creating temporary one for CNI teardown")
 		// Create a temporary netns for cleanup if the original is gone
 		// This can happen if the host was rebooted or the netns was manually deleted
 		tmpNetns, err := cni.CreateNetNS(env.ID)
 		if err != nil {
-			slog.WarnContext(nm.ctx, "Failed to create temporary netns for teardown", "vmID", env.ID, "error", err)
+			log.G(nm.ctx).WithError(err).WithField("vmID", env.ID).
+				Warn("Failed to create temporary netns for teardown")
 			// Try teardown without netns - some CNI plugins may still clean up host-side resources
 			netnsPath = ""
 		} else {
@@ -160,16 +167,19 @@ func (nm *NetworkManager) releaseNetworkResourcesCNI(env *Environment) error {
 	// This will clean up veth pairs, IP allocations, firewall rules, etc.
 	if netnsPath != "" {
 		if err := nm.cniManager.Teardown(nm.ctx, env.ID, netnsPath); err != nil {
-			slog.WarnContext(nm.ctx, "Failed to teardown CNI network", "vmID", env.ID, "error", err)
+			log.G(nm.ctx).WithError(err).WithField("vmID", env.ID).
+				Warn("Failed to teardown CNI network")
 			// Continue with cleanup - we still want to remove state
 		}
 	} else {
-		slog.WarnContext(nm.ctx, "Skipping CNI teardown - no valid netns available", "vmID", env.ID)
+		log.G(nm.ctx).WithField("vmID", env.ID).
+			Warn("Skipping CNI teardown - no valid netns available")
 	}
 
 	// Clean up netns (whether it's the original or temporary)
 	if err := cni.DeleteNetNS(env.ID); err != nil {
-		slog.WarnContext(nm.ctx, "Failed to delete netns", "vmID", env.ID, "error", err)
+		log.G(nm.ctx).WithError(err).WithField("vmID", env.ID).
+			Warn("Failed to delete netns")
 	}
 
 	// Remove from CNI results map
@@ -179,18 +189,18 @@ func (nm *NetworkManager) releaseNetworkResourcesCNI(env *Environment) error {
 
 	// Also remove from network config store (persistent state)
 	if err := nm.networkConfigStore.Delete(nm.ctx, env.ID); err != nil {
-		slog.WarnContext(nm.ctx, "Failed to delete network config from store", "vmID", env.ID, "error", err)
+		log.G(nm.ctx).WithError(err).WithField("vmID", env.ID).
+			Warn("Failed to delete network config from store")
 	}
 
 	if exists {
-		slog.InfoContext(nm.ctx, "CNI network released",
-			"vmID", env.ID,
-			"tap", result.TAPDevice,
-		)
+		log.G(nm.ctx).WithFields(log.Fields{
+			"vmID": env.ID,
+			"tap":  result.TAPDevice,
+		}).Info("CNI network released")
 	} else {
-		slog.InfoContext(nm.ctx, "CNI network cleanup attempted",
-			"vmID", env.ID,
-		)
+		log.G(nm.ctx).WithField("vmID", env.ID).
+			Info("CNI network cleanup attempted")
 	}
 
 	// Clear environment network info

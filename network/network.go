@@ -4,10 +4,11 @@ package network
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"os"
 	"sync"
+
+	"github.com/containerd/log"
 
 	"github.com/aledbf/beacon/containerd/network/cni"
 	"github.com/aledbf/beacon/containerd/store"
@@ -129,7 +130,7 @@ func NewNetworkManager(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Log the network mode
-	slog.InfoContext(ctx, "Initializing CNI network manager")
+	log.G(ctx).Info("Initializing CNI network manager")
 
 	return newCNINetworkManager(ctx, cancel, config, networkConfigStore)
 }

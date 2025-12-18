@@ -4,9 +4,9 @@ package cni
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 
+	"github.com/containerd/log"
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/vishvananda/netlink"
 )
@@ -26,39 +26,40 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 	}
 
 	// Debug: Log all interfaces in the result
-	slog.Info("CNI result interfaces", "count", len(result.Interfaces))
+	log.L.WithField("count", len(result.Interfaces)).Info("CNI result interfaces")
 	for i, iface := range result.Interfaces {
-		slog.Info("CNI interface",
-			"index", i,
-			"name", iface.Name,
-			"sandbox", iface.Sandbox,
-			"mac", iface.Mac)
+		log.L.WithFields(log.Fields{
+			"index":   i,
+			"name":    iface.Name,
+			"sandbox": iface.Sandbox,
+			"mac":     iface.Mac,
+		}).Info("CNI interface")
 	}
 
 	// Try tc-redirect-tap detection first (most common case)
 	tapDevice, err := detectTCRedirectTAP(result)
 	if err == nil {
-		slog.Info("Found TAP device via tc-redirect-tap detection", "tap", tapDevice)
+		log.L.WithField("tap", tapDevice).Info("Found TAP device via tc-redirect-tap detection")
 		return tapDevice, nil
 	}
-	slog.Warn("tc-redirect-tap detection failed", "error", err)
+	log.L.WithError(err).Warn("tc-redirect-tap detection failed")
 
 	// Fall back to generic TAP detection
 	tapDevice, err = detectGenericTAP(result)
 	if err == nil {
-		slog.Info("Found TAP device via generic detection", "tap", tapDevice)
+		log.L.WithField("tap", tapDevice).Info("Found TAP device via generic detection")
 		return tapDevice, nil
 	}
-	slog.Warn("generic TAP detection failed", "error", err)
+	log.L.WithError(err).Warn("generic TAP detection failed")
 
 	// Last resort: check the host namespace for any TAP devices
 	// This handles the case where tc-redirect-tap creates the TAP but doesn't report it
 	tapDevice, err = findHostTAPDevice()
 	if err == nil {
-		slog.Info("Found TAP device in host namespace", "tap", tapDevice)
+		log.L.WithField("tap", tapDevice).Info("Found TAP device in host namespace")
 		return tapDevice, nil
 	}
-	slog.Warn("findHostTAPDevice failed", "error", err)
+	log.L.WithError(err).Warn("findHostTAPDevice failed")
 
 	return "", fmt.Errorf("no TAP device found in CNI result (checked %d interfaces)", len(result.Interfaces))
 }
@@ -74,10 +75,11 @@ func detectTCRedirectTAP(result *current.Result) (string, error) {
 	for _, iface := range result.Interfaces {
 		// Check if this looks like a TAP device by name
 		if strings.HasPrefix(iface.Name, "tap") {
-			slog.Info("Found potential TAP device",
-				"name", iface.Name,
-				"sandbox", iface.Sandbox,
-				"mac", iface.Mac)
+			log.L.WithFields(log.Fields{
+				"name":    iface.Name,
+				"sandbox": iface.Sandbox,
+				"mac":     iface.Mac,
+			}).Info("Found potential TAP device")
 
 			// The TAP device is in the container netns
 			// Return the name - QEMU will access it from within the same netns
