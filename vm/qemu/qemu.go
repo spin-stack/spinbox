@@ -3,6 +3,7 @@ package qemu
 import (
 	"context"
 	"net"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -86,6 +87,7 @@ type DiskConfig struct {
 // NetConfig represents a virtio-net device
 type NetConfig struct {
 	ID      string
-	TapName string
+	TapName string   // TAP device name (stays in sandbox netns)
+	TapFile *os.File // TAP device file descriptor (opened in sandbox netns)
 	MAC     string
 }

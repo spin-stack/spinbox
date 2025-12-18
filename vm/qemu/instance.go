@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
@@ -185,18 +186,14 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	defer func() {
 		if !success {
 			q.vmState.Store(uint32(vmStateNew))
-			// If we moved TAPs to init ns and failed to start, move them back so CNI teardown can proceed.
-			if q.tapNetns != "" {
-				for _, nic := range q.nets {
-					if err := moveTapToNetns(ctx, nic.TapName, q.tapNetns); err != nil {
-						log.G(ctx).WithError(err).WithFields(log.Fields{
-							"tap": nic.TapName,
-							"ns":  q.tapNetns,
-						}).Warn("failed to move tap back after start failure")
-					}
+			// Close any opened TAP FDs on failure
+			for _, nic := range q.nets {
+				if nic.TapFile != nil {
+					nic.TapFile.Close()
+					nic.TapFile = nil
 				}
-				q.tapNetns = ""
 			}
+			q.tapNetns = ""
 		}
 	}()
 
@@ -216,10 +213,38 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Store network configuration
 	q.networkCfg = startOpts.NetworkConfig
 
+	// NICs require network namespace - enforce this requirement
+	if len(q.nets) > 0 && startOpts.NetworkNamespace == "" {
+		return fmt.Errorf("network namespace is required when NICs are configured")
+	}
+
+	// Open TAP file descriptors in the network namespace.
+	// QEMU (running in init netns for vhost-vsock) will use these FDs to attach to
+	// TAP devices that stay in their sandbox namespaces. This is the Kata Containers approach:
+	// FDs are namespace-agnostic, so no need to move TAPs between namespaces.
+	if len(q.nets) > 0 {
+		for _, nic := range q.nets {
+			tapFile, err := openTAPInNetNS(ctx, nic.TapName, startOpts.NetworkNamespace)
+			if err != nil {
+				// Clean up any already-opened FDs on failure
+				for _, prevNic := range q.nets {
+					if prevNic.TapFile != nil {
+						prevNic.TapFile.Close()
+						prevNic.TapFile = nil
+					}
+				}
+				return fmt.Errorf("failed to open tap %s in netns: %w", nic.TapName, err)
+			}
+			// Store the file descriptor
+			nic.TapFile = tapFile
+		}
+		q.tapNetns = startOpts.NetworkNamespace
+	}
+
 	// Build kernel command line
 	cmdlineArgs := q.buildKernelCommandLine(startOpts)
 
-	// Build QEMU command line
+	// Build QEMU command line (now uses the renamed TAP names)
 	qemuArgs := q.buildQemuCommandLine(cmdlineArgs)
 
 	// Print full command for manual testing
@@ -242,18 +267,24 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		Setpgid: true,
 	}
 
-	// If a network namespace is specified, move TAPs into the init netns so QEMU
-	// (which must stay in init ns for vhost-vsock) can attach them.
-	if startOpts.NetworkNamespace != "" {
-		for _, nic := range q.nets {
-			if err := moveTapToInitNS(ctx, nic.TapName, startOpts.NetworkNamespace); err != nil {
-				return fmt.Errorf("failed to move tap %s to init netns: %w", nic.TapName, err)
-			}
+	// Pass TAP file descriptors to QEMU via ExtraFiles
+	// These will be available to QEMU as FD 3, 4, 5, ... (0,1,2 are stdin/stdout/stderr)
+	var extraFiles []*os.File
+	for _, nic := range q.nets {
+		if nic.TapFile != nil {
+			extraFiles = append(extraFiles, nic.TapFile)
 		}
-		q.tapNetns = startOpts.NetworkNamespace
+	}
+	if len(extraFiles) > 0 {
+		q.cmd.ExtraFiles = extraFiles
+		log.G(ctx).WithField("fd_count", len(extraFiles)).Debug("passing TAP file descriptors to QEMU")
 	}
 
 	if err := q.cmd.Start(); err != nil {
+		// Clean up TAP FDs on start failure
+		for _, f := range extraFiles {
+			f.Close()
+		}
 		return fmt.Errorf("failed to start qemu: %w", err)
 	}
 
@@ -482,8 +513,18 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 
 	// Add NICs
 	for i, nic := range q.nets {
+		// Use Kata Containers approach: pass TAP via file descriptor
+		// FD will be passed via ExtraFiles, which start at FD 3
+		// (FDs 0,1,2 are stdin/stdout/stderr)
+		if nic.TapFile == nil {
+			// This should never happen - TAP FD must be opened before Start()
+			panic(fmt.Sprintf("NIC %s has no TAP file descriptor", nic.TapName))
+		}
+		fd := 3 + i
+		// Note: script= and downscript= are invalid with fd=
+		// When using fd=, QEMU expects the TAP to be already configured
 		args = append(args,
-			"-netdev", fmt.Sprintf("tap,id=net%d,ifname=%s,script=no,downscript=no", i, nic.TapName),
+			"-netdev", fmt.Sprintf("tap,id=net%d,fd=%d", i, fd),
 			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s", i, nic.MAC),
 		)
 	}
@@ -581,18 +622,16 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Move TAPs back to their original netns (best effort) so CNI teardown can see them.
-	if q.tapNetns != "" {
-		for _, nic := range q.nets {
-			if err := moveTapToNetns(ctx, nic.TapName, q.tapNetns); err != nil {
-				log.G(ctx).WithError(err).WithFields(log.Fields{
-					"tap": nic.TapName,
-					"ns":  q.tapNetns,
-				}).Warn("failed to move tap back to sandbox netns")
-			}
+	// Close TAP file descriptors
+	// No need to move TAPs back - they never left their sandbox namespaces!
+	for _, nic := range q.nets {
+		if nic.TapFile != nil {
+			nic.TapFile.Close()
+			nic.TapFile = nil
+			log.G(ctx).WithField("tap", nic.TapName).Debug("closed TAP file descriptor")
 		}
-		q.tapNetns = ""
 	}
+	q.tapNetns = ""
 
 	return errors.Join(errs...)
 }
@@ -810,94 +849,94 @@ func (q *Instance) forceQuit(ctx context.Context) {
 
 // Helper functions
 
-// moveTapToInitNS moves a TAP device from a sandbox netns into the init netns so
-// QEMU (which must stay in init netns for vhost-vsock) can open it.
-func moveTapToInitNS(ctx context.Context, tapName, netnsPath string) error {
+// openTAPInNetNS opens a TAP device in the specified network namespace and returns
+// its file descriptor. This allows QEMU (running in init netns for vhost-vsock) to
+// attach to TAP devices that live in sandbox namespaces.
+//
+// This approach is inspired by Kata Containers and is cleaner than moving TAPs between
+// namespaces: file descriptors are namespace-agnostic, so once opened, the FD can be
+// used from any namespace.
+func openTAPInNetNS(ctx context.Context, tapName, netnsPath string) (*os.File, error) {
 	targetNS, err := netns.GetFromPath(netnsPath)
 	if err != nil {
-		return fmt.Errorf("get target netns: %w", err)
+		return nil, fmt.Errorf("get target netns: %w", err)
 	}
 	defer targetNS.Close()
 
-	initNS, err := netns.Get()
+	origNS, err := netns.Get()
 	if err != nil {
-		return fmt.Errorf("get init netns: %w", err)
+		return nil, fmt.Errorf("get current netns: %w", err)
 	}
-	defer initNS.Close()
+	defer origNS.Close()
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
+	// Switch to target namespace
 	if err := netns.Set(targetNS); err != nil {
-		return fmt.Errorf("set target netns: %w", err)
+		return nil, fmt.Errorf("set target netns: %w", err)
 	}
 
+	// Ensure we restore original namespace
+	defer func() {
+		if err := netns.Set(origNS); err != nil {
+			log.G(ctx).WithError(err).Error("failed to restore original netns")
+		}
+	}()
+
+	// Get the TAP device and ensure it's UP
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
-		_ = netns.Set(initNS)
-		return fmt.Errorf("lookup tap %s: %w", tapName, err)
+		return nil, fmt.Errorf("lookup tap %s: %w", tapName, err)
 	}
 
-	if err := netlink.LinkSetNsFd(link, int(initNS)); err != nil {
-		_ = netns.Set(initNS)
-		return fmt.Errorf("move tap %s to init ns: %w", tapName, err)
+	// Bring the TAP UP if it's not already
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		if err := netlink.LinkSetUp(link); err != nil {
+			return nil, fmt.Errorf("bring tap %s up: %w", tapName, err)
+		}
+		log.G(ctx).WithField("tap", tapName).Debug("brought tap device up")
 	}
 
-	if err := netns.Set(initNS); err != nil {
-		return fmt.Errorf("restore init netns: %w", err)
+	// Open /dev/net/tun and attach to the existing TAP device using TUNSETIFF ioctl
+	tunFile, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open /dev/net/tun: %w", err)
+	}
+
+	// Use syscall to attach to the existing TAP device
+	// We need to use the TUNSETIFF ioctl with IFF_TAP | IFF_NO_PI flags
+	// and set the device name
+	const (
+		TUNSETIFF   = 0x400454ca
+		IFF_TAP     = 0x0002
+		IFF_NO_PI   = 0x1000
+		IFF_VNET_HDR = 0x4000
+	)
+
+	type ifReq struct {
+		Name  [16]byte
+		Flags uint16
+		_     [22]byte // padding
+	}
+
+	var req ifReq
+	copy(req.Name[:], tapName)
+	req.Flags = IFF_TAP | IFF_NO_PI | IFF_VNET_HDR
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, tunFile.Fd(), TUNSETIFF, uintptr(unsafe.Pointer(&req)))
+	if errno != 0 {
+		tunFile.Close()
+		return nil, fmt.Errorf("TUNSETIFF ioctl failed: %v", errno)
 	}
 
 	log.G(ctx).WithFields(log.Fields{
 		"tap":   tapName,
-		"srcNS": netnsPath,
-	}).Info("moved tap to init netns for vhost-vsock")
+		"netns": netnsPath,
+		"fd":    tunFile.Fd(),
+	}).Info("opened TAP device FD in netns")
 
-	return nil
-}
-
-// moveTapToNetns moves a TAP device from init netns back to the provided netns path.
-// Best effort: used on shutdown to ease CNI teardown.
-func moveTapToNetns(ctx context.Context, tapName, netnsPath string) error {
-	targetNS, err := netns.GetFromPath(netnsPath)
-	if err != nil {
-		return fmt.Errorf("get target netns: %w", err)
-	}
-	defer targetNS.Close()
-
-	initNS, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("get init netns: %w", err)
-	}
-	defer initNS.Close()
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	if err := netns.Set(initNS); err != nil {
-		return fmt.Errorf("set init netns: %w", err)
-	}
-
-	link, err := netlink.LinkByName(tapName)
-	if err != nil {
-		_ = netns.Set(initNS)
-		return fmt.Errorf("lookup tap %s in init ns: %w", tapName, err)
-	}
-
-	if err := netlink.LinkSetNsFd(link, int(targetNS)); err != nil {
-		_ = netns.Set(initNS)
-		return fmt.Errorf("move tap %s to target ns: %w", tapName, err)
-	}
-
-	if err := netns.Set(initNS); err != nil {
-		return fmt.Errorf("restore init netns: %w", err)
-	}
-
-	log.G(ctx).WithFields(log.Fields{
-		"tap": tapName,
-		"ns":  netnsPath,
-	}).Info("moved tap back to sandbox netns")
-
-	return nil
+	return tunFile, nil
 }
 
 // waitForSocket waits for a Unix socket to appear
