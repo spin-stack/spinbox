@@ -352,48 +352,6 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	return nil
 }
 
-// startInNetNS starts the QEMU process inside a network namespace.
-// This allows QEMU to access TAP devices created by CNI in that netns.
-func (q *Instance) startInNetNS(ctx context.Context, netnsPath string) error {
-	// Get the target network namespace
-	targetNS, err := netns.GetFromPath(netnsPath)
-	if err != nil {
-		return fmt.Errorf("failed to get netns from path %s: %w", netnsPath, err)
-	}
-	defer targetNS.Close()
-
-	// Get the current network namespace (to restore later)
-	origNS, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("failed to get current netns: %w", err)
-	}
-	defer origNS.Close()
-
-	// Lock the OS thread to ensure namespace operations work correctly
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	// Switch to the target network namespace
-	if err := netns.Set(targetNS); err != nil {
-		return fmt.Errorf("failed to set netns: %w", err)
-	}
-
-	// Ensure we always return to the original namespace
-	defer func() {
-		if err := netns.Set(origNS); err != nil {
-			log.G(ctx).WithError(err).Error("failed to restore original netns")
-		}
-	}()
-
-	// Start QEMU process (it will inherit the current netns)
-	if err := q.cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start qemu process: %w", err)
-	}
-
-	log.G(ctx).WithField("netns", netnsPath).Info("qemu: process started in network namespace")
-	return nil
-}
-
 // buildKernelCommandLine constructs the kernel command line
 func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	// Prepare init arguments for vminitd
@@ -437,7 +395,6 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
 		"cgroup_no_v1=all",                   // Disable cgroup v1
 		"nohz=off",                           // Disable tickless kernel (reduces overhead for short-lived VMs)
-		"nomodules",
 		"systemd.journald.forward_to_console",
 		"systemd.log_color=false",
 	}
