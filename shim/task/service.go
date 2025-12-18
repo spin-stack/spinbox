@@ -35,7 +35,6 @@ import (
 	bundleAPI "github.com/aledbf/beacon/containerd/api/services/bundle/v1"
 	"github.com/aledbf/beacon/containerd/api/services/vmevents/v1"
 	"github.com/aledbf/beacon/containerd/network"
-	"github.com/aledbf/beacon/containerd/network/ipallocator"
 	"github.com/aledbf/beacon/containerd/shim/bundle"
 	"github.com/aledbf/beacon/containerd/store"
 	"github.com/aledbf/beacon/containerd/vm"
@@ -147,7 +146,6 @@ func checkKVM() error {
 // initNetworkManager creates and initializes a new NetworkManager instance
 func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, error) {
 	// Create stores using the new boltstore package
-	// Multiple stores can share the same database file
 	dbPath := paths.NetworkDBPath()
 
 	networkConfigStore, err := boltstore.NewBoltStore[network.NetworkConfig](
@@ -157,30 +155,16 @@ func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, e
 		return nil, fmt.Errorf("create network config store: %w", err)
 	}
 
-	ipStore, err := boltstore.NewBoltStore[ipallocator.IPAllocation](
-		dbPath, "ip_allocations",
-	)
-	if err != nil {
-		networkConfigStore.Close()
-		return nil, fmt.Errorf("create IP store: %w", err)
-	}
-
-	// Load network configuration (detects CNI vs legacy mode from environment)
+	// Load network configuration (CNI mode only)
 	netCfg := network.LoadNetworkConfig()
 
-	// Create NetworkManager
+	// Create NetworkManager (CNI mode only)
 	nm, err := network.NewNetworkManager(
 		netCfg,
 		networkConfigStore,
-		ipStore,
-		nil, // Use default module checker
-		nil, // Use default network operator
-		nil, // Use default NFTables operator
-		nil, // No policy change callback
 	)
 	if err != nil {
 		networkConfigStore.Close()
-		ipStore.Close()
 		return nil, fmt.Errorf("create network manager: %w", err)
 	}
 
@@ -195,7 +179,7 @@ func (s *service) shutdown(ctx context.Context) error {
 
 	// Release network resources first
 	for id := range s.containers {
-		env := &network.Environment{Id: id}
+		env := &network.Environment{ID: id}
 		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", id).Warn("failed to release network resources")
 		}
@@ -410,7 +394,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	// Cleanup helper for network resources on failure
 	cleanupNetwork := func() {
-		env := &network.Environment{Id: r.ID}
+		env := &network.Environment{ID: r.ID}
 		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
 		}
@@ -588,7 +572,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				}
 
 				// Release network resources before deleting from map
-				env := &network.Environment{Id: r.ID}
+				env := &network.Environment{ID: r.ID}
 				if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
 					log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
 				}

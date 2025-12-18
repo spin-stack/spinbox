@@ -1,12 +1,13 @@
 //go:build darwin
 
+// Package network provides CNI-based network management for beacon VMs.
+// On Darwin, all network operations return errors as networking is not supported.
 package network
 
 import (
 	"fmt"
 	"net"
 
-	"github.com/aledbf/beacon/containerd/network/ipallocator"
 	boltstore "github.com/aledbf/beacon/containerd/store"
 )
 
@@ -14,17 +15,13 @@ import (
 type NetworkMode string
 
 const (
-	// NetworkModeLegacy uses the built-in NetworkManager.
-	NetworkModeLegacy NetworkMode = "legacy"
-
 	// NetworkModeCNI uses CNI plugin chains (not supported on Darwin).
 	NetworkModeCNI NetworkMode = "cni"
 )
 
 // NetworkConfig defines network configuration
 type NetworkConfig struct {
-	Subnet string
-	Mode   NetworkMode
+	Mode NetworkMode
 
 	// CNI fields (not used on Darwin)
 	CNIConfDir     string
@@ -33,11 +30,13 @@ type NetworkConfig struct {
 }
 
 // LoadNetworkConfig loads network configuration.
-// On Darwin, always returns legacy mode as CNI is not supported.
+// On Darwin, returns CNI mode config (though CNI is not supported).
 func LoadNetworkConfig() NetworkConfig {
 	return NetworkConfig{
-		Subnet: "10.88.0.0/16",
-		Mode:   NetworkModeLegacy,
+		Mode:           NetworkModeCNI,
+		CNIConfDir:     "/etc/cni/net.d",
+		CNIBinDir:      "/opt/cni/bin",
+		CNINetworkName: "beacon-net",
 	}
 }
 
@@ -52,7 +51,7 @@ type NetworkInfo struct {
 
 // Environment represents a VM/container network environment
 type Environment struct {
-	Id          string
+	ID          string
 	NetworkInfo *NetworkInfo
 }
 
@@ -70,15 +69,10 @@ type NetworkManager struct{}
 func NewNetworkManager(
 	config NetworkConfig,
 	networkConfigStore boltstore.Store[NetworkConfig],
-	ipStore boltstore.Store[ipallocator.IPAllocation],
-	moduleChecker ModuleChecker,
-	netOp NetworkOperator,
-	nftOp NFTablesOperator,
-	onPolicyChange func(policyChangeType),
 ) (NetworkManagerInterface, error) {
-	// Reference unused parameters to avoid compiler errors
+	// Reference unused parameter to avoid compiler errors
+	_ = config
 	_ = networkConfigStore
-	_ = ipStore
 	return nil, fmt.Errorf("network manager not supported on darwin")
 }
 
@@ -96,13 +90,3 @@ func (nm *NetworkManager) EnsureNetworkResources(env *Environment) error {
 func (nm *NetworkManager) ReleaseNetworkResources(env *Environment) error {
 	return fmt.Errorf("not supported on darwin")
 }
-
-// ModuleChecker is a function type that checks for loaded kernel modules
-type ModuleChecker func() ([]string, error)
-
-// DefaultModuleChecker is a stub for Darwin
-func DefaultModuleChecker() ([]string, error) {
-	return nil, fmt.Errorf("not supported on darwin")
-}
-
-type policyChangeType int

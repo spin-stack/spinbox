@@ -38,7 +38,7 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 
 	// Create environment for this container
 	env := &network.Environment{
-		Id: containerID,
+		ID: containerID,
 	}
 
 	// Allocate network resources (IP + TAP device)
