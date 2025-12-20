@@ -1,3 +1,4 @@
+// Package streaming provides the vminit vsock streaming service.
 package streaming
 
 import (
@@ -98,7 +99,6 @@ func (s *service) Shutdown(ctx context.Context) error {
 		return errors.Join(errs...)
 	}
 	return nil
-
 }
 
 func (s *service) Run() {
@@ -109,7 +109,7 @@ func (s *service) Run() {
 		}
 		var b [4]byte
 		if _, err := conn.Read(b[:]); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			continue // Error reading, close connection
 		}
 
@@ -117,7 +117,7 @@ func (s *service) Run() {
 		sid := binary.BigEndian.Uint32(b[:])
 		if _, ok := s.streams[sid]; ok {
 			s.mu.Unlock()
-			conn.Close()
+			_ = conn.Close()
 			continue // Error reading, close connection
 		}
 		s.streams[sid] = streamConn{
@@ -126,7 +126,10 @@ func (s *service) Run() {
 			s:    s,
 		}
 		s.mu.Unlock()
-		conn.Write(b[:])
+		if _, err := conn.Write(b[:]); err != nil {
+			_ = conn.Close()
+			continue
+		}
 	}
 }
 

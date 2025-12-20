@@ -1,3 +1,4 @@
+// Package process manages vminit process lifecycle and IO.
 package process
 
 import (

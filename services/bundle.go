@@ -1,3 +1,4 @@
+// Package services registers containerd plugins used by beacon.
 package services
 
 import (

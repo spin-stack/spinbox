@@ -35,7 +35,7 @@ func dumpProcPid(ctx context.Context, pid string) {
 		log.G(ctx).WithError(err).Errorf("failed to open /proc/%s/status", pid)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	values := make(map[string]string)
 	s := bufio.NewScanner(f)

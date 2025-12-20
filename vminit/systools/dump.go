@@ -1,3 +1,4 @@
+// Package systools provides system inspection helpers for vminit.
 package systools
 
 import (
@@ -17,7 +18,7 @@ import (
 
 // DumpInfo dumps information about the system
 func DumpInfo(ctx context.Context) {
-	filepath.Walk("/", func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk("/", func(path string, info os.FileInfo, err error) error {
 		if path == "/proc" || path == "/sys" {
 			path = fmt.Sprintf("%s (skipping)", path)
 			err = filepath.SkipDir
@@ -32,7 +33,9 @@ func DumpInfo(ctx context.Context) {
 		}
 
 		return err
-	})
+	}); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to walk filesystem")
+	}
 
 	b, err := os.ReadFile("/proc/cmdline")
 	if err != nil {
@@ -55,22 +58,31 @@ func DumpFile(ctx context.Context, name string) {
 	if e.Logger.IsLevelEnabled(log.DebugLevel) {
 		f, err := os.Open(name)
 		if err == nil {
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			log.G(ctx).WithField("f", name).Debug("dumping file to stderr")
 			if strings.HasSuffix(name, ".json") {
 				var b bytes.Buffer
 				v := map[string]any{}
-				io.Copy(&b, f)
+				if _, err := io.Copy(&b, f); err != nil {
+					log.G(ctx).WithError(err).WithField("f", name).Warn("failed to read json file")
+					return
+				}
 				if err := json.Unmarshal(b.Bytes(), &v); err != nil {
-					os.Stderr.Write(b.Bytes())
+					if _, werr := os.Stderr.Write(b.Bytes()); werr != nil {
+						log.G(ctx).WithError(werr).Warn("failed to write raw json to stderr")
+					}
 					fmt.Fprintln(os.Stderr)
 					return
 				}
 				enc := json.NewEncoder(os.Stderr)
 				enc.SetIndent("", "  ")
-				enc.Encode(v)
+				if err := enc.Encode(v); err != nil {
+					log.G(ctx).WithError(err).WithField("f", name).Warn("failed to encode json to stderr")
+				}
 			} else {
-				io.Copy(os.Stderr, f)
+				if _, err := io.Copy(os.Stderr, f); err != nil {
+					log.G(ctx).WithError(err).WithField("f", name).Warn("failed to dump file")
+				}
 				fmt.Fprintln(os.Stderr)
 			}
 		} else {

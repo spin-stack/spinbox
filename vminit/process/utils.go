@@ -53,14 +53,14 @@ func getLastRuntimeError(r *runc.Runc) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var (
 		errMsg string
 		log    struct {
-			Level string
-			Msg   string
-			Time  time.Time
+			Level string    `json:"level"`
+			Msg   string    `json:"msg"`
+			Time  time.Time `json:"time"`
 		}
 	)
 
@@ -89,12 +89,12 @@ func copyFile(to, from string) error {
 	if err != nil {
 		return err
 	}
-	defer ff.Close()
+	defer func() { _ = ff.Close() }()
 	tt, err := os.Create(to)
 	if err != nil {
 		return err
 	}
-	defer tt.Close()
+	defer func() { _ = tt.Close() }()
 
 	p := iobuf.Get()
 	defer iobuf.Put(p)
@@ -188,7 +188,7 @@ func getStreams(stdio stdio.Stdio, sm stream.Manager) ([3]io.ReadWriteCloser, er
 		streams[1], err = getStream(stdio.Stdout, sm)
 		if err != nil {
 			if streams[0] != nil {
-				streams[0].Close()
+				_ = streams[0].Close()
 			}
 			return streams, fmt.Errorf("failed to get stdout stream: %w", err)
 		}
@@ -197,10 +197,10 @@ func getStreams(stdio stdio.Stdio, sm stream.Manager) ([3]io.ReadWriteCloser, er
 		streams[2], err = getStream(stdio.Stderr, sm)
 		if err != nil {
 			if streams[0] != nil {
-				streams[0].Close()
+				_ = streams[0].Close()
 			}
 			if streams[1] != nil {
-				streams[1].Close()
+				_ = streams[1].Close()
 			}
 			return streams, fmt.Errorf("failed to get stderr stream: %w", err)
 		}

@@ -1,3 +1,4 @@
+// Package paths provides standard filesystem paths used by beacon.
 package paths
 
 import (

@@ -1,3 +1,4 @@
+// Package boltstore provides typed storage backed by bbolt.
 package boltstore
 
 import (
@@ -86,7 +87,7 @@ func NewBoltStore[T any](dbPath string, bucketName string) (Store[T], error) {
 	if err != nil {
 		sdb.refCount--
 		if sdb.refCount == 0 {
-			sdb.db.Close()
+			_ = sdb.db.Close()
 			delete(sharedDBs, dbPath)
 		}
 		return nil, fmt.Errorf("failed to create bucket: %w", err)

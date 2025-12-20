@@ -77,7 +77,7 @@ func (e *execProcess) SetExited(status int) {
 func (e *execProcess) setExited(status int) {
 	e.status = status
 	e.exited = time.Now()
-	e.parent.Platform.ShutdownConsole(context.Background(), e.console)
+	_ = e.parent.Platform.ShutdownConsole(context.Background(), e.console)
 	close(e.waitBlock)
 }
 
@@ -89,16 +89,16 @@ func (e *execProcess) Delete(ctx context.Context) error {
 }
 
 func (e *execProcess) delete(ctx context.Context) error {
-	waitTimeout(ctx, &e.wg, 2*time.Second)
+	_ = waitTimeout(ctx, &e.wg, 2*time.Second)
 	if e.io != nil {
 		for _, c := range e.closers {
-			c.Close()
+			_ = c.Close()
 		}
-		e.io.Close()
+		_ = e.io.Close()
 	}
 	pidfile := filepath.Join(e.path, fmt.Sprintf("%s.pid", e.id))
 	// silently ignore error
-	os.Remove(pidfile)
+	_ = os.Remove(pidfile)
 	return nil
 }
 
@@ -123,7 +123,7 @@ func (e *execProcess) Kill(ctx context.Context, sig uint32, _ bool) error {
 	return e.execState.Kill(ctx, sig, false)
 }
 
-func (e *execProcess) kill(ctx context.Context, sig uint32, _ bool) error {
+func (e *execProcess) kill(_ context.Context, sig uint32, _ bool) error {
 	pid := e.pid.get()
 	switch {
 	case pid == 0:
@@ -171,7 +171,7 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
 			return fmt.Errorf("failed to create runc console socket: %w", err)
 		}
-		defer socket.Close()
+		defer func() { _ = socket.Close() }()
 	} else {
 		if pio, err = createIO(ctx, e.id, e.parent.IoUID, e.parent.IoGID, e.stdio, e.parent.streams); err != nil {
 			return fmt.Errorf("failed to create init process I/O: %w", err)
@@ -179,7 +179,7 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 		e.io = pio
 		defer func() {
 			if err != nil && e.io != nil {
-				e.io.Close()
+				_ = e.io.Close()
 			}
 		}()
 	}

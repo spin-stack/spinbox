@@ -1,5 +1,6 @@
 //go:build darwin
 
+// Package manager wires shim managers for supported platforms.
 package manager
 
 import (

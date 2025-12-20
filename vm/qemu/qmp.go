@@ -72,7 +72,8 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 		return nil, fmt.Errorf("QMP socket not available: %w", err)
 	}
 
-	conn, err := net.Dial("unix", socketPath)
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to QMP socket: %w", err)
 	}
@@ -89,7 +90,7 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 
 	// Read QMP greeting
 	if !qmp.scanner.Scan() {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to read QMP greeting")
 	}
 
@@ -107,7 +108,7 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 	}
 
 	if err := json.Unmarshal(qmp.scanner.Bytes(), &greeting); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to parse QMP greeting: %w", err)
 	}
 
@@ -122,7 +123,7 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 
 	// Enter command mode
 	if err := qmp.execute(ctx, "qmp_capabilities", nil); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to negotiate QMP capabilities: %w", err)
 	}
 
@@ -192,7 +193,7 @@ type qmpEventHandler func(logger *log.Entry, data map[string]interface{})
 
 var qmpEventHandlers = map[string]qmpEventHandler{
 	"SHUTDOWN": func(logger *log.Entry, data map[string]interface{}) {
-		reason := qmpStringField(data, "reason", "unknown")
+		reason := qmpStringField(data, "reason")
 		logger.WithField("reason", reason).Info("qemu: guest initiated shutdown")
 	},
 	"POWERDOWN": func(logger *log.Entry, data map[string]interface{}) {
@@ -208,23 +209,23 @@ var qmpEventHandlers = map[string]qmpEventHandler{
 		logger.Debug("qemu: VM execution resumed")
 	},
 	"DEVICE_DELETED": func(logger *log.Entry, data map[string]interface{}) {
-		deviceID := qmpStringField(data, "device", "unknown")
+		deviceID := qmpStringField(data, "device")
 		logger.WithField("device", deviceID).Debug("qemu: device removed")
 	},
 	"NIC_RX_FILTER_CHANGED": func(logger *log.Entry, data map[string]interface{}) {
-		nicName := qmpStringField(data, "name", "unknown")
+		nicName := qmpStringField(data, "name")
 		logger.WithField("nic", nicName).Debug("qemu: NIC RX filter changed")
 	},
 	"WATCHDOG": func(logger *log.Entry, data map[string]interface{}) {
-		action := qmpStringField(data, "action", "unknown")
+		action := qmpStringField(data, "action")
 		logger.WithField("action", action).Warn("qemu: watchdog timer expired")
 	},
 	"GUEST_PANICKED": func(logger *log.Entry, data map[string]interface{}) {
 		logger.Error("qemu: guest kernel panic detected")
 	},
 	"BLOCK_IO_ERROR": func(logger *log.Entry, data map[string]interface{}) {
-		device := qmpStringField(data, "device", "unknown")
-		operation := qmpStringField(data, "operation", "unknown")
+		device := qmpStringField(data, "device")
+		operation := qmpStringField(data, "operation")
 		logger.WithFields(log.Fields{
 			"device":    device,
 			"operation": operation,
@@ -232,14 +233,14 @@ var qmpEventHandlers = map[string]qmpEventHandler{
 	},
 }
 
-func qmpStringField(data map[string]interface{}, key string, fallback string) string {
+func qmpStringField(data map[string]interface{}, key string) string {
 	if data == nil {
-		return fallback
+		return "unknown"
 	}
 	if value, ok := data[key].(string); ok {
 		return value
 	}
-	return fallback
+	return "unknown"
 }
 
 // handleEvent processes QMP asynchronous events with structured logging

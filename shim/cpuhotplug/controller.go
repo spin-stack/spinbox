@@ -1,3 +1,4 @@
+// Package cpuhotplug provides CPU hotplug control for QEMU VMs.
 package cpuhotplug
 
 import (
@@ -219,7 +220,8 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 			return nil
 		}
 
-		return c.scaleDown(ctx, targetCPUs)
+		c.scaleDown(ctx, targetCPUs)
+		return nil
 	}
 
 	// No change needed, reset counters
@@ -300,7 +302,7 @@ func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
 }
 
 // scaleDown removes vCPUs to reach target
-func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) error {
+func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": c.containerID,
 		"current":      c.currentCPUs,
@@ -328,6 +330,4 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) error {
 	c.currentCPUs = targetCPUs
 	c.lastScaleDown = time.Now()
 	c.consecutiveLowUsage = 0
-
-	return nil
 }

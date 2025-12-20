@@ -520,8 +520,12 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	defer q.mu.Unlock()
 
 	// Remove old socket files if they exist
-	os.Remove(q.qmpSocketPath)
-	os.Remove(q.vsockPath)
+	if err := os.Remove(q.qmpSocketPath); err != nil && !os.IsNotExist(err) {
+		log.G(ctx).WithError(err).Debug("qemu: failed to remove QMP socket")
+	}
+	if err := os.Remove(q.vsockPath); err != nil && !os.IsNotExist(err) {
+		log.G(ctx).WithError(err).Debug("qemu: failed to remove vsock path")
+	}
 
 	// Parse start options
 	startOpts := vm.StartOpts{}
@@ -566,7 +570,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Create long-lived context for background monitors; Start ctx may be cancelled by callers.
 	// We use context.Background() here because the background monitors need to outlive
 	// the Start() call and continue running until explicit Shutdown().
-	runCtx, runCancel := context.WithCancel(context.Background()) //nolint:contextcheck // Independent lifetime for VM background monitors
+	runCtx, runCancel := context.WithCancel(context.WithoutCancel(ctx))
 	// Note: q.mu is already held (locked at line 200), so we can set these fields directly
 	q.runCtx = runCtx
 	q.runCancel = runCancel
@@ -578,7 +582,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	// Monitor liveness of the guest RPC server; if it goes away (guest reboot/poweroff)
 	// ensure QEMU exits so the shim can clean up.
-	go q.monitorGuestRPC(runCtx) //nolint:contextcheck // Uses independent VM lifetime context
+	go q.monitorGuestRPC(runCtx)
 
 	// Mark as successfully started
 	success = true
@@ -753,18 +757,18 @@ func (q *Instance) QMPClient() *QMPClient {
 	return q.qmpClient
 }
 
-func (q *Instance) shutdownGuest(logger *log.Entry) {
+func (q *Instance) shutdownGuest(ctx context.Context, logger *log.Entry) {
 	// Send graceful shutdown to guest OS
 	// Try CTRL+ALT+DELETE first (more reliable for some distributions), then ACPI powerdown
 	// We use a fresh context here because the caller's context might be cancelled/expired,
 	// but we still need time to properly shut down the VM.
 	if q.qmpClient != nil {
 		logger.Info("qemu: sending CTRL+ALT+DELETE via QMP")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second) //nolint:contextcheck // Needs independent timeout for shutdown
-		if err := q.qmpClient.SendCtrlAltDelete(shutdownCtx); err != nil {              //nolint:contextcheck // Uses shutdown context
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		if err := q.qmpClient.SendCtrlAltDelete(shutdownCtx); err != nil {
 			logger.WithError(err).Debug("qemu: failed to send CTRL+ALT+DELETE, trying ACPI powerdown")
 			// Fall back to ACPI powerdown
-			if err := q.qmpClient.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // Uses shutdown context
+			if err := q.qmpClient.Shutdown(shutdownCtx); err != nil {
 				logger.WithError(err).Warning("qemu: failed to send ACPI powerdown")
 			}
 		}
@@ -786,7 +790,7 @@ func (q *Instance) cleanupAfterFailedKill(logger *log.Entry) {
 	logger.Debug("qemu: cleaned up QMP and TAPs after failed shutdown")
 }
 
-func (q *Instance) stopQemuProcess(logger *log.Entry) error {
+func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error {
 	// Brief wait to let guest start shutdown, then send quit
 	// QEMU won't exit on its own - it always needs an explicit quit command
 	if q.cmd == nil || q.cmd.Process == nil {
@@ -809,8 +813,8 @@ func (q *Instance) stopQemuProcess(logger *log.Entry) error {
 	// Send quit command to tell QEMU to exit
 	if q.qmpClient != nil {
 		logger.Debug("qemu: sending quit command to QEMU")
-		quitCtx, quitCancel := context.WithTimeout(context.Background(), 1*time.Second) //nolint:contextcheck // Needs independent timeout for quit
-		if err := q.qmpClient.Quit(quitCtx); err != nil {                               //nolint:contextcheck // Uses quit context
+		quitCtx, quitCancel := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Second)
+		if err := q.qmpClient.Quit(quitCtx); err != nil {
 			logger.WithError(err).Debug("qemu: failed to send quit command")
 			quitCancel()
 			// Fall through to SIGKILL
@@ -940,9 +944,9 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		q.vsockConn = nil
 	}
 
-	q.shutdownGuest(logger)
+	q.shutdownGuest(ctx, logger)
 
-	if err := q.stopQemuProcess(logger); err != nil {
+	if err := q.stopQemuProcess(ctx, logger); err != nil {
 		return err
 	}
 
@@ -973,19 +977,19 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 			var vs [4]byte
 			binary.BigEndian.PutUint32(vs[:], sid)
 			if _, err := conn.Write(vs[:]); err != nil {
-				conn.Close()
+				_ = conn.Close()
 				return 0, nil, fmt.Errorf("failed to write stream id: %w", err)
 			}
 
 			// Wait for stream ID acknowledgment from vminitd
 			var streamAck [4]byte
 			if _, err := io.ReadFull(conn, streamAck[:]); err != nil {
-				conn.Close()
+				_ = conn.Close()
 				return 0, nil, fmt.Errorf("failed to read stream ack: %w", err)
 			}
 
 			if binary.BigEndian.Uint32(streamAck[:]) != sid {
-				conn.Close()
+				_ = conn.Close()
 				return 0, nil, fmt.Errorf("stream ack mismatch")
 			}
 
@@ -1033,20 +1037,30 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		}
 
 		// Try to ping the TTRPC server with a deadline
-		conn.SetReadDeadline(time.Now().Add(pingDeadline))
+		if err := conn.SetReadDeadline(time.Now().Add(pingDeadline)); err != nil {
+			log.G(ctx).WithError(err).Debug("qemu: failed to set ping deadline")
+			_ = conn.Close()
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
 		if err := pingTTRPC(conn); err != nil {
 			log.G(ctx).WithError(err).WithField("deadline", pingDeadline).Debug("qemu: TTRPC ping failed, retrying")
-			conn.Close()
+			_ = conn.Close()
 			pingDeadline += 10 * time.Millisecond
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
 
 		// Clear the deadline and verify connection is still alive
-		conn.SetReadDeadline(time.Time{})
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			log.G(ctx).WithError(err).Debug("qemu: failed to clear ping deadline")
+			_ = conn.Close()
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
 		if err := pingTTRPC(conn); err != nil {
 			log.G(ctx).WithError(err).Debug("qemu: TTRPC ping failed after clearing deadline, retrying")
-			conn.Close()
+			_ = conn.Close()
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
@@ -1081,14 +1095,18 @@ func (q *Instance) monitorGuestRPC(ctx context.Context) {
 
 		conn, err := vsock.Dial(vsockCID, vsockRPCPort, nil)
 		if err == nil {
-			conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
+			if err := conn.SetDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+				log.G(ctx).WithError(err).Debug("qemu: failed to set guest RPC deadline")
+				_ = conn.Close()
+				continue
+			}
 			if err := pingTTRPC(conn); err != nil {
 				failures++
 				log.G(ctx).WithError(err).WithField("failures", failures).Debug("qemu: guest RPC ping failed")
 			} else {
 				failures = 0
 			}
-			conn.Close()
+			_ = conn.Close()
 		} else {
 			failures++
 			log.G(ctx).WithError(err).WithField("failures", failures).Debug("qemu: guest RPC dial failed")
@@ -1116,13 +1134,13 @@ func openTAPInNetNS(ctx context.Context, tapName, netnsPath string) (*os.File, e
 	if err != nil {
 		return nil, fmt.Errorf("get target netns: %w", err)
 	}
-	defer targetNS.Close()
+	defer func() { _ = targetNS.Close() }()
 
 	origNS, err := netns.Get()
 	if err != nil {
 		return nil, fmt.Errorf("get current netns: %w", err)
 	}
-	defer origNS.Close()
+	defer func() { _ = origNS.Close() }()
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -1163,10 +1181,10 @@ func openTAPInNetNS(ctx context.Context, tapName, netnsPath string) (*os.File, e
 	// We need to use the TUNSETIFF ioctl with IFF_TAP | IFF_NO_PI flags
 	// and set the device name
 	const (
-		TUNSETIFF    = 0x400454ca
-		IFF_TAP      = 0x0002
-		IFF_NO_PI    = 0x1000
-		IFF_VNET_HDR = 0x4000
+		tunSetIFF  = 0x400454ca
+		iffTap     = 0x0002
+		iffNoPI    = 0x1000
+		iffVNetHdr = 0x4000
 	)
 
 	type ifReq struct {
@@ -1177,12 +1195,12 @@ func openTAPInNetNS(ctx context.Context, tapName, netnsPath string) (*os.File, e
 
 	var req ifReq
 	copy(req.Name[:], tapName)
-	req.Flags = IFF_TAP | IFF_NO_PI | IFF_VNET_HDR
+	req.Flags = iffTap | iffNoPI | iffVNetHdr
 
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, tunFile.Fd(), TUNSETIFF, uintptr(unsafe.Pointer(&req)))
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, tunFile.Fd(), tunSetIFF, uintptr(unsafe.Pointer(&req)))
 	if errno != 0 {
-		tunFile.Close()
-		return nil, fmt.Errorf("TUNSETIFF ioctl failed: %v", errno)
+		_ = tunFile.Close()
+		return nil, fmt.Errorf("TUNSETIFF ioctl failed: %w", errno)
 	}
 
 	log.G(ctx).WithFields(log.Fields{

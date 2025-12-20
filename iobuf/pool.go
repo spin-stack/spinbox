@@ -1,4 +1,4 @@
-// Package bufpool provides a shared buffer pool for I/O operations.
+// Package iobuf provides a shared buffer pool for I/O operations.
 package iobuf
 
 import "sync"

@@ -98,7 +98,7 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 		if err != nil {
 			for i, c := range streams {
 				if c != nil && (i != 2 || c != streams[1]) {
-					c.Close()
+					_ = c.Close()
 				}
 			}
 		}
@@ -110,7 +110,7 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 	return pio, func(ctx context.Context) error {
 		for i, c := range streams {
 			if c != nil && (i != 2 || c != streams[1]) {
-				c.Close()
+				_ = c.Close()
 			}
 		}
 		select {
@@ -127,7 +127,7 @@ func createStreams(ctx context.Context, ss streamCreator, io stdio.Stdio) (_ std
 		if err != nil {
 			for i, c := range conns {
 				if c != nil && (i != 2 || c != conns[1]) {
-					c.Close()
+					_ = c.Close()
 				}
 			}
 		}
@@ -251,9 +251,13 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 		if copying.Add(-1) == 0 {
 			close(done)
 		}
-		wc.Close()
+		if err := wc.Close(); err != nil {
+			log.G(ctx).WithError(err).WithField("stream", target.stream).Warn("error closing output writer")
+		}
 		if rc != nil {
-			rc.Close()
+			if err := rc.Close(); err != nil {
+				log.G(ctx).WithError(err).WithField("stream", target.stream).Warn("error closing output reader")
+			}
 		}
 	}()
 }
@@ -264,9 +268,9 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 	}
 	// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
 	// not tied to any specific operation context.
-	f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:contextcheck // I/O FIFO needs independent lifetime
+	f, err := fifo.OpenFifo(ctx, stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return fmt.Errorf("containerd-shim: opening %s failed: %s", stdin, err)
+		return fmt.Errorf("containerd-shim: opening %s failed: %w", stdin, err)
 	}
 	cwg.Add(1)
 	go func() {
@@ -274,9 +278,15 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 		p := iobuf.Get()
 		defer iobuf.Put(p)
 
-		io.CopyBuffer(stream, f, *p)
-		stream.Close()
-		f.Close()
+		if _, err := io.CopyBuffer(stream, f, *p); err != nil {
+			log.G(ctx).WithError(err).Warn("error copying stdin")
+		}
+		if err := stream.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("error closing stdin stream")
+		}
+		if err := f.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("error closing stdin fifo")
+		}
 	}()
 	return nil
 }

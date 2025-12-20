@@ -46,7 +46,7 @@ func (p *processIO) Close() error {
 	}
 	for i, s := range p.streams {
 		if s != nil && (i != 2 || s != p.streams[1]) {
-			s.Close()
+			_ = s.Close()
 		}
 	}
 	return nil
@@ -126,7 +126,9 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 		if err != nil {
 			return nil, err
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
 		pio.stdio.Stdout = filePath
 		pio.stdio.Stderr = filePath
 		pio.copy = true
@@ -161,9 +163,13 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 						log.G(ctx).WithError(err).Warn("error copying stdout")
 					}
 					wg.Done()
-					wc.Close()
+					if err := wc.Close(); err != nil {
+						log.G(ctx).WithError(err).Warn("error closing stdout writer")
+					}
 					if rc != nil {
-						rc.Close()
+						if err := rc.Close(); err != nil {
+							log.G(ctx).WithError(err).Warn("error closing stdout reader")
+						}
 					}
 				}()
 			},
@@ -181,9 +187,13 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 						log.G(ctx).WithError(err).Warn("error copying stderr")
 					}
 					wg.Done()
-					wc.Close()
+					if err := wc.Close(); err != nil {
+						log.G(ctx).WithError(err).Warn("error closing stderr writer")
+					}
 					if rc != nil {
-						rc.Close()
+						if err := rc.Close(); err != nil {
+							log.G(ctx).WithError(err).Warn("error closing stderr reader")
+						}
 					}
 				}()
 			},
@@ -230,7 +240,7 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 		i.dest(fw, fr)
 	}
 	if stdin == "" {
-		return nil, nil
+		return nopCloser{}, nil
 	}
 	var (
 		c   io.Closer
@@ -243,7 +253,7 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 	} else {
 		f, err = fifo.OpenFifo(ctx, stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
-			return nil, fmt.Errorf("containerd-shim: opening %s failed: %s", stdin, err)
+			return nil, fmt.Errorf("containerd-shim: opening %s failed: %w", stdin, err)
 		}
 		c = f
 	}
@@ -253,11 +263,23 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 		p := iobuf.Get()
 		defer iobuf.Put(p)
 
-		io.CopyBuffer(rio.Stdin(), f, *p)
-		rio.Stdin().Close()
-		f.Close()
+		if _, err := io.CopyBuffer(rio.Stdin(), f, *p); err != nil {
+			log.G(ctx).WithError(err).Warn("error copying stdin")
+		}
+		if err := rio.Stdin().Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("error closing stdin")
+		}
+		if err := f.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("error closing stdin fifo")
+		}
 	}()
 	return c, nil
+}
+
+type nopCloser struct{}
+
+func (nopCloser) Close() error {
+	return nil
 }
 
 // countingWriteCloser masks io.Closer() until close has been invoked a certain number of times.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/containerd/errdefs/pkg/errgrpc"
+	"github.com/containerd/log"
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
@@ -37,7 +38,7 @@ func initFunc(ic *plugin.InitContext) (interface{}, error) {
 	// Write runtime features to a file for the shim manager to read
 	if err := s.writeRuntimeFeatures(); err != nil {
 		// Non-fatal - log but continue
-		return s, nil
+		log.G(ic.Context).WithError(err).Warn("failed to write runtime features")
 	}
 	return s, nil
 }

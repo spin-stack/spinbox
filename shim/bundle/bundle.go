@@ -1,3 +1,4 @@
+// Package bundle loads and transforms OCI bundles for the shim.
 package bundle
 
 import (

@@ -1,3 +1,4 @@
+// Package stream provides stream management for vminit I/O.
 package stream
 
 import "io"

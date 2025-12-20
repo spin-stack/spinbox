@@ -108,7 +108,7 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
 			return fmt.Errorf("failed to create OCI runtime console socket: %w", err)
 		}
-		defer socket.Close()
+		defer func() { _ = socket.Close() }()
 	} else {
 		if pio, err = createIO(ctx, p.id, p.IoUID, p.IoGID, p.stdio, p.streams); err != nil {
 			return fmt.Errorf("failed to create init process I/O: %w", err)
@@ -116,7 +116,7 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 		p.io = pio
 		defer func() {
 			if retError != nil && p.io != nil {
-				p.io.Close()
+				_ = p.io.Close()
 			}
 		}()
 	}
@@ -242,7 +242,7 @@ func (p *Init) SetExited(status int) {
 func (p *Init) setExited(status int) {
 	p.exited = time.Now()
 	p.status = status
-	p.Platform.ShutdownConsole(context.Background(), p.console)
+	_ = p.Platform.ShutdownConsole(context.Background(), p.console)
 	close(p.waitBlock)
 }
 
@@ -255,7 +255,7 @@ func (p *Init) Delete(ctx context.Context) error {
 }
 
 func (p *Init) delete(ctx context.Context) error {
-	waitTimeout(ctx, &p.wg, 2*time.Second)
+	_ = waitTimeout(ctx, &p.wg, 2*time.Second)
 	err := p.runtime.Delete(ctx, p.id, nil)
 	// ignore errors if a runtime has already deleted the process
 	// but we still hold metadata and pipes
@@ -271,9 +271,9 @@ func (p *Init) delete(ctx context.Context) error {
 	}
 	if p.io != nil {
 		for _, c := range p.closers {
-			c.Close()
+			_ = c.Close()
 		}
-		p.io.Close()
+		_ = p.io.Close()
 	}
 	if err2 := mount.UnmountRecursive(p.Rootfs, 0); err2 != nil {
 		log.G(ctx).WithError(err2).Warn("failed to cleanup rootfs mount")
@@ -356,7 +356,7 @@ func (p *Init) Exec(ctx context.Context, path string, r *ExecConfig) (Process, e
 }
 
 // exec returns a new exec'd process
-func (p *Init) exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
+func (p *Init) exec(_ context.Context, path string, r *ExecConfig) (Process, error) {
 	// process exec request
 	var spec specs.Process
 	if err := json.Unmarshal(r.Spec.Value, &spec); err != nil {
@@ -398,7 +398,7 @@ func (p *Init) checkpoint(ctx context.Context, r *CheckpointConfig) error {
 	work := r.WorkDir
 	if work == "" {
 		work = filepath.Join(p.WorkDir, "criu-work")
-		defer os.RemoveAll(work)
+		defer func() { _ = os.RemoveAll(work) }()
 	}
 	if err := p.runtime.Checkpoint(ctx, p.id, &runc.CheckpointOpts{
 		WorkDir:                  work,

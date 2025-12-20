@@ -32,6 +32,6 @@ func NewBinaryCmd(binaryURI *url.URL, id, ns string) *exec.Cmd {
 // It it used for cleanup in the event of unexpected errors.
 func CloseFiles(files ...*os.File) {
 	for _, file := range files {
-		file.Close()
+		_ = file.Close()
 	}
 }

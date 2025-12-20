@@ -9,5 +9,6 @@ import (
 )
 
 func main() {
-	shim.Run(context.Background(), manager.NewShimManager("io.containerd.beaconbox.v1"))
+	ctx := context.Background()
+	shim.Run(ctx, manager.NewShimManager("io.containerd.beaconbox.v1"))
 }

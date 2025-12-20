@@ -141,7 +141,7 @@ func (s *createdCheckpointState) Start(ctx context.Context) error {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
 			return fmt.Errorf("failed to create OCI runtime console socket: %w", err)
 		}
-		defer socket.Close()
+		defer func() { _ = socket.Close() }()
 		s.opts.ConsoleSocket = socket
 	}
 

@@ -1,3 +1,4 @@
+// Package qemu implements the QEMU-based VM backend.
 package qemu
 
 import (

@@ -142,7 +142,7 @@ func checkKVM() error {
 	if err != nil {
 		return fmt.Errorf("failed to open /dev/kvm: %w. Your system may lack KVM support or you may have insufficient permissions", err)
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }()
 
 	// Kernel docs says:
 	//     Applications should refuse to run if KVM_GET_API_VERSION returns a value other than 12.
@@ -367,8 +367,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 	if err != nil {
 		return err
 	}
-	ns, _ := namespaces.Namespace(ctx)
-	go func(ns string) {
+	go func() {
 		for {
 			ev, err := sc.Recv()
 			if err != nil {
@@ -390,7 +389,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 			}
 			s.send(ev)
 		}
-	}(ns)
+	}()
 
 	return nil
 }
@@ -976,24 +975,26 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 	// Create a fresh background context with the namespace preserved.
 	// This is intentional: event forwarding must continue even if the parent context is cancelled,
 	// so we need an independent context that will live until the publisher is closed.
-	ctx = namespaces.WithNamespace(context.Background(), ns) //nolint:contextcheck // Event forwarding needs independent lifetime
+	ctx = namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 	for e := range s.events {
 		switch e := e.(type) {
 		case *types.Envelope:
 			// TODO: Transform event fields?
-			if err := publisher.Publish(ctx, e.Topic, e.Event); err != nil { //nolint:contextcheck // Uses event forwarding context
-				log.G(ctx).WithError(err).Error("forward event") //nolint:contextcheck // Uses event forwarding context
+			if err := publisher.Publish(ctx, e.Topic, e.Event); err != nil {
+				log.G(ctx).WithError(err).Error("forward event")
 			}
 		default:
-			err := publisher.Publish(ctx, runtime.GetTopic(e), e) //nolint:contextcheck // Uses event forwarding context
+			err := publisher.Publish(ctx, runtime.GetTopic(e), e)
 			if err != nil {
-				log.G(ctx).WithError(err).Error("post event") //nolint:contextcheck // Uses event forwarding context
+				log.G(ctx).WithError(err).Error("post event")
 			}
 		}
 	}
-	publisher.Close()
+	if err := publisher.Close(); err != nil {
+		log.G(ctx).WithError(err).Error("close event publisher")
+	}
 	for e := range s.events {
-		log.G(ctx).WithField("event", e).Error("ignored event after shutdown") //nolint:contextcheck // Uses event forwarding context
+		log.G(ctx).WithField("event", e).Error("ignored event after shutdown")
 	}
 }
 
@@ -1069,7 +1070,7 @@ func getHostMemoryTotal() (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to open /proc/meminfo: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

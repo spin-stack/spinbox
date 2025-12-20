@@ -1,3 +1,4 @@
+// Package events provides event exchange utilities for vminit.
 package events
 
 import (
