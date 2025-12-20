@@ -13,3 +13,20 @@ var Pool = sync.Pool{
 		return &buffer
 	},
 }
+
+// Get returns a pooled buffer and guarantees a valid *[]byte.
+func Get() *[]byte {
+	if buf, ok := Pool.Get().(*[]byte); ok && buf != nil {
+		return buf
+	}
+	buffer := make([]byte, 4096)
+	return &buffer
+}
+
+// Put returns a buffer to the pool if non-nil.
+func Put(buf *[]byte) {
+	if buf == nil {
+		return
+	}
+	Pool.Put(buf)
+}

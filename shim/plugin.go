@@ -1,6 +1,8 @@
 package shim
 
 import (
+	"fmt"
+
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 	cplugins "github.com/containerd/containerd/v2/plugins"
@@ -29,7 +31,16 @@ func init() {
 			}
 
 			// VM instances are created directly by the task service when needed
-			return task.NewTaskService(ic.Context, pp.(shim.Publisher), ss.(shutdown.Service))
+			publisher, ok := pp.(shim.Publisher)
+			if !ok {
+				return nil, fmt.Errorf("unexpected publisher type %T", pp)
+			}
+			shutdownSvc, ok := ss.(shutdown.Service)
+			if !ok {
+				return nil, fmt.Errorf("unexpected shutdown service type %T", ss)
+			}
+			// VM instances are created directly by the task service when needed
+			return task.NewTaskService(ic.Context, publisher, shutdownSvc)
 		},
 	})
 }

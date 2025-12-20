@@ -72,7 +72,7 @@ type Instance struct {
 	// 1. The context represents the VM instance's lifetime, not a single operation
 	// 2. The struct manages both the context and its cancellation
 	// 3. Multiple background goroutines share this context for coordinated shutdown
-	runCtx    context.Context    //nolint:containedctx // Manages VM lifetime for background monitors
+	runCtx    context.Context //nolint:containedctx // Manages VM lifetime for background monitors
 	runCancel context.CancelFunc
 
 	// Netns where TAPs were originally created (CNI); used to move them back on shutdown.

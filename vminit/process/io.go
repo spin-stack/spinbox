@@ -155,8 +155,8 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 				cwg.Add(1)
 				go func() {
 					cwg.Done()
-					p := iobuf.Pool.Get().(*[]byte)
-					defer iobuf.Pool.Put(p)
+					p := iobuf.Get()
+					defer iobuf.Put(p)
 					if _, err := io.CopyBuffer(wc, rio.Stdout(), *p); err != nil {
 						log.G(ctx).WithError(err).Warn("error copying stdout")
 					}
@@ -175,8 +175,8 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 				cwg.Add(1)
 				go func() {
 					cwg.Done()
-					p := iobuf.Pool.Get().(*[]byte)
-					defer iobuf.Pool.Put(p)
+					p := iobuf.Get()
+					defer iobuf.Put(p)
 					if _, err := io.CopyBuffer(wc, rio.Stderr(), *p); err != nil {
 						log.G(ctx).WithError(err).Warn("error copying stderr")
 					}
@@ -250,8 +250,8 @@ func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, s
 	cwg.Add(1)
 	go func() {
 		cwg.Done()
-		p := iobuf.Pool.Get().(*[]byte)
-		defer iobuf.Pool.Put(p)
+		p := iobuf.Get()
+		defer iobuf.Put(p)
 
 		io.CopyBuffer(rio.Stdin(), f, *p)
 		rio.Stdin().Close()

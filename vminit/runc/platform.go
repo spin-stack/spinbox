@@ -74,8 +74,8 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 		cwg.Add(1)
 		go func() {
 			cwg.Done()
-			bp := iobuf.Pool.Get().(*[]byte)
-			defer iobuf.Pool.Put(bp)
+			bp := iobuf.Get()
+			defer iobuf.Put(bp)
 			io.CopyBuffer(epollConsole, in, *bp)
 			// we need to shutdown epollConsole when pipe broken
 			epollConsole.Shutdown(p.epoller.CloseConsole)
@@ -102,8 +102,8 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 		cwg.Add(1)
 		go func() {
 			cwg.Done()
-			buf := iobuf.Pool.Get().(*[]byte)
-			defer iobuf.Pool.Put(buf)
+			buf := iobuf.Get()
+			defer iobuf.Put(buf)
 			io.CopyBuffer(out, epollConsole, *buf)
 
 			out.Close()
@@ -187,8 +187,8 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 		cwg.Add(1)
 		go func() {
 			cwg.Done()
-			buf := iobuf.Pool.Get().(*[]byte)
-			defer iobuf.Pool.Put(buf)
+			buf := iobuf.Get()
+			defer iobuf.Put(buf)
 			io.CopyBuffer(outw, epollConsole, *buf)
 
 			outw.Close()

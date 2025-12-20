@@ -42,7 +42,10 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
-			config := ic.Config.(*serviceConfig)
+			config, ok := ic.Config.(*serviceConfig)
+			if !ok {
+				return nil, fmt.Errorf("unexpected config type %T", ic.Config)
+			}
 			l, err := vsock.ListenContextID(config.ContextID, config.Port, &vsock.Config{})
 			if err != nil {
 				return nil, fmt.Errorf("failed to listen on vsock port %d with context id %d: %w", config.Port, config.ContextID, err)
@@ -53,7 +56,11 @@ func init() {
 				streams: make(map[uint32]net.Conn),
 			}
 
-			ss.(shutdown.Service).RegisterCallback(s.Shutdown)
+			shutdownSvc, ok := ss.(shutdown.Service)
+			if !ok {
+				return nil, fmt.Errorf("unexpected shutdown service type %T", ss)
+			}
+			shutdownSvc.RegisterCallback(s.Shutdown)
 
 			go s.Run()
 

@@ -117,6 +117,14 @@ type service struct {
 	inflight            atomic.Int64
 }
 
+type deleteCleanupPlan struct {
+	ioShutdowns      []func(context.Context) error
+	needShutdown     bool
+	vmInst           vm.Instance
+	cpuController    *cpuhotplug.Controller
+	needNetworkClean bool
+}
+
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 	taskAPI.RegisterTTRPCTaskService(server, s)
 	return nil
@@ -282,6 +290,111 @@ func disableNetworkNamespace(ctx context.Context, b *bundle.Bundle) error {
 	return nil
 }
 
+type resourceConfigInfo struct {
+	hasExplicitCPULimit    bool
+	hasExplicitMemoryLimit bool
+	hostCPUs               int
+	hostMemory             int64
+}
+
+func computeResourceConfig(ctx context.Context, spec *specs.Spec) (*vm.VMResourceConfig, resourceConfigInfo) {
+	// Extract resource requests from OCI spec
+	cpuRequest := extractCPURequest(spec)
+	memoryRequest := extractMemoryRequest(spec)
+
+	// Get host resource limits
+	hostCPUs := getHostCPUCount()
+	hostMemory, err := getHostMemoryTotal()
+	if err != nil {
+		log.G(ctx).WithError(err).Warn("failed to get host memory total, using 256GB default")
+		hostMemory = 256 * 1024 * 1024 * 1024 // 256GB default
+	}
+
+	// Align memory values to 128MB for virtio-mem requirement
+	const virtioMemAlignment = 128 * 1024 * 1024 // 128MB
+	memoryRequest = alignMemory(memoryRequest, virtioMemAlignment)
+	hostMemory = alignMemory(hostMemory, virtioMemAlignment)
+
+	// Calculate smart resource limits for better overcommit:
+	// - If container has explicit CPU limit, use that for MaxCPUs (capped at host)
+	// - If no limit, allow access to all host CPUs for maximum flexibility
+	// - If container has explicit memory limit, use 2x for hotplug headroom (capped at host)
+	// - If no limit, allow access to all host memory for maximum flexibility
+	maxCPUs := hostCPUs
+	memoryHotplugSize := hostMemory
+
+	// Check if explicit limits were set (vs defaults)
+	hasExplicitCPULimit := spec.Linux != nil &&
+		spec.Linux.Resources != nil &&
+		spec.Linux.Resources.CPU != nil &&
+		(spec.Linux.Resources.CPU.Quota != nil || spec.Linux.Resources.CPU.Cpus != "")
+
+	hasExplicitMemoryLimit := spec.Linux != nil &&
+		spec.Linux.Resources != nil &&
+		spec.Linux.Resources.Memory != nil &&
+		spec.Linux.Resources.Memory.Limit != nil
+
+	if hasExplicitCPULimit {
+		// Container has explicit CPU limit - cap MaxCPUs to the request
+		// This prevents wasting CPU scheduling slots on containers that don't need them
+		maxCPUs = min(cpuRequest, hostCPUs)
+	}
+
+	if hasExplicitMemoryLimit {
+		// Container has explicit memory limit - set hotplug to 2x for headroom
+		// This allows some burst capacity while preventing unlimited growth
+		memoryHotplugSize = min(memoryRequest*2, hostMemory)
+		memoryHotplugSize = alignMemory(memoryHotplugSize, virtioMemAlignment)
+	}
+
+	resourceCfg := &vm.VMResourceConfig{
+		BootCPUs:          cpuRequest,
+		MaxCPUs:           maxCPUs,
+		MemorySize:        memoryRequest,
+		MemoryHotplugSize: memoryHotplugSize,
+	}
+
+	return resourceCfg, resourceConfigInfo{
+		hasExplicitCPULimit:    hasExplicitCPULimit,
+		hasExplicitMemoryLimit: hasExplicitMemoryLimit,
+		hostCPUs:               hostCPUs,
+		hostMemory:             hostMemory,
+	}
+}
+
+func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) error {
+	sc, err := vmevents.NewTTRPCEventsClient(vmc).Stream(ctx, &ptypes.Empty{})
+	if err != nil {
+		return err
+	}
+	ns, _ := namespaces.Namespace(ctx)
+	go func(ns string) {
+		for {
+			ev, err := sc.Recv()
+			if err != nil {
+				// Check if this was an intentional shutdown (Delete/Shutdown called)
+				// vs unexpected VM crash
+				if s.intentionalShutdown.Load() {
+					log.G(ctx).Info("vm event stream closed (intentional shutdown)")
+					return
+				}
+
+				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
+					log.G(ctx).Info("vm event stream closed unexpectedly, initiating shim shutdown")
+				} else {
+					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
+				}
+				// VM died unexpectedly - trigger shim shutdown to clean up and exit
+				s.requestShutdownAndExit(ctx, "vm event stream closed")
+				return
+			}
+			s.send(ev)
+		}
+	}(ns)
+
+	return nil
+}
+
 // Create a new initial process and container with the underlying OCI runtime.
 // This involves:
 // 1. Verifying KVM availability.
@@ -320,72 +433,17 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Extract resource requests from OCI spec
-	cpuRequest := extractCPURequest(&b.Spec)
-	memoryRequest := extractMemoryRequest(&b.Spec)
-
-	// Get host resource limits
-	hostCPUs := getHostCPUCount()
-	hostMemory, err := getHostMemoryTotal()
-	if err != nil {
-		log.G(ctx).WithError(err).Warn("failed to get host memory total, using 256GB default")
-		hostMemory = 256 * 1024 * 1024 * 1024 // 256GB default
-	}
-
-	// Align memory values to 128MB for virtio-mem requirement
-	const virtioMemAlignment = 128 * 1024 * 1024 // 128MB
-	memoryRequest = alignMemory(memoryRequest, virtioMemAlignment)
-	hostMemory = alignMemory(hostMemory, virtioMemAlignment)
-
-	// Calculate smart resource limits for better overcommit:
-	// - If container has explicit CPU limit, use that for MaxCPUs (capped at host)
-	// - If no limit, allow access to all host CPUs for maximum flexibility
-	// - If container has explicit memory limit, use 2x for hotplug headroom (capped at host)
-	// - If no limit, allow access to all host memory for maximum flexibility
-	maxCPUs := hostCPUs
-	memoryHotplugSize := hostMemory
-
-	// Check if explicit limits were set (vs defaults)
-	hasExplicitCPULimit := b.Spec.Linux != nil &&
-		b.Spec.Linux.Resources != nil &&
-		b.Spec.Linux.Resources.CPU != nil &&
-		(b.Spec.Linux.Resources.CPU.Quota != nil || b.Spec.Linux.Resources.CPU.Cpus != "")
-
-	hasExplicitMemoryLimit := b.Spec.Linux != nil &&
-		b.Spec.Linux.Resources != nil &&
-		b.Spec.Linux.Resources.Memory != nil &&
-		b.Spec.Linux.Resources.Memory.Limit != nil
-
-	if hasExplicitCPULimit {
-		// Container has explicit CPU limit - cap MaxCPUs to the request
-		// This prevents wasting CPU scheduling slots on containers that don't need them
-		maxCPUs = min(cpuRequest, hostCPUs)
-	}
-
-	if hasExplicitMemoryLimit {
-		// Container has explicit memory limit - set hotplug to 2x for headroom
-		// This allows some burst capacity while preventing unlimited growth
-		memoryHotplugSize = min(memoryRequest*2, hostMemory)
-		memoryHotplugSize = alignMemory(memoryHotplugSize, virtioMemAlignment)
-	}
-
-	// Build VM resource configuration
-	resourceCfg := &vm.VMResourceConfig{
-		BootCPUs:          cpuRequest,
-		MaxCPUs:           maxCPUs,
-		MemorySize:        memoryRequest,
-		MemoryHotplugSize: memoryHotplugSize,
-	}
+	resourceCfg, resourceInfo := computeResourceConfig(ctx, &b.Spec)
 
 	log.G(ctx).WithFields(log.Fields{
 		"boot_cpus":              resourceCfg.BootCPUs,
 		"max_cpus":               resourceCfg.MaxCPUs,
 		"memory_size":            resourceCfg.MemorySize,
 		"memory_hotplug_size":    resourceCfg.MemoryHotplugSize,
-		"has_explicit_cpu_limit": hasExplicitCPULimit,
-		"has_explicit_mem_limit": hasExplicitMemoryLimit,
-		"host_cpus":              hostCPUs,
-		"host_memory":            hostMemory,
+		"has_explicit_cpu_limit": resourceInfo.hasExplicitCPULimit,
+		"has_explicit_mem_limit": resourceInfo.hasExplicitMemoryLimit,
+		"host_cpus":              resourceInfo.hostCPUs,
+		"host_memory":            resourceInfo.hostMemory,
 	}).Info("VM resource configuration")
 
 	vmState := filepath.Join(r.Bundle, "vm")
@@ -436,35 +494,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 	// Start forwarding events
-	sc, err := vmevents.NewTTRPCEventsClient(vmc).Stream(ctx, &ptypes.Empty{})
-	if err != nil {
+	if err := s.startEventForwarder(ctx, vmc); err != nil {
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
-	ns, _ := namespaces.Namespace(ctx)
-	go func(ns string) {
-		for {
-			ev, err := sc.Recv()
-			if err != nil {
-				// Check if this was an intentional shutdown (Delete/Shutdown called)
-				// vs unexpected VM crash
-				if s.intentionalShutdown.Load() {
-					log.G(ctx).Info("vm event stream closed (intentional shutdown)")
-					return
-				}
-
-				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
-					log.G(ctx).Info("vm event stream closed unexpectedly, initiating shim shutdown")
-				} else {
-					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
-				}
-				// VM died unexpectedly - trigger shim shutdown to clean up and exit
-				s.requestShutdownAndExit(ctx, "vm event stream closed")
-				return
-			}
-			s.send(ev)
-		}
-	}(ns)
 
 	bundleFiles, err := b.Files()
 	if err != nil {
@@ -560,6 +593,87 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return tc.Start(ctx, r)
 }
 
+func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanupPlan {
+	var plan deleteCleanupPlan
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if c, ok := s.containers[r.ID]; ok {
+		if r.ExecID != "" {
+			if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
+				plan.ioShutdowns = append(plan.ioShutdowns, ioShutdown)
+				delete(c.execShutdowns, r.ExecID)
+			}
+		} else {
+			if c.ioShutdown != nil {
+				plan.ioShutdowns = append(plan.ioShutdowns, c.ioShutdown)
+			}
+			for _, ioShutdown := range c.execShutdowns {
+				plan.ioShutdowns = append(plan.ioShutdowns, ioShutdown)
+			}
+
+			plan.needNetworkClean = true
+			plan.cpuController = s.cpuHotplugController
+			s.cpuHotplugController = nil
+			delete(s.containers, r.ID)
+		}
+	}
+
+	// One VM per container; if the initial process is deleted, stop the VM.
+	if r.ExecID == "" && s.vm != nil {
+		plan.needShutdown = true
+		plan.vmInst = s.vm
+	}
+
+	return plan
+}
+
+func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest, plan deleteCleanupPlan) {
+	// Execute cleanup operations WITHOUT holding the mutex
+	for i, ioShutdown := range plan.ioShutdowns {
+		if err := ioShutdown(ctx); err != nil {
+			if i == 0 && r.ExecID == "" {
+				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
+			} else {
+				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
+			}
+		}
+	}
+
+	// Release network resources
+	if plan.needNetworkClean {
+		env := &network.Environment{ID: r.ID}
+		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+		}
+	}
+
+	// Stop CPU hotplug controller
+	if plan.cpuController != nil {
+		plan.cpuController.Stop()
+		log.G(ctx).Info("cpu-hotplug: controller stopped")
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"id":           r.ID,
+		"exec":         r.ExecID,
+		"needShutdown": plan.needShutdown,
+	}).Info("delete: shutdown decision")
+
+	// Shutdown VM if needed
+	if plan.needShutdown {
+		log.G(ctx).Info("container deleted, shutting down VM")
+		// Mark as intentional shutdown so event stream close doesn't trigger panic
+		s.intentionalShutdown.Store(true)
+		if err := plan.vmInst.Shutdown(ctx); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
+		}
+	} else {
+		log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("container deleted, VM shutdown skipped")
+	}
+}
+
 // Delete the initial process and container.
 // This cleans up resources in the following order:
 // 1. Deletes the task inside the VM.
@@ -590,88 +704,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		return resp, err
 	}
 	if err == nil {
-		// Collect cleanup functions and references while holding lock
-		var (
-			ioShutdowns      []func(context.Context) error
-			needShutdown     bool
-			vmInst           vm.Instance
-			cpuController    *cpuhotplug.Controller
-			needNetworkClean bool
-		)
-
-		s.mu.Lock()
-		if c, ok := s.containers[r.ID]; ok {
-			if r.ExecID != "" {
-				// Exec process cleanup
-				if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
-					ioShutdowns = append(ioShutdowns, ioShutdown)
-					delete(c.execShutdowns, r.ExecID)
-				}
-			} else {
-				// Main container cleanup
-				if c.ioShutdown != nil {
-					ioShutdowns = append(ioShutdowns, c.ioShutdown)
-				}
-				for _, ioShutdown := range c.execShutdowns {
-					ioShutdowns = append(ioShutdowns, ioShutdown)
-				}
-
-				needNetworkClean = true
-				cpuController = s.cpuHotplugController
-				s.cpuHotplugController = nil
-				delete(s.containers, r.ID)
-			}
-		}
-
-		// One VM per container; if the initial process is deleted, stop the VM.
-		if r.ExecID == "" && s.vm != nil {
-			needShutdown = true
-			vmInst = s.vm
-		}
-		s.mu.Unlock()
-
-		// Execute cleanup operations WITHOUT holding the mutex
-		for i, ioShutdown := range ioShutdowns {
-			if err := ioShutdown(ctx); err != nil {
-				if i == 0 && r.ExecID == "" {
-					log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
-				} else {
-					log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
-				}
-			}
-		}
-
-		// Release network resources
-		if needNetworkClean {
-			env := &network.Environment{ID: r.ID}
-			if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
-				log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
-			}
-		}
-
-		// Stop CPU hotplug controller
-		if cpuController != nil {
-			cpuController.Stop()
-			log.G(ctx).Info("cpu-hotplug: controller stopped")
-		}
-
-		log.G(ctx).WithFields(log.Fields{
-			"id":           r.ID,
-			"exec":         r.ExecID,
-			"needShutdown": needShutdown,
-		}).Info("delete: shutdown decision")
-
-		// Shutdown VM if needed
-		if needShutdown {
-			log.G(ctx).Info("container deleted, shutting down VM")
-			// Mark as intentional shutdown so event stream close doesn't trigger panic
-			s.intentionalShutdown.Store(true)
-			if err := vmInst.Shutdown(ctx); err != nil {
-				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
-			}
-		} else {
-			log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("container deleted, VM shutdown skipped")
-		}
+		plan := s.collectDeleteCleanup(r)
+		s.runDeleteCleanup(ctx, r, plan)
 	}
 	return resp, err
 }

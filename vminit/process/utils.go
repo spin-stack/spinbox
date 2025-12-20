@@ -5,6 +5,7 @@ package process
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,7 +66,7 @@ func getLastRuntimeError(r *runc.Runc) (string, error) {
 
 	dec := json.NewDecoder(f)
 	for err = nil; err == nil; {
-		if err = dec.Decode(&log); err != nil && err != io.EOF {
+		if err = dec.Decode(&log); err != nil && !errors.Is(err, io.EOF) {
 			return "", err
 		}
 		if log.Level == "error" {
@@ -95,8 +96,8 @@ func copyFile(to, from string) error {
 	}
 	defer tt.Close()
 
-	p := iobuf.Pool.Get().(*[]byte)
-	defer iobuf.Pool.Put(p)
+	p := iobuf.Get()
+	defer iobuf.Put(p)
 	_, err = io.CopyBuffer(tt, ff, *p)
 	return err
 }
@@ -108,7 +109,7 @@ func checkKillError(err error) error {
 	if strings.Contains(err.Error(), "os: process already finished") ||
 		strings.Contains(err.Error(), "container not running") ||
 		strings.Contains(strings.ToLower(err.Error()), "no such process") ||
-		err == unix.ESRCH {
+		errors.Is(err, unix.ESRCH) {
 		return fmt.Errorf("process already finished: %w", errdefs.ErrNotFound)
 	} else if strings.Contains(err.Error(), "does not exist") {
 		return fmt.Errorf("no such container: %w", errdefs.ErrNotFound)
@@ -209,7 +210,7 @@ func getStreams(stdio stdio.Stdio, sm stream.Manager) ([3]io.ReadWriteCloser, er
 
 func getStream(uri string, sm stream.Manager) (io.ReadWriteCloser, error) {
 	if !strings.HasPrefix(uri, "stream://") {
-		return nil, fmt.Errorf("not a stream: %s", errdefs.ErrInvalidArgument)
+		return nil, fmt.Errorf("not a stream: %w", errdefs.ErrInvalidArgument)
 	}
 	sid, err := strconv.ParseUint(uri[9:], 10, 32)
 	if err != nil {

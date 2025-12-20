@@ -28,6 +28,52 @@ type streamCreator interface {
 	StartStream(ctx context.Context) (uint32, net.Conn, error)
 }
 
+type forwardIOSetup struct {
+	pio         stdio.Stdio
+	streams     [3]io.ReadWriteCloser
+	passthrough bool
+}
+
+func setupForwardIO(ctx context.Context, ss streamCreator, pio stdio.Stdio) (forwardIOSetup, error) {
+	u, err := url.Parse(pio.Stdout)
+	if err != nil {
+		return forwardIOSetup{}, fmt.Errorf("unable to parse stdout uri: %w", err)
+	}
+	if u.Scheme == "" {
+		u.Scheme = defaultScheme
+	}
+
+	switch u.Scheme {
+	case "stream":
+		// Pass through
+		return forwardIOSetup{pio: pio, passthrough: true}, nil
+	case "fifo", "binary", "pipe":
+		// Handled below via createStreams
+	case "file":
+		filePath := u.Path
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			return forwardIOSetup{}, err
+		}
+		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return forwardIOSetup{}, err
+		}
+		if err := f.Close(); err != nil {
+			return forwardIOSetup{}, err
+		}
+		pio.Stdout = filePath
+		pio.Stderr = filePath
+	default:
+		return forwardIOSetup{}, fmt.Errorf("unsupported STDIO scheme %s: %w", u.Scheme, errdefs.ErrNotImplemented)
+	}
+
+	pio, streams, err := createStreams(ctx, ss, pio)
+	if err != nil {
+		return forwardIOSetup{}, err
+	}
+	return forwardIOSetup{pio: pio, streams: streams}, nil
+}
+
 func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, error) {
 	// When using a terminal, stderr is not used (it's merged into stdout/pty)
 	if sio.Terminal {
@@ -38,63 +84,15 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 		return pio, nil, nil
 	}
 
-	u, err := url.Parse(pio.Stdout)
-	if err != nil {
-		return stdio.Stdio{}, nil, fmt.Errorf("unable to parse stdout uri: %w", err)
-	}
-	if u.Scheme == "" {
-		u.Scheme = defaultScheme
-	}
-	var streams [3]io.ReadWriteCloser
-	switch u.Scheme {
-	case "stream":
-		// Pass through
-		return pio, nil, nil
-	case "fifo":
-		pio, streams, err = createStreams(ctx, ss, pio)
-		if err != nil {
-			return stdio.Stdio{}, nil, err
-		}
-	case "file":
-		filePath := u.Path
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			return stdio.Stdio{}, nil, err
-		}
-		var f *os.File
-		f, err = os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return stdio.Stdio{}, nil, err
-		}
-		if err := f.Close(); err != nil {
-			return stdio.Stdio{}, nil, err
-		}
-		pio.Stdout = filePath
-		pio.Stderr = filePath
-		pio, streams, err = createStreams(ctx, ss, pio)
-		if err != nil {
-			return stdio.Stdio{}, nil, err
-		}
-	case "binary":
-		// Binary scheme spawns a custom logging binary process
-		// The binary receives stdout/stderr via file descriptors
-		// URI format: binary:///path/to/binary?arg=value
-		pio, streams, err = createStreams(ctx, ss, pio)
-		if err != nil {
-			return stdio.Stdio{}, nil, err
-		}
-	case "pipe":
-		// Pipe scheme uses OS pipes directly for I/O
-		// This is similar to fifo but uses anonymous pipes instead of named pipes
-		pio, streams, err = createStreams(ctx, ss, pio)
-		if err != nil {
-			return stdio.Stdio{}, nil, err
-		}
-	default:
-		return stdio.Stdio{}, nil, fmt.Errorf("unsupported STDIO scheme %s: %w", u.Scheme, errdefs.ErrNotImplemented)
-	}
+	setup, err := setupForwardIO(ctx, ss, pio)
 	if err != nil {
 		return stdio.Stdio{}, nil, err
 	}
+	if setup.passthrough {
+		return setup.pio, nil, nil
+	}
+	pio = setup.pio
+	streams := setup.streams
 
 	defer func() {
 		if err != nil {
@@ -169,112 +167,117 @@ func createStreams(ctx context.Context, ss streamCreator, io stdio.Stdio) (_ std
 	return io, conns, nil
 }
 
+type outputTarget struct {
+	name   string
+	stream io.ReadWriteCloser
+	label  string
+}
+
 func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdout, stderr string, done chan struct{}) error {
 	var cwg sync.WaitGroup
 	var copying atomic.Int32
 	copying.Store(2)
 	var sameFile *countingWriteCloser
-	for _, i := range []struct {
-		name string
-		dest func(wc io.WriteCloser, rc io.Closer)
-	}{
-		{
-			name: stdout,
-			dest: func(wc io.WriteCloser, rc io.Closer) {
-				cwg.Add(1)
-				go func() {
-					cwg.Done()
-					p := iobuf.Pool.Get().(*[]byte)
-					defer iobuf.Pool.Put(p)
-					if _, err := io.CopyBuffer(wc, streams[1], *p); err != nil {
-						log.G(ctx).WithError(err).WithField("stream", streams[1]).Warn("error copying stdout")
-					}
-					if copying.Add(-1) == 0 {
-						close(done)
-					}
-					wc.Close()
-					if rc != nil {
-						rc.Close()
-					}
-				}()
-			},
-		}, {
-			name: stderr,
-			dest: func(wc io.WriteCloser, rc io.Closer) {
-				cwg.Add(1)
-				go func() {
-					cwg.Done()
-					p := iobuf.Pool.Get().(*[]byte)
-					defer iobuf.Pool.Put(p)
-					if _, err := io.CopyBuffer(wc, streams[2], *p); err != nil {
-						log.G(ctx).WithError(err).Warn("error copying stderr")
-					}
-					if copying.Add(-1) == 0 {
-						close(done)
-					}
-					wc.Close()
-					if rc != nil {
-						rc.Close()
-					}
-				}()
-			},
-		},
-	} {
-		if i.name == "" {
+
+	outputs := []outputTarget{
+		{name: stdout, stream: streams[1], label: "stdout"},
+		{name: stderr, stream: streams[2], label: "stderr"},
+	}
+
+	for _, target := range outputs {
+		if target.name == "" {
 			if copying.Add(-1) == 0 {
 				close(done)
 			}
 			continue
 		}
-		ok, err := fifo.IsFifo(i.name)
+		fw, fr, err := openOutputDestination(ctx, target.name, stdout, stderr, &sameFile)
 		if err != nil {
 			return err
 		}
-		var (
-			fw io.WriteCloser
-			fr io.Closer
-		)
-		if ok {
-			if fw, err = fifo.OpenFifo(ctx, i.name, syscall.O_WRONLY, 0); err != nil {
-				return fmt.Errorf("containerd-shim: opening w/o fifo %q failed: %w", i.name, err)
-			}
-			if fr, err = fifo.OpenFifo(ctx, i.name, syscall.O_RDONLY, 0); err != nil {
-				return fmt.Errorf("containerd-shim: opening r/o fifo %q failed: %w", i.name, err)
-			}
-		} else {
-			if sameFile != nil {
-				sameFile.bumpCount(1)
-				i.dest(sameFile, nil)
-				continue
-			}
-			if fw, err = os.OpenFile(i.name, syscall.O_WRONLY|syscall.O_APPEND, 0); err != nil {
-				return fmt.Errorf("containerd-shim: opening file %q failed: %w", i.name, err)
-			}
-			if stdout == stderr {
-				sameFile = newCountingWriteCloser(fw, 1)
-			}
-		}
-		i.dest(fw, fr)
+		startOutputCopy(ctx, &cwg, &copying, done, target, fw, fr)
 	}
-	if stdin != "" {
-		// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
-		// not tied to any specific operation context.
-		f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:contextcheck // I/O FIFO needs independent lifetime
-		if err != nil {
-			return fmt.Errorf("containerd-shim: opening %s failed: %s", stdin, err)
-		}
-		cwg.Add(1)
-		go func() {
-			cwg.Done()
-			p := iobuf.Pool.Get().(*[]byte)
-			defer iobuf.Pool.Put(p)
 
-			io.CopyBuffer(streams[0], f, *p)
-			streams[0].Close()
-			f.Close()
-		}()
+	if err := startStdinCopy(ctx, &cwg, streams[0], stdin); err != nil {
+		return err
 	}
+
 	cwg.Wait()
+	return nil
+}
+
+func openOutputDestination(ctx context.Context, name, stdout, stderr string, sameFile **countingWriteCloser) (io.WriteCloser, io.Closer, error) {
+	ok, err := fifo.IsFifo(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ok {
+		fw, err := fifo.OpenFifo(ctx, name, syscall.O_WRONLY, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("containerd-shim: opening w/o fifo %q failed: %w", name, err)
+		}
+		fr, err := fifo.OpenFifo(ctx, name, syscall.O_RDONLY, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("containerd-shim: opening r/o fifo %q failed: %w", name, err)
+		}
+		return fw, fr, nil
+	}
+
+	if *sameFile != nil {
+		(*sameFile).bumpCount(1)
+		return *sameFile, nil, nil
+	}
+
+	fw, err := os.OpenFile(name, syscall.O_WRONLY|syscall.O_APPEND, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("containerd-shim: opening file %q failed: %w", name, err)
+	}
+	if stdout == stderr {
+		*sameFile = newCountingWriteCloser(fw, 1)
+		return *sameFile, nil, nil
+	}
+	return fw, nil, nil
+}
+
+func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.Int32, done chan struct{}, target outputTarget, wc io.WriteCloser, rc io.Closer) {
+	cwg.Add(1)
+	go func() {
+		cwg.Done()
+		p := iobuf.Get()
+		defer iobuf.Put(p)
+		if _, err := io.CopyBuffer(wc, target.stream, *p); err != nil {
+			log.G(ctx).WithError(err).WithField("stream", target.stream).Warn("error copying " + target.label)
+		}
+		if copying.Add(-1) == 0 {
+			close(done)
+		}
+		wc.Close()
+		if rc != nil {
+			rc.Close()
+		}
+	}()
+}
+
+func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWriteCloser, stdin string) error {
+	if stdin == "" {
+		return nil
+	}
+	// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
+	// not tied to any specific operation context.
+	f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:contextcheck // I/O FIFO needs independent lifetime
+	if err != nil {
+		return fmt.Errorf("containerd-shim: opening %s failed: %s", stdin, err)
+	}
+	cwg.Add(1)
+	go func() {
+		cwg.Done()
+		p := iobuf.Get()
+		defer iobuf.Put(p)
+
+		io.CopyBuffer(stream, f, *p)
+		stream.Close()
+		f.Close()
+	}()
 	return nil
 }
 
