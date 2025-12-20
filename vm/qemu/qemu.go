@@ -60,6 +60,7 @@ type Instance struct {
 
 	// Runtime state
 	cmd       *exec.Cmd
+	waitCh    chan error
 	qmpClient *QMPClient
 	client    *ttrpc.Client
 	vsockConn net.Conn

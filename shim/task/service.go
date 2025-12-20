@@ -550,6 +550,10 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
 	if err == nil {
+		var (
+			needShutdown bool
+			vmInst       vm.Instance
+		)
 		s.mu.Lock()
 		if c, ok := s.containers[r.ID]; ok {
 			if r.ExecID != "" {
@@ -584,14 +588,19 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 			}
 		}
 
-		// If there are no remaining containers, shut down the VM so QEMU exits.
-		if len(s.containers) == 0 && s.vm != nil {
-			log.G(ctx).Info("no containers remaining, shutting down VM")
-			if err := s.vm.Shutdown(ctx); err != nil {
-				log.G(ctx).WithError(err).Warn("failed to shutdown VM after last container deleted")
-			}
+		// One VM per container; if the initial process is deleted, stop the VM.
+		if r.ExecID == "" && s.vm != nil {
+			needShutdown = true
+			vmInst = s.vm
 		}
 		s.mu.Unlock()
+
+		if needShutdown {
+			log.G(ctx).Info("container deleted, shutting down VM")
+			if err := vmInst.Shutdown(ctx); err != nil {
+				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
+			}
+		}
 	}
 	return resp, err
 }

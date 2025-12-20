@@ -20,8 +20,8 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
-	"github.com/vishvananda/netlink"
 	"github.com/mdlayher/vsock"
+	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 
 	"github.com/aledbf/beacon/containerd/vm"
@@ -266,6 +266,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	q.cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
+	q.waitCh = make(chan error, 1)
 
 	// Pass TAP file descriptors to QEMU via ExtraFiles
 	// These will be available to QEMU as FD 3, 4, 5, ... (0,1,2 are stdin/stdout/stderr)
@@ -294,6 +295,11 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// When QEMU exits (poweroff, reboot, crash), trigger cleanup
 	go func() {
 		exitErr := q.cmd.Wait()
+		select {
+		case q.waitCh <- exitErr:
+		default:
+		}
+		close(q.waitCh)
 
 		// Cancel background monitors
 		q.mu.Lock()
@@ -429,7 +435,6 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		"console=ttyS0",
 		"quiet",                          // Reduce boot messages for faster boot
 		"loglevel=3",                     // Minimal kernel logging (errors only)
-		"reboot=k",                       // Use keyboard controller for reboot (ACPI compatible)
 		"panic=1",                        // Reboot 1 second after kernel panic
 		"net.ifnames=0", "biosdevname=0", // Predictable network naming
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
@@ -462,7 +467,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		// BIOS/firmware path needed for PVH boot loader (pvh.bin)
 		"-L", "/usr/share/qemu",
 
-		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off", // Optimize: use kernel IRQ chip, disable HPET
+		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off,acpi=on", // Optimize: use kernel IRQ chip, disable HPET
 		"-cpu", "host,migratable=on",
 
 		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
@@ -476,17 +481,10 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	}
 
 	args = append(args,
-		// Kernel boot - direct kernel boot using PVH loader
 		"-kernel", q.kernelPath,
 		"-initrd", q.initrdPath,
 		"-append", cmdlineArgs,
-
-		// Optimization: disable unnecessary devices
-		"-nodefaults",
-		"-no-user-config",
 		"-nographic",
-		"-no-reboot", // Exit QEMU when guest reboots (instead of restarting VM)
-
 		// Serial console - redirect to log file
 		"-serial", fmt.Sprintf("file:%s", q.consolePath),
 
@@ -565,11 +563,14 @@ func (q *Instance) QMPClient() *QMPClient {
 
 // Shutdown gracefully shuts down the VM
 func (q *Instance) Shutdown(ctx context.Context) error {
+	log.G(ctx).Info("qemu: Shutdown() called, initiating VM shutdown")
+
 	// Update state
 	q.vmState.Store(uint32(vmStateShutdown))
 
 	q.mu.Lock()
 	if q.runCancel != nil {
+		log.G(ctx).Debug("qemu: cancelling background monitors")
 		q.runCancel()
 	}
 	q.mu.Unlock()
@@ -597,10 +598,14 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 
 	// Shutdown VM via QMP
 	if q.qmpClient != nil {
+		log.G(ctx).Info("qemu: sending ACPI powerdown via QMP")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := q.qmpClient.Shutdown(shutdownCtx); err != nil {
+			log.G(ctx).WithError(err).Warn("qemu: QMP shutdown command failed")
 			errs = append(errs, fmt.Errorf("shutdown VM: %w", err))
+		} else {
+			log.G(ctx).Info("qemu: QMP shutdown command sent successfully")
 		}
 		q.qmpClient.Close()
 		q.qmpClient = nil
@@ -608,29 +613,47 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 
 	// Wait for QEMU process to exit gracefully after ACPI powerdown
 	if q.cmd != nil && q.cmd.Process != nil {
-		// Create a channel to signal when process exits
-		done := make(chan error, 1)
-		go func() {
-			done <- q.cmd.Wait()
-		}()
+		log.G(ctx).WithField("pid", q.cmd.Process.Pid).Info("qemu: waiting for QEMU process to exit (3 second timeout)")
+		waitCh := q.waitCh
+		if waitCh == nil {
+			log.G(ctx).Warn("qemu: wait channel missing; forcing process kill")
+			if err := q.cmd.Process.Kill(); err != nil {
+				log.G(ctx).WithError(err).Error("qemu: failed to kill process")
+				errs = append(errs, fmt.Errorf("kill process: %w", err))
+			} else {
+				log.G(ctx).Info("qemu: sent SIGKILL to process")
+			}
+			q.cmd = nil
+			goto cleanupTAPs
+		}
 
 		// Wait up to 3 seconds for graceful shutdown
 		select {
-		case <-done:
+		case exitErr := <-waitCh:
 			// Process exited cleanly
+			if exitErr != nil {
+				log.G(ctx).WithError(exitErr).Info("qemu: process exited with error")
+			} else {
+				log.G(ctx).Info("qemu: process exited cleanly after shutdown command")
+			}
 			q.cmd = nil
 		case <-time.After(3 * time.Second):
 			// Timeout - force kill
+			log.G(ctx).Warn("qemu: process did not exit after 3 seconds, sending SIGKILL")
 			if err := q.cmd.Process.Kill(); err != nil {
+				log.G(ctx).WithError(err).Error("qemu: failed to kill process")
 				errs = append(errs, fmt.Errorf("kill process: %w", err))
+			} else {
+				log.G(ctx).Info("qemu: sent SIGKILL to process")
 			}
-			<-done // Wait for Wait() to finish
+			<-waitCh // Wait for Wait() to finish
 			q.cmd = nil
 		}
 	}
 
 	// Close TAP file descriptors
 	// No need to move TAPs back - they never left their sandbox namespaces!
+cleanupTAPs:
 	for _, nic := range q.nets {
 		if nic.TapFile != nil {
 			nic.TapFile.Close()
@@ -755,7 +778,8 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 // QEMU to exit via a quit command.
 func (q *Instance) monitorVMStatus(ctx context.Context) {
 	log.G(ctx).Debug("qemu: starting VM status monitor")
-	t := time.NewTicker(1 * time.Second)
+	// Poll more frequently (500ms instead of 1s) for faster shutdown detection
+	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 
 	for {
@@ -785,8 +809,18 @@ func (q *Instance) monitorVMStatus(ctx context.Context) {
 			continue
 		}
 
-		if status.Status == "shutdown" || status.Status == "paused" {
-			log.G(ctx).WithField("status", status.Status).Info("qemu: VM no longer running, sending quit command")
+		log.G(ctx).WithFields(log.Fields{
+			"status":  status.Status,
+			"running": status.Running,
+		}).Debug("qemu: VM status check")
+
+		// Check both status string and running flag
+		// When guest powers off, status may be "shutdown", "finish-migrate", or running=false
+		if status.Status == "shutdown" || status.Status == "paused" || status.Status == "inmigrate" || !status.Running {
+			log.G(ctx).WithFields(log.Fields{
+				"status":  status.Status,
+				"running": status.Running,
+			}).Info("qemu: VM no longer running, sending quit command")
 			if err := qmp.execute(context.Background(), "quit", nil); err != nil {
 				log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after status change")
 			}
@@ -799,7 +833,8 @@ func (q *Instance) monitorVMStatus(ctx context.Context) {
 // If the server disappears (e.g., guest reboot/poweroff), we force the VMM to exit.
 func (q *Instance) monitorGuestRPC(ctx context.Context) {
 	log.G(ctx).Debug("qemu: starting guest RPC monitor")
-	t := time.NewTicker(1 * time.Second)
+	// Check more frequently (500ms) for faster shutdown detection
+	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 
 	failures := 0
@@ -821,16 +856,19 @@ func (q *Instance) monitorGuestRPC(ctx context.Context) {
 			conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
 			if err := pingTTRPC(conn); err != nil {
 				failures++
+				log.G(ctx).WithError(err).WithField("failures", failures).Debug("qemu: guest RPC ping failed")
 			} else {
 				failures = 0
 			}
 			conn.Close()
 		} else {
 			failures++
+			log.G(ctx).WithError(err).WithField("failures", failures).Debug("qemu: guest RPC dial failed")
 		}
 
-		if failures >= 3 {
-			log.G(ctx).WithError(err).Warn("qemu: guest RPC unreachable, forcing VM exit")
+		// Reduce threshold from 3 to 2 for faster detection (2 failures = 1 second max)
+		if failures >= 2 {
+			log.G(ctx).WithError(err).WithField("failures", failures).Warn("qemu: guest RPC unreachable, forcing VM exit")
 			q.forceQuit(ctx)
 			return
 		}
@@ -917,9 +955,9 @@ func openTAPInNetNS(ctx context.Context, tapName, netnsPath string) (*os.File, e
 	// We need to use the TUNSETIFF ioctl with IFF_TAP | IFF_NO_PI flags
 	// and set the device name
 	const (
-		TUNSETIFF   = 0x400454ca
-		IFF_TAP     = 0x0002
-		IFF_NO_PI   = 0x1000
+		TUNSETIFF    = 0x400454ca
+		IFF_TAP      = 0x0002
+		IFF_NO_PI    = 0x1000
 		IFF_VNET_HDR = 0x4000
 	)
 
@@ -972,19 +1010,19 @@ func waitForSocket(ctx context.Context, socketPath string, timeout time.Duration
 
 // formatInitArgs formats init arguments as a kernel command line string
 func formatInitArgs(args []string) string {
-	result := ""
+	var result strings.Builder
 	for i, arg := range args {
 		if i > 0 {
-			result += " "
+			result.WriteString(" ")
 		}
 		// Quote arguments that contain spaces
 		if len(arg) > 0 && (arg[0] == '-' || !needsQuoting(arg)) {
-			result += arg
+			result.WriteString(arg)
 		} else {
-			result += fmt.Sprintf("\"%s\"", arg)
+			fmt.Fprintf(&result, "\"%s\"", arg)
 		}
 	}
-	return result
+	return result.String()
 }
 
 func needsQuoting(s string) bool {

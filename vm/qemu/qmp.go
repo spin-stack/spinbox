@@ -74,6 +74,8 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 		encoder: json.NewEncoder(conn),
 		pending: make(map[uint64]chan *qmpResponse),
 	}
+	// QMP can emit large JSON objects; ensure we don't drop events due to scanner limits.
+	qmp.scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	// Read QMP greeting
 	if !qmp.scanner.Scan() {
@@ -181,7 +183,7 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 			log.G(ctx).WithFields(log.Fields{
 				"event": resp.Event,
 				"data":  resp.Data,
-			}).Debug("qemu: QMP event")
+			}).Info("qemu: QMP event received")
 
 			// Handle guest-initiated shutdown/reboot
 			// With -no-reboot, QEMU pauses on RESET instead of rebooting
@@ -190,23 +192,35 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 			case "SHUTDOWN":
 				// Guest called poweroff - explicitly tell QEMU to exit so the host
 				// process and shim are cleaned up even if QEMU wouldn't exit itself.
-				log.G(ctx).Info("qemu: guest initiated shutdown, sending quit command")
-				if err := q.execute(context.Background(), "quit", nil); err != nil {
-					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command")
-				}
+				log.G(ctx).WithField("data", resp.Data).Info("qemu: guest initiated SHUTDOWN event, sending quit command")
+				go func() {
+					if err := q.execute(context.Background(), "quit", nil); err != nil {
+						log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after SHUTDOWN")
+					} else {
+						log.G(ctx).Info("qemu: quit command sent successfully after SHUTDOWN")
+					}
+				}()
 			case "POWERDOWN":
 				// Some QEMU builds emit POWERDOWN instead of SHUTDOWN for ACPI poweroff.
-				log.G(ctx).Info("qemu: guest powerdown event, sending quit command")
-				if err := q.execute(context.Background(), "quit", nil); err != nil {
-					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command")
-				}
+				log.G(ctx).WithField("data", resp.Data).Info("qemu: guest POWERDOWN event, sending quit command")
+				go func() {
+					if err := q.execute(context.Background(), "quit", nil); err != nil {
+						log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after POWERDOWN")
+					} else {
+						log.G(ctx).Info("qemu: quit command sent successfully after POWERDOWN")
+					}
+				}()
 			case "RESET":
 				// Guest called reboot - with -no-reboot QEMU paused
 				// Send quit command to exit cleanly
-				log.G(ctx).Info("qemu: guest initiated reset, sending quit command")
-				if err := q.execute(context.Background(), "quit", nil); err != nil {
-					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command")
-				}
+				log.G(ctx).WithField("data", resp.Data).Info("qemu: guest initiated RESET event, sending quit command")
+				go func() {
+					if err := q.execute(context.Background(), "quit", nil); err != nil {
+						log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after RESET")
+					} else {
+						log.G(ctx).Info("qemu: quit command sent successfully after RESET")
+					}
+				}()
 			}
 			continue
 		}
