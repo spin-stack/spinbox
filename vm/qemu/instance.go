@@ -83,18 +83,19 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 	}
 
 	inst := &Instance{
-		binaryPath:    binaryPath,
-		stateDir:      stateDir,
-		logDir:        logDir,
-		kernelPath:    kernelPath,
-		initrdPath:    initrdPath,
-		qmpSocketPath: qmpSocketPath,
-		vsockPath:     vsockPath,
-		consolePath:   filepath.Join(logDir, "console.log"),
-		qemuLogPath:   filepath.Join(logDir, "qemu.log"),
-		disks:         []*DiskConfig{},
-		nets:          []*NetConfig{},
-		resourceCfg:   resourceCfg,
+		binaryPath:      binaryPath,
+		stateDir:        stateDir,
+		logDir:          logDir,
+		kernelPath:      kernelPath,
+		initrdPath:      initrdPath,
+		qmpSocketPath:   qmpSocketPath,
+		vsockPath:       vsockPath,
+		consolePath:     filepath.Join(logDir, "console.log"),
+		consoleFifoPath: filepath.Join(stateDir, "console.fifo"),
+		qemuLogPath:     filepath.Join(logDir, "qemu.log"),
+		disks:           []*DiskConfig{},
+		nets:            []*NetConfig{},
+		resourceCfg:     resourceCfg,
 	}
 
 	log.G(ctx).WithFields(log.Fields{
@@ -224,6 +225,67 @@ func (q *Instance) VMInfo() vm.VMInfo {
 	}
 }
 
+// setupConsoleFIFO creates a FIFO pipe for console output and starts streaming to log file
+// This provides real-time console monitoring without blocking QEMU
+func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
+	// Remove old FIFO if it exists (ignore errors)
+	_ = os.Remove(q.consoleFifoPath)
+
+	// Create FIFO pipe
+	if err := syscall.Mkfifo(q.consoleFifoPath, 0600); err != nil {
+		return fmt.Errorf("failed to create console FIFO: %w", err)
+	}
+
+	// Create console log file
+	consoleFile, err := os.Create(q.consolePath)
+	if err != nil {
+		_ = os.Remove(q.consoleFifoPath)
+		return fmt.Errorf("failed to create console log file: %w", err)
+	}
+	q.consoleFile = consoleFile
+
+	// Open FIFO in non-blocking mode to avoid blocking QEMU startup
+	// We'll read from this FIFO and write to the log file in a goroutine
+	go func() {
+		defer func() {
+			_ = consoleFile.Close()
+		}()
+
+		// Open FIFO for reading (this will block until QEMU opens it for writing)
+		fifo, err := os.OpenFile(q.consoleFifoPath, os.O_RDONLY, 0)
+		if err != nil {
+			log.G(ctx).WithError(err).Error("qemu: failed to open console FIFO for reading")
+			return
+		}
+		defer func() {
+			_ = fifo.Close()
+		}()
+
+		log.G(ctx).Debug("qemu: started console streaming from FIFO to log file")
+
+		// Stream console output from FIFO to log file
+		buf := make([]byte, 8192)
+		for {
+			n, err := fifo.Read(buf)
+			if n > 0 {
+				if _, writeErr := consoleFile.Write(buf[:n]); writeErr != nil {
+					log.G(ctx).WithError(writeErr).Error("qemu: failed to write console output")
+				}
+			}
+			if err != nil {
+				if err != io.EOF {
+					log.G(ctx).WithError(err).Debug("qemu: console FIFO read error")
+				}
+				break
+			}
+		}
+
+		log.G(ctx).Debug("qemu: console streaming stopped")
+	}()
+
+	return nil
+}
+
 // validateConfiguration validates the VM configuration before starting
 func (q *Instance) validateConfiguration(ctx context.Context) error {
 	// Validate kernel exists
@@ -280,15 +342,29 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 
+	// Setup console FIFO for real-time streaming
+	if err := q.setupConsoleFIFO(ctx); err != nil {
+		q.vmState.Store(uint32(vmStateNew))
+		return fmt.Errorf("failed to setup console FIFO: %w", err)
+	}
+
 	// Ensure we revert to New on failure
 	success := false
 	defer func() {
 		if !success {
 			q.vmState.Store(uint32(vmStateNew))
+			// Close console file and remove FIFO on failure
+			if q.consoleFile != nil {
+				_ = q.consoleFile.Close()
+				q.consoleFile = nil
+			}
+			if q.consoleFifoPath != "" {
+				_ = os.Remove(q.consoleFifoPath)
+			}
 			// Close any opened TAP FDs on failure
 			for _, nic := range q.nets {
 				if nic.TapFile != nil {
-					nic.TapFile.Close()
+					_ = nic.TapFile.Close()
 					nic.TapFile = nil
 				}
 			}
@@ -489,7 +565,8 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		cfg := startOpts.NetworkConfig
 		// IPv4 configuration using kernel ip= parameter format:
 		// ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>:<dns0-ip>:<dns1-ip>
-		ipParam := fmt.Sprintf("ip=%s::%s:%s::eth0:none",
+		var ipParamBuilder strings.Builder
+		fmt.Fprintf(&ipParamBuilder, "ip=%s::%s:%s::eth0:none",
 			cfg.IP,
 			cfg.Gateway,
 			cfg.Netmask)
@@ -497,11 +574,12 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		// Append DNS servers to ip= parameter (kernel supports up to 2 DNS servers)
 		for i, dns := range cfg.DNS {
 			if i < 2 {
-				ipParam += ":" + dns
+				ipParamBuilder.WriteString(":")
+				ipParamBuilder.WriteString(dns)
 			}
 		}
 
-		netConfigs = append(netConfigs, ipParam)
+		netConfigs = append(netConfigs, ipParamBuilder.String())
 	}
 
 	// Build kernel command line
@@ -559,8 +637,8 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		"-initrd", q.initrdPath,
 		"-append", cmdlineArgs,
 		"-nographic",
-		// Serial console - redirect to log file
-		"-serial", fmt.Sprintf("file:%s", q.consolePath),
+		// Serial console - redirect to FIFO pipe for real-time streaming
+		"-serial", fmt.Sprintf("file:%s", q.consoleFifoPath),
 
 		// Vsock for guest communication (using vhost-vsock kernel module)
 		"-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", vsockCID),
@@ -785,6 +863,23 @@ cleanup:
 			logger.WithError(err).Debug("qemu: error closing QMP client")
 		}
 		q.qmpClient = nil
+	}
+
+	// Close console file (this will also stop the FIFO streaming goroutine)
+	if q.consoleFile != nil {
+		logger.Debug("qemu: closing console log file")
+		if err := q.consoleFile.Close(); err != nil {
+			logger.WithError(err).Debug("qemu: error closing console file")
+		}
+		q.consoleFile = nil
+	}
+
+	// Remove FIFO pipe
+	if q.consoleFifoPath != "" {
+		logger.Debug("qemu: removing console FIFO")
+		if err := os.Remove(q.consoleFifoPath); err != nil && !os.IsNotExist(err) {
+			logger.WithError(err).Debug("qemu: error removing console FIFO")
+		}
 	}
 
 	// Close TAP file descriptors

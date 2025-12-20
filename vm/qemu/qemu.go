@@ -53,10 +53,12 @@ type Instance struct {
 	resourceCfg *vm.VMResourceConfig
 
 	// Runtime paths
-	qmpSocketPath string // QMP control socket
-	vsockPath     string // Vsock socket
-	consolePath   string // Console log
-	qemuLogPath   string // QEMU stderr log
+	qmpSocketPath   string   // QMP control socket
+	vsockPath       string   // Vsock socket
+	consolePath     string   // Console log file
+	consoleFifoPath string   // Console FIFO pipe
+	qemuLogPath     string   // QEMU stderr log
+	consoleFile     *os.File // Console log file handle
 
 	// Runtime state
 	cmd       *exec.Cmd

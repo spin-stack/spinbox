@@ -34,15 +34,15 @@ func translateMountOptions(ctx context.Context, options []string) []string {
 
 	// Options that should be dropped (not supported by virtiofs)
 	droppedOptions := map[string]bool{
-		"rbind":      true,
-		"bind":       true,
-		"rprivate":   true,
-		"private":    true,
-		"rshared":    true,
-		"shared":     true,
-		"rslave":     true,
-		"slave":      true,
-		"remount":    true,
+		"rbind":       true,
+		"bind":        true,
+		"rprivate":    true,
+		"private":     true,
+		"rshared":     true,
+		"shared":      true,
+		"rslave":      true,
+		"slave":       true,
+		"remount":     true,
 		"strictatime": true,
 	}
 

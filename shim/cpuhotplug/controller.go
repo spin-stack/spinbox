@@ -27,10 +27,10 @@ type Controller struct {
 	config Config
 
 	// Hysteresis tracking
-	lastScaleUp   time.Time
-	lastScaleDown time.Time
-	consecutiveHighUsage int  // Track sustained high usage
-	consecutiveLowUsage  int  // Track sustained low usage
+	lastScaleUp          time.Time
+	lastScaleDown        time.Time
+	consecutiveHighUsage int // Track sustained high usage
+	consecutiveLowUsage  int // Track sustained low usage
 
 	// State management
 	mu        sync.Mutex
@@ -67,8 +67,8 @@ func DefaultConfig() Config {
 		ScaleDownCooldown:  30 * time.Second,
 		ScaleUpThreshold:   80.0,
 		ScaleDownThreshold: 30.0,
-		ScaleUpStability:   2,  // Need 2 consecutive high readings (10s total)
-		ScaleDownStability: 6,  // Need 6 consecutive low readings (30s total)
+		ScaleUpStability:   2,     // Need 2 consecutive high readings (10s total)
+		ScaleDownStability: 6,     // Need 6 consecutive low readings (30s total)
 		EnableScaleDown:    false, // Disabled by default (many kernels don't support CPU unplug)
 	}
 }
@@ -97,10 +97,10 @@ func (c *Controller) Start(ctx context.Context) {
 	c.mu.Unlock()
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id":      c.containerID,
-		"boot_cpus":         c.bootCPUs,
-		"max_cpus":          c.maxCPUs,
-		"monitor_interval":  c.config.MonitorInterval,
+		"container_id":       c.containerID,
+		"boot_cpus":          c.bootCPUs,
+		"max_cpus":           c.maxCPUs,
+		"monitor_interval":   c.config.MonitorInterval,
 		"scale_up_threshold": c.config.ScaleUpThreshold,
 	}).Info("cpu-hotplug: controller started")
 
@@ -188,9 +188,9 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 
 		if c.consecutiveHighUsage < c.config.ScaleUpStability {
 			log.G(ctx).WithFields(log.Fields{
-				"container_id":   c.containerID,
-				"consecutive":    c.consecutiveHighUsage,
-				"required":       c.config.ScaleUpStability,
+				"container_id": c.containerID,
+				"consecutive":  c.consecutiveHighUsage,
+				"required":     c.config.ScaleUpStability,
 			}).Debug("cpu-hotplug: waiting for stable high usage")
 			return nil
 		}

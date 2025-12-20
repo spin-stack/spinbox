@@ -69,7 +69,7 @@ func NewBoltStore[T any](dbPath string, bucketName string) (Store[T], error) {
 		}
 
 		sdb = &sharedDB{
-			db:      db,
+			db:       db,
 			refCount: 0,
 		}
 		sharedDBs[dbPath] = sdb

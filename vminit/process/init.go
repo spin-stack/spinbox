@@ -23,8 +23,8 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/beacon/containerd/vminit/systools"
 	"github.com/aledbf/beacon/containerd/vminit/stream"
+	"github.com/aledbf/beacon/containerd/vminit/systools"
 )
 
 // Init represents an initial process for a container

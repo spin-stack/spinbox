@@ -109,11 +109,11 @@ type service struct {
 
 	containers map[string]*container
 
-	initiateShutdown   func()
-	eventsClosed       atomic.Bool
+	initiateShutdown    func()
+	eventsClosed        atomic.Bool
 	intentionalShutdown atomic.Bool // Set when we intentionally close VM (not a crash)
-	shutdownSvc        shutdown.Service
-	inflight           atomic.Int64
+	shutdownSvc         shutdown.Service
+	inflight            atomic.Int64
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -439,26 +439,26 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	go func(ns string) {
 		for {
 			ev, err := sc.Recv()
-				if err != nil {
-					// Check if this was an intentional shutdown (Delete/Shutdown called)
-					// vs unexpected VM crash
-					if s.intentionalShutdown.Load() {
-						log.G(ctx).Info("vm event stream closed (intentional shutdown)")
-						return
-					}
-
-					if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
-						log.G(ctx).Info("vm event stream closed unexpectedly, initiating shim shutdown")
-					} else {
-						log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
-					}
-					// VM died unexpectedly - trigger shim shutdown to clean up and exit
-					s.requestShutdownAndExit(ctx, "vm event stream closed")
+			if err != nil {
+				// Check if this was an intentional shutdown (Delete/Shutdown called)
+				// vs unexpected VM crash
+				if s.intentionalShutdown.Load() {
+					log.G(ctx).Info("vm event stream closed (intentional shutdown)")
 					return
 				}
-				s.send(ev)
+
+				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
+					log.G(ctx).Info("vm event stream closed unexpectedly, initiating shim shutdown")
+				} else {
+					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
+				}
+				// VM died unexpectedly - trigger shim shutdown to clean up and exit
+				s.requestShutdownAndExit(ctx, "vm event stream closed")
+				return
 			}
-		}(ns)
+			s.send(ev)
+		}
+	}(ns)
 
 	bundleFiles, err := b.Files()
 	if err != nil {

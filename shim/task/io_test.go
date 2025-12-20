@@ -27,14 +27,14 @@ type mockConn struct {
 	closed bool
 }
 
-func (m *mockConn) Read(b []byte) (n int, err error)      { return 0, nil }
-func (m *mockConn) Write(b []byte) (n int, err error)     { return len(b), nil }
-func (m *mockConn) Close() error                          { m.closed = true; return nil }
-func (m *mockConn) LocalAddr() net.Addr                   { return nil }
-func (m *mockConn) RemoteAddr() net.Addr                  { return nil }
-func (m *mockConn) SetDeadline(t time.Time) error         { return nil }
-func (m *mockConn) SetReadDeadline(t time.Time) error     { return nil }
-func (m *mockConn) SetWriteDeadline(t time.Time) error    { return nil }
+func (m *mockConn) Read(b []byte) (n int, err error)   { return 0, nil }
+func (m *mockConn) Write(b []byte) (n int, err error)  { return len(b), nil }
+func (m *mockConn) Close() error                       { m.closed = true; return nil }
+func (m *mockConn) LocalAddr() net.Addr                { return nil }
+func (m *mockConn) RemoteAddr() net.Addr               { return nil }
+func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 
 // TestParseStdioURI tests URI parsing for different I/O schemes
 func TestParseStdioURI(t *testing.T) {
