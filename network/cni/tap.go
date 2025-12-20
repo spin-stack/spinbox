@@ -52,15 +52,6 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 	}
 	log.L.WithError(err).Warn("generic TAP detection failed")
 
-	// Last resort: check the host namespace for any TAP devices
-	// This handles the case where tc-redirect-tap creates the TAP but doesn't report it
-	tapDevice, err = findHostTAPDevice()
-	if err == nil {
-		log.L.WithField("tap", tapDevice).Debug("Found TAP device in host namespace")
-		return tapDevice, nil
-	}
-	log.L.WithError(err).Warn("findHostTAPDevice failed")
-
 	return "", fmt.Errorf("no TAP device found in CNI result (checked %d interfaces)", len(result.Interfaces))
 }
 
@@ -145,50 +136,4 @@ func ValidateTAPDevice(name string) error {
 	}
 
 	return nil
-}
-
-// findHostTAPDevice scans the host network namespace for TAP devices.
-//
-// This is a fallback method for when tc-redirect-tap creates a TAP device
-// but doesn't properly report it in the CNI result. It looks for recently
-// created TAP devices in the host namespace.
-func findHostTAPDevice() (string, error) {
-	links, err := netlink.LinkList()
-	if err != nil {
-		return "", fmt.Errorf("failed to list links: %w", err)
-	}
-
-	var tapDevices []string
-	for _, link := range links {
-		// Check if it's a TAP device
-		tuntap, ok := link.(*netlink.Tuntap)
-		if !ok {
-			continue
-		}
-
-		// Only TAP devices (not TUN)
-		if tuntap.Mode != netlink.TUNTAP_MODE_TAP {
-			continue
-		}
-
-		name := link.Attrs().Name
-		// Skip if it starts with "beacon-" (that's our legacy mode TAP devices)
-		if strings.HasPrefix(name, "beacon-") {
-			continue
-		}
-
-		// Check if it starts with "tap" (most common for tc-redirect-tap)
-		if strings.HasPrefix(name, "tap") {
-			tapDevices = append(tapDevices, name)
-		}
-	}
-
-	if len(tapDevices) == 0 {
-		return "", fmt.Errorf("no TAP devices found in host namespace")
-	}
-
-	// If we found multiple, prefer the most recently created one
-	// For now, just return the first one (this should be improved)
-	// TODO: Track TAP device creation timestamps or use a better heuristic
-	return tapDevices[0], nil
 }
