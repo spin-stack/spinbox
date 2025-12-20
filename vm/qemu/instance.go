@@ -186,12 +186,60 @@ func (q *Instance) VMInfo() vm.VMInfo {
 	}
 }
 
+// validateConfiguration validates the VM configuration before starting
+func (q *Instance) validateConfiguration(ctx context.Context) error {
+	// Validate kernel exists
+	if _, err := os.Stat(q.kernelPath); err != nil {
+		return fmt.Errorf("kernel not found at %s: %w", q.kernelPath, err)
+	}
+
+	// Validate initrd exists
+	if _, err := os.Stat(q.initrdPath); err != nil {
+		return fmt.Errorf("initrd not found at %s: %w", q.initrdPath, err)
+	}
+
+	// Validate QEMU binary exists
+	if _, err := os.Stat(q.binaryPath); err != nil {
+		return fmt.Errorf("QEMU binary not found at %s: %w", q.binaryPath, err)
+	}
+
+	// Validate all disk paths exist
+	for _, disk := range q.disks {
+		if _, err := os.Stat(disk.Path); err != nil {
+			return fmt.Errorf("disk not found at %s: %w", disk.Path, err)
+		}
+	}
+
+	// Validate resource limits are sane
+	const minMemory = 128 * 1024 * 1024 // 128 MiB
+	if q.resourceCfg.MemorySize < minMemory {
+		return fmt.Errorf("memory too low: %d bytes (minimum %d bytes / 128 MiB)", q.resourceCfg.MemorySize, minMemory)
+	}
+
+	if q.resourceCfg.BootCPUs < 1 {
+		return fmt.Errorf("boot CPUs must be at least 1, got %d", q.resourceCfg.BootCPUs)
+	}
+
+	if q.resourceCfg.MaxCPUs < q.resourceCfg.BootCPUs {
+		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
+	}
+
+	log.G(ctx).Debug("qemu: configuration validation passed")
+	return nil
+}
+
 // Start starts the QEMU VM
 func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Check and update state atomically
 	if !q.vmState.CompareAndSwap(uint32(vmStateNew), uint32(vmStateStarting)) {
 		currentState := vmState(q.vmState.Load())
 		return fmt.Errorf("cannot start VM in state %d", currentState)
+	}
+
+	// Validate configuration before starting
+	if err := q.validateConfiguration(ctx); err != nil {
+		q.vmState.Store(uint32(vmStateNew))
+		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 
 	// Ensure we revert to New on failure
