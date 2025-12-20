@@ -585,13 +585,7 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 			logger.WithError(err).Warning("qemu: failed to send ACPI powerdown")
 		}
 		cancel()
-
-		// Close QMP connection (prevents further commands)
-		logger.Debug("qemu: closing QMP client")
-		if err := q.qmpClient.Close(); err != nil {
-			logger.WithError(err).Debug("qemu: error closing QMP client")
-		}
-		q.qmpClient = nil
+		// Keep QMP client open for now - may need to send quit command
 	}
 
 	// Wait for QEMU process to exit gracefully (5 seconds)
@@ -604,58 +598,95 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 
 		select {
 		case exitErr := <-q.waitCh:
-			// Process exited (may be nil or error)
+			// Process exited cleanly after ACPI powerdown
 			if exitErr != nil && exitErr.Error() != "signal: killed" {
 				logger.WithError(exitErr).Warning("qemu: process exited with error")
-				// Return error but continue cleanup
-				defer func() {
-					// Clean up TAPs before returning
-					for _, nic := range q.nets {
-						if nic.TapFile != nil {
-							if err := nic.TapFile.Close(); err != nil {
-								log.G(ctx).WithError(err).WithField("tap", nic.TapName).Debug("error closing TAP file descriptor")
-							}
-						}
-					}
-				}()
-				return exitErr
+			} else {
+				logger.Info("qemu: process exited gracefully")
 			}
-			logger.Info("qemu: process exited gracefully")
+			q.cmd = nil
 
 		case <-time.After(shutdownTimeout):
-			// Process didn't exit after ACPI powerdown - force kill
-			logger.Warning("qemu: process did not exit after timeout, sending SIGKILL")
+			// Guest powered off but QEMU didn't exit - send quit command
+			logger.Warning("qemu: process did not exit after ACPI powerdown, sending quit command")
 
+			// Try quit command first (cleaner than SIGKILL)
+			if q.qmpClient != nil {
+				quitCtx, quitCancel := context.WithTimeout(context.Background(), 1*time.Second)
+				if err := q.qmpClient.Quit(quitCtx); err != nil {
+					logger.WithError(err).Debug("qemu: failed to send quit command")
+				} else {
+					logger.Debug("qemu: quit command sent, waiting 1 second")
+					// Give it 1 second to quit cleanly
+					select {
+					case exitErr := <-q.waitCh:
+						if exitErr != nil && exitErr.Error() != "signal: killed" {
+							logger.WithError(exitErr).Debug("qemu: process exited after quit")
+						} else {
+							logger.Info("qemu: process exited after quit command")
+						}
+						quitCancel()
+						q.cmd = nil
+						goto cleanup
+					case <-time.After(1 * time.Second):
+						logger.Debug("qemu: quit command timeout, sending SIGKILL")
+					}
+				}
+				quitCancel()
+			}
+
+			// Still not dead - SIGKILL as last resort
+			logger.Warning("qemu: sending SIGKILL to process")
 			if err := q.cmd.Process.Kill(); err != nil {
 				logger.WithError(err).Error("qemu: failed to send SIGKILL")
-				// Clean up TAPs before returning error
+				q.cmd = nil
+				// Clean up QMP and TAPs before returning error
+				if q.qmpClient != nil {
+					_ = q.qmpClient.Close()
+					q.qmpClient = nil
+				}
 				for _, nic := range q.nets {
 					if nic.TapFile != nil {
-						_ = nic.TapFile.Close() // Best effort
+						_ = nic.TapFile.Close()
 					}
 				}
 				return fmt.Errorf("failed to kill QEMU process: %w", err)
 			}
 			logger.Info("qemu: sent SIGKILL to process")
 
-			// Wait for kill to complete (with timeout)
+			// Wait for SIGKILL to complete (with timeout)
 			select {
 			case exitErr := <-q.waitCh:
-				if exitErr != nil && exitErr.Error() != "signal: killed" {
+				if exitErr != nil {
 					logger.WithError(exitErr).Debug("qemu: process exited after SIGKILL")
 				}
 			case <-time.After(2 * time.Second):
 				logger.Error("qemu: process did not exit after SIGKILL")
-				// Clean up TAPs before returning error
+				q.cmd = nil
+				// Clean up QMP and TAPs before returning error
+				if q.qmpClient != nil {
+					_ = q.qmpClient.Close()
+					q.qmpClient = nil
+				}
 				for _, nic := range q.nets {
 					if nic.TapFile != nil {
-						_ = nic.TapFile.Close() // Best effort
+						_ = nic.TapFile.Close()
 					}
 				}
 				return fmt.Errorf("process did not exit after SIGKILL")
 			}
+			q.cmd = nil
 		}
-		q.cmd = nil
+	}
+
+cleanup:
+	// Close QMP client
+	if q.qmpClient != nil {
+		logger.Debug("qemu: closing QMP client")
+		if err := q.qmpClient.Close(); err != nil {
+			logger.WithError(err).Debug("qemu: error closing QMP client")
+		}
+		q.qmpClient = nil
 	}
 
 	// Close TAP file descriptors

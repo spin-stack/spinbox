@@ -233,6 +233,11 @@ func (q *QMPClient) Shutdown(ctx context.Context) error {
 	return q.execute(ctx, "system_powerdown", nil)
 }
 
+// Quit instructs QEMU to exit immediately
+func (q *QMPClient) Quit(ctx context.Context) error {
+	return q.execute(ctx, "quit", nil)
+}
+
 // QueryStatus returns the current VM status (running, paused, shutdown, etc).
 func (q *QMPClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
 	if q.closed.Load() {
