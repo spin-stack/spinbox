@@ -16,6 +16,8 @@ import (
 type Controller struct {
 	containerID string
 	qmpClient   *qemu.QMPClient
+	stats       StatsProvider
+	offlineCPU  CPUOffliner
 
 	// Resource limits
 	bootCPUs int // Minimum vCPUs (never go below this)
@@ -33,11 +35,22 @@ type Controller struct {
 	consecutiveHighUsage int // Track sustained high usage
 	consecutiveLowUsage  int // Track sustained low usage
 
+	// CPU usage sampling
+	lastSampleTime    time.Time
+	lastUsageUsec     uint64
+	lastThrottledUsec uint64
+
 	// State management
 	mu        sync.Mutex
 	stopCh    chan struct{}
 	stoppedCh chan struct{}
 }
+
+// StatsProvider returns cgroup CPU usage and throttling in microseconds.
+type StatsProvider func(ctx context.Context) (usageUsec, throttledUsec uint64, err error)
+
+// CPUOffliner offlines a CPU in the guest before unplug.
+type CPUOffliner func(ctx context.Context, cpuID int) error
 
 // Config holds configuration for the CPU hotplug controller
 type Config struct {
@@ -49,8 +62,9 @@ type Config struct {
 	ScaleDownCooldown time.Duration
 
 	// Thresholds (0-100 percentage)
-	ScaleUpThreshold   float64
-	ScaleDownThreshold float64
+	ScaleUpThreshold     float64
+	ScaleDownThreshold   float64
+	ScaleUpThrottleLimit float64
 
 	// Stability requirements (number of consecutive readings)
 	ScaleUpStability   int // Need N consecutive high readings before scaling up
@@ -63,22 +77,25 @@ type Config struct {
 // DefaultConfig returns sensible defaults for CPU hotplug
 func DefaultConfig() Config {
 	return Config{
-		MonitorInterval:    5 * time.Second,
-		ScaleUpCooldown:    10 * time.Second,
-		ScaleDownCooldown:  30 * time.Second,
-		ScaleUpThreshold:   80.0,
-		ScaleDownThreshold: 30.0,
-		ScaleUpStability:   2,     // Need 2 consecutive high readings (10s total)
-		ScaleDownStability: 6,     // Need 6 consecutive low readings (30s total)
-		EnableScaleDown:    false, // Disabled by default (many kernels don't support CPU unplug)
+		MonitorInterval:      5 * time.Second,
+		ScaleUpCooldown:      10 * time.Second,
+		ScaleDownCooldown:    30 * time.Second,
+		ScaleUpThreshold:     80.0,
+		ScaleDownThreshold:   30.0,
+		ScaleUpThrottleLimit: 5.0,  // Avoid scaling if throttling exceeds this %
+		ScaleUpStability:     2,    // Need 2 consecutive high readings (10s total)
+		ScaleDownStability:   6,    // Need 6 consecutive low readings (30s total)
+		EnableScaleDown:      true, // Disabled by default (many kernels don't support CPU unplug)
 	}
 }
 
 // NewController creates a new CPU hotplug controller
-func NewController(containerID string, qmpClient *qemu.QMPClient, bootCPUs, maxCPUs int, config Config) *Controller {
+func NewController(containerID string, qmpClient *qemu.QMPClient, stats StatsProvider, offliner CPUOffliner, bootCPUs, maxCPUs int, config Config) *Controller {
 	return &Controller{
 		containerID: containerID,
 		qmpClient:   qmpClient,
+		stats:       stats,
+		offlineCPU:  offliner,
 		bootCPUs:    bootCPUs,
 		maxCPUs:     maxCPUs,
 		currentCPUs: bootCPUs, // Start with boot CPUs
@@ -103,6 +120,7 @@ func (c *Controller) Start(ctx context.Context) {
 		"max_cpus":           c.maxCPUs,
 		"monitor_interval":   c.config.MonitorInterval,
 		"scale_up_threshold": c.config.ScaleUpThreshold,
+		"scale_up_throttle":  c.config.ScaleUpThrottleLimit,
 	}).Info("cpu-hotplug: controller started")
 
 	go c.monitorLoop(ctx)
@@ -234,24 +252,101 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 // calculateTargetCPUs determines ideal vCPU count
 // Strategy: Scale towards maxCPUs gradually to enable workload
 // Future enhancement: Read actual CPU usage from cgroup stats via TTRPC
-func (c *Controller) calculateTargetCPUs(_ context.Context) int {
-	// Current strategy (Phase 1): Gradual scale-up to maxCPUs
-	// This ensures containers can utilize all available CPUs
-	//
-	// Phase 2 enhancement would:
-	// 1. Call vminitd's Stats() RPC to get cgroup CPU stats
-	// 2. Calculate CPU usage percentage (usage_usec / quota)
-	// 3. Scale based on thresholds:
-	//    - If usage > 80%: add CPUs
-	//    - If usage < 30%: remove CPUs (if scale-down enabled)
-	//
-	// For now, conservatively scale up one CPU at a time
+func (c *Controller) calculateTargetCPUs(ctx context.Context) int {
+	usagePct, throttledPct, ok, err := c.sampleCPU(ctx)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("container_id", c.containerID).
+			Warn("cpu-hotplug: failed to sample CPU usage")
+		return c.currentCPUs
+	}
+	if !ok {
+		log.G(ctx).WithField("container_id", c.containerID).
+			Debug("cpu-hotplug: skipping scale decision (insufficient samples)")
+		return c.currentCPUs
+	}
 
-	if c.currentCPUs < c.maxCPUs {
+	log.G(ctx).WithFields(log.Fields{
+		"container_id":  c.containerID,
+		"usage_pct":     fmt.Sprintf("%.2f", usagePct),
+		"throttled_pct": fmt.Sprintf("%.2f", throttledPct),
+	}).Debug("cpu-hotplug: CPU usage sample")
+
+	if throttledPct >= c.config.ScaleUpThrottleLimit {
+		log.G(ctx).WithFields(log.Fields{
+			"container_id":  c.containerID,
+			"throttled_pct": fmt.Sprintf("%.2f", throttledPct),
+			"limit_pct":     c.config.ScaleUpThrottleLimit,
+		}).Debug("cpu-hotplug: throttled at CPU limit; not scaling")
+		return c.currentCPUs
+	}
+
+	if usagePct >= c.config.ScaleUpThreshold && c.currentCPUs < c.maxCPUs {
 		return c.currentCPUs + 1
 	}
 
+	if c.config.EnableScaleDown && usagePct <= c.config.ScaleDownThreshold && c.currentCPUs > c.bootCPUs {
+		return c.currentCPUs - 1
+	}
+
 	return c.currentCPUs
+}
+
+func (c *Controller) sampleCPU(ctx context.Context) (usagePct, throttledPct float64, ok bool, err error) {
+	if c.stats == nil {
+		return 0, 0, false, nil
+	}
+
+	usageUsec, throttledUsec, err := c.stats(ctx)
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	now := time.Now()
+	if c.lastSampleTime.IsZero() {
+		c.lastSampleTime = now
+		c.lastUsageUsec = usageUsec
+		c.lastThrottledUsec = throttledUsec
+		return 0, 0, false, nil
+	}
+
+	elapsed := now.Sub(c.lastSampleTime)
+	if elapsed <= 0 {
+		c.lastSampleTime = now
+		c.lastUsageUsec = usageUsec
+		c.lastThrottledUsec = throttledUsec
+		return 0, 0, false, nil
+	}
+
+	if usageUsec < c.lastUsageUsec || throttledUsec < c.lastThrottledUsec {
+		c.lastSampleTime = now
+		c.lastUsageUsec = usageUsec
+		c.lastThrottledUsec = throttledUsec
+		return 0, 0, false, nil
+	}
+
+	deltaUsage := usageUsec - c.lastUsageUsec
+	deltaThrottled := throttledUsec - c.lastThrottledUsec
+
+	c.lastSampleTime = now
+	c.lastUsageUsec = usageUsec
+	c.lastThrottledUsec = throttledUsec
+
+	elapsedUsec := float64(elapsed.Microseconds())
+	if elapsedUsec <= 0 || c.currentCPUs <= 0 {
+		return 0, 0, false, nil
+	}
+
+	usagePct = (float64(deltaUsage) / (elapsedUsec * float64(c.currentCPUs))) * 100.0
+	if usagePct < 0 {
+		usagePct = 0
+	}
+
+	throttledPct = (float64(deltaThrottled) / elapsedUsec) * 100.0
+	if throttledPct < 0 {
+		throttledPct = 0
+	}
+
+	return usagePct, throttledPct, true, nil
 }
 
 // canScaleUp checks if scale-up cooldown has elapsed
@@ -312,6 +407,16 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 	// Remove CPUs in reverse order (highest ID first)
 	// Never remove CPU0 (boot processor - not supported by most kernels)
 	for i := c.currentCPUs - 1; i >= targetCPUs && i > 0; i-- {
+		if c.offlineCPU != nil {
+			if err := c.offlineCPU(ctx, i); err != nil {
+				log.G(ctx).WithError(err).WithFields(log.Fields{
+					"container_id": c.containerID,
+					"cpu_id":       i,
+				}).Warn("cpu-hotplug: failed to offline vCPU in guest")
+				break
+			}
+		}
+
 		if err := c.qmpClient.UnplugCPU(ctx, i); err != nil {
 			log.G(ctx).WithError(err).WithFields(log.Fields{
 				"container_id": c.containerID,

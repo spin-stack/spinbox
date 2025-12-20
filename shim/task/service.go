@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	cgroup2stats "github.com/containerd/cgroups/v3/cgroup2/stats"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/v2/core/runtime"
@@ -32,10 +33,12 @@ import (
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	"github.com/containerd/typeurl/v2"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
 	bundleAPI "github.com/aledbf/beacon/containerd/api/services/bundle/v1"
+	systemAPI "github.com/aledbf/beacon/containerd/api/services/system/v1"
 	"github.com/aledbf/beacon/containerd/api/services/vmevents/v1"
 	"github.com/aledbf/beacon/containerd/network"
 	"github.com/aledbf/beacon/containerd/shim/bundle"
@@ -1161,9 +1164,48 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}
 
 	// Create and start the controller
+	statsProvider := func(ctx context.Context) (uint64, uint64, error) {
+		vmc, err := s.client()
+		if err != nil {
+			return 0, 0, err
+		}
+		tc := taskAPI.NewTTRPCTaskClient(vmc)
+		resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
+		if err != nil {
+			return 0, 0, err
+		}
+		if resp.GetStats() == nil {
+			return 0, 0, fmt.Errorf("missing stats payload")
+		}
+
+		var metrics cgroup2stats.Metrics
+		if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
+			return 0, 0, err
+		}
+
+		cpu := metrics.GetCPU()
+		if cpu == nil {
+			return 0, 0, fmt.Errorf("missing CPU stats")
+		}
+
+		return cpu.GetUsageUsec(), cpu.GetThrottledUsec(), nil
+	}
+
+	offlineCPU := func(ctx context.Context, cpuID int) error {
+		vmc, err := s.client()
+		if err != nil {
+			return err
+		}
+		client := systemAPI.NewTTRPCSystemClient(vmc)
+		_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuId: uint32(cpuID)})
+		return err
+	}
+
 	controller := cpuhotplug.NewController(
 		containerID,
 		qmpClient,
+		statsProvider,
+		offlineCPU,
 		resourceCfg.BootCPUs,
 		resourceCfg.MaxCPUs,
 		config,

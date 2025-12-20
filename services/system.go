@@ -3,9 +3,12 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/containerd/errdefs"
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/log"
 	"github.com/containerd/plugin"
@@ -57,6 +60,35 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 		Version:       "dev",
 		KernelVersion: string(v),
 	}, nil
+}
+
+func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPURequest) (*emptypb.Empty, error) {
+	cpuID := req.GetCpuId()
+	if cpuID == 0 {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument, "cpu 0 cannot be offlined")
+	}
+
+	path := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/online", cpuID)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cpu %d not present", cpuID)
+		}
+		return nil, errgrpc.ToGRPC(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errgrpc.ToGRPC(err)
+	}
+	if strings.TrimSpace(string(data)) == "0" {
+		return &emptypb.Empty{}, nil
+	}
+
+	if err := os.WriteFile(path, []byte("0"), 0644); err != nil {
+		return nil, errgrpc.ToGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 // writeRuntimeFeatures writes the runtime features to a well-known location
