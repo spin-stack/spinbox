@@ -255,7 +255,9 @@ func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdo
 		i.dest(fw, fr)
 	}
 	if stdin != "" {
-		f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+		// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
+		// not tied to any specific operation context.
+		f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:contextcheck // I/O FIFO needs independent lifetime
 		if err != nil {
 			return fmt.Errorf("containerd-shim: opening %s failed: %s", stdin, err)
 		}

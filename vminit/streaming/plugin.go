@@ -93,6 +93,7 @@ func (s *service) Shutdown(ctx context.Context) error {
 	return nil
 
 }
+
 func (s *service) Run() {
 	for {
 		conn, err := s.l.Accept()

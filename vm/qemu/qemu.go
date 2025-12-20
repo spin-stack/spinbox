@@ -68,7 +68,11 @@ type Instance struct {
 	vsockConn net.Conn
 
 	// Long-lived context for background monitors started after the VM boots.
-	runCtx    context.Context
+	// This is a valid exception to the "no context in struct" rule because:
+	// 1. The context represents the VM instance's lifetime, not a single operation
+	// 2. The struct manages both the context and its cancellation
+	// 3. Multiple background goroutines share this context for coordinated shutdown
+	runCtx    context.Context    //nolint:containedctx // Manages VM lifetime for background monitors
 	runCancel context.CancelFunc
 
 	// Netns where TAPs were originally created (CNI); used to move them back on shutdown.

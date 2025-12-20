@@ -182,8 +182,8 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 				e.io.Close()
 			}
 		}()
-
 	}
+
 	opts := &runc.ExecOpts{
 		PidFile: pidFile.Path(),
 		Detach:  true,

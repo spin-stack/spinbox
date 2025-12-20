@@ -232,7 +232,7 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 // calculateTargetCPUs determines ideal vCPU count
 // Strategy: Scale towards maxCPUs gradually to enable workload
 // Future enhancement: Read actual CPU usage from cgroup stats via TTRPC
-func (c *Controller) calculateTargetCPUs(ctx context.Context) int {
+func (c *Controller) calculateTargetCPUs(_ context.Context) int {
 	// Current strategy (Phase 1): Gradual scale-up to maxCPUs
 	// This ensures containers can utilize all available CPUs
 	//

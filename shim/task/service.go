@@ -1,3 +1,5 @@
+// Package task implements the containerd task service for beaconbox runtime.
+// It manages VM lifecycle, container creation, and I/O streams within the shim.
 package task
 
 import (
@@ -37,14 +39,11 @@ import (
 	"github.com/aledbf/beacon/containerd/api/services/vmevents/v1"
 	"github.com/aledbf/beacon/containerd/network"
 	"github.com/aledbf/beacon/containerd/shim/bundle"
-	"github.com/aledbf/beacon/containerd/store"
+	boltstore "github.com/aledbf/beacon/containerd/store"
 	"github.com/aledbf/beacon/containerd/vm"
 
 	"github.com/aledbf/beacon/containerd/shim/cpuhotplug"
 	"github.com/aledbf/beacon/containerd/vm/qemu"
-
-	// Import VMM implementations to register factories
-	_ "github.com/aledbf/beacon/containerd/vm/qemu"
 )
 
 const (
@@ -104,7 +103,9 @@ type service struct {
 	// cpuHotplugController manages dynamic vCPU allocation (QEMU only)
 	cpuHotplugController *cpuhotplug.Controller
 
-	context context.Context
+	// Service lifetime context - valid exception to "no context in struct" rule
+	// because it represents the entire service lifecycle and is managed by the service itself.
+	context context.Context //nolint:containedctx // Manages service lifetime
 	events  chan any
 
 	containers map[string]*container
@@ -138,7 +139,9 @@ func checkKVM() error {
 	// Kernel docs says:
 	//     Applications should refuse to run if KVM_GET_API_VERSION returns a value other than 12.
 	// See https://docs.kernel.org/virt/kvm/api.html#kvm-get-api-version
-	apiVersion, _, errno := unix.RawSyscall(unix.SYS_IOCTL, uintptr(fd), ioctlKVMGetAPIVersion, 0)
+	// Note: This is Linux-specific KVM functionality. unix.SYS_IOCTL is deprecated on macOS,
+	// but this code only runs on Linux systems with KVM support.
+	apiVersion, _, errno := unix.RawSyscall(unix.SYS_IOCTL, uintptr(fd), ioctlKVMGetAPIVersion, 0) //nolint:staticcheck // Linux-only KVM check
 	if errno != 0 {
 		return fmt.Errorf("failed to get KVM API version: %w. You may have insufficient permissions", errno)
 	}
@@ -933,24 +936,27 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 
 func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 	ns, _ := namespaces.Namespace(ctx)
-	ctx = namespaces.WithNamespace(context.Background(), ns)
+	// Create a fresh background context with the namespace preserved.
+	// This is intentional: event forwarding must continue even if the parent context is cancelled,
+	// so we need an independent context that will live until the publisher is closed.
+	ctx = namespaces.WithNamespace(context.Background(), ns) //nolint:contextcheck // Event forwarding needs independent lifetime
 	for e := range s.events {
 		switch e := e.(type) {
 		case *types.Envelope:
 			// TODO: Transform event fields?
-			if err := publisher.Publish(ctx, e.Topic, e.Event); err != nil {
-				log.G(ctx).WithError(err).Error("forward event")
+			if err := publisher.Publish(ctx, e.Topic, e.Event); err != nil { //nolint:contextcheck // Uses event forwarding context
+				log.G(ctx).WithError(err).Error("forward event") //nolint:contextcheck // Uses event forwarding context
 			}
 		default:
-			err := publisher.Publish(ctx, runtime.GetTopic(e), e)
+			err := publisher.Publish(ctx, runtime.GetTopic(e), e) //nolint:contextcheck // Uses event forwarding context
 			if err != nil {
-				log.G(ctx).WithError(err).Error("post event")
+				log.G(ctx).WithError(err).Error("post event") //nolint:contextcheck // Uses event forwarding context
 			}
 		}
 	}
 	publisher.Close()
 	for e := range s.events {
-		log.G(ctx).WithField("event", e).Error("ignored event after shutdown")
+		log.G(ctx).WithField("event", e).Error("ignored event after shutdown") //nolint:contextcheck // Uses event forwarding context
 	}
 }
 
@@ -1129,19 +1135,4 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		"boot_cpus":    resourceCfg.BootCPUs,
 		"max_cpus":     resourceCfg.MaxCPUs,
 	}).Info("cpu-hotplug: controller started")
-}
-
-// stopCPUHotplugController stops the CPU hotplug controller.
-// Note: This is now unused as Delete() handles it directly.
-// Kept for potential future use.
-func (s *service) stopCPUHotplugController(ctx context.Context) {
-	s.mu.Lock()
-	controller := s.cpuHotplugController
-	s.cpuHotplugController = nil
-	s.mu.Unlock()
-
-	if controller != nil {
-		controller.Stop()
-		log.G(ctx).Info("cpu-hotplug: controller stopped")
-	}
 }

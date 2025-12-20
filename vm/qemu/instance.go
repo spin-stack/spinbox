@@ -509,7 +509,9 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	log.G(ctx).Info("qemu: QMP connected, waiting for vsock...")
 
 	// Create long-lived context for background monitors; Start ctx may be cancelled by callers.
-	runCtx, runCancel := context.WithCancel(context.Background())
+	// We use context.Background() here because the background monitors need to outlive
+	// the Start() call and continue running until explicit Shutdown().
+	runCtx, runCancel := context.WithCancel(context.Background()) //nolint:contextcheck // Independent lifetime for VM background monitors
 	// Note: q.mu is already held (locked at line 200), so we can set these fields directly
 	q.runCtx = runCtx
 	q.runCancel = runCancel
@@ -519,16 +521,16 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	select {
 	case <-ctx.Done():
 		log.G(ctx).WithError(ctx.Err()).Error("qemu: context cancelled before connectVsockRPC")
-		q.cmd.Process.Kill()
-		q.qmpClient.Close()
+		_ = q.cmd.Process.Kill()
+		_ = q.qmpClient.Close()
 		return ctx.Err()
 	default:
 	}
 	conn, err := q.connectVsockRPC(ctx)
 	log.G(ctx).WithError(err).Debug("qemu: connectVsockRPC returned")
 	if err != nil {
-		q.cmd.Process.Kill()
-		q.qmpClient.Close()
+		_ = q.cmd.Process.Kill()
+		_ = q.qmpClient.Close()
 		return err
 	}
 
@@ -537,7 +539,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	// Monitor liveness of the guest RPC server; if it goes away (guest reboot/poweroff)
 	// ensure QEMU exits so the shim can clean up.
-	go q.monitorGuestRPC(runCtx)
+	go q.monitorGuestRPC(runCtx) //nolint:contextcheck // Uses independent VM lifetime context
 
 	// Mark as successfully started
 	success = true
@@ -756,13 +758,15 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 
 	// Send graceful shutdown to guest OS
 	// Try CTRL+ALT+DELETE first (more reliable for some distributions), then ACPI powerdown
+	// We use a fresh context here because the caller's context might be cancelled/expired,
+	// but we still need time to properly shut down the VM.
 	if q.qmpClient != nil {
 		logger.Info("qemu: sending CTRL+ALT+DELETE via QMP")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if err := q.qmpClient.SendCtrlAltDelete(shutdownCtx); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second) //nolint:contextcheck // Needs independent timeout for shutdown
+		if err := q.qmpClient.SendCtrlAltDelete(shutdownCtx); err != nil {               //nolint:contextcheck // Uses shutdown context
 			logger.WithError(err).Debug("qemu: failed to send CTRL+ALT+DELETE, trying ACPI powerdown")
 			// Fall back to ACPI powerdown
-			if err := q.qmpClient.Shutdown(shutdownCtx); err != nil {
+			if err := q.qmpClient.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // Uses shutdown context
 				logger.WithError(err).Warning("qemu: failed to send ACPI powerdown")
 			}
 		}
@@ -788,8 +792,8 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		// Send quit command to tell QEMU to exit
 		if q.qmpClient != nil {
 			logger.Debug("qemu: sending quit command to QEMU")
-			quitCtx, quitCancel := context.WithTimeout(context.Background(), 1*time.Second)
-			if err := q.qmpClient.Quit(quitCtx); err != nil {
+			quitCtx, quitCancel := context.WithTimeout(context.Background(), 1*time.Second) //nolint:contextcheck // Needs independent timeout for quit
+			if err := q.qmpClient.Quit(quitCtx); err != nil {                                //nolint:contextcheck // Uses quit context
 				logger.WithError(err).Debug("qemu: failed to send quit command")
 				quitCancel()
 				// Fall through to SIGKILL

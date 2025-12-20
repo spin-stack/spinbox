@@ -32,5 +32,4 @@ func init() {
 			return task.NewTaskService(ic.Context, pp.(shim.Publisher), ss.(shutdown.Service))
 		},
 	})
-
 }

@@ -61,7 +61,9 @@ func (p *processIO) Copy(ctx context.Context, wg *sync.WaitGroup) (io.Closer, er
 		var c io.Closer
 		if p.stdio.Stdin != "" {
 			var err error
-			c, err = fifo.OpenFifo(context.Background(), p.stdio.Stdin, unix.O_WRONLY|unix.O_NONBLOCK, 0)
+			// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
+			// not tied to any specific operation context.
+			c, err = fifo.OpenFifo(context.Background(), p.stdio.Stdin, unix.O_WRONLY|unix.O_NONBLOCK, 0) //nolint:contextcheck // I/O FIFO needs independent lifetime
 			if err != nil {
 				return nil, fmt.Errorf("failed to open stdin fifo %s: %w", p.stdio.Stdin, err)
 			}
