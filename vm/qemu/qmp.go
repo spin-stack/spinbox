@@ -224,7 +224,12 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 
 	// Scanner stopped (connection closed or error)
 	if err := q.scanner.Err(); err != nil {
-		log.G(ctx).WithError(err).Debug("qemu: QMP scanner error")
+		// After quit command or Close(), connection errors are expected
+		if q.closed.Load() {
+			log.G(ctx).WithError(err).Trace("qemu: QMP connection closed")
+		} else {
+			log.G(ctx).WithError(err).Debug("qemu: QMP scanner error")
+		}
 	}
 }
 
