@@ -129,6 +129,10 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 
 	respChan := make(chan *qmpResponse, 1)
 	q.mu.Lock()
+	if q.pending == nil {
+		q.mu.Unlock()
+		return fmt.Errorf("QMP client closed")
+	}
 	q.pending[id] = respChan
 	q.mu.Unlock()
 
@@ -148,6 +152,9 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 	// Wait for response with timeout
 	select {
 	case resp := <-respChan:
+		if resp == nil {
+			return fmt.Errorf("QMP response channel closed for %s", command)
+		}
 		if resp.Error != nil {
 			return fmt.Errorf("QMP error for %s: %s: %s", command, resp.Error.Class, resp.Error.Desc)
 		}

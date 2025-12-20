@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -69,6 +70,7 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 		containers:       make(map[string]*container),
 		networkManager:   nm,
 		initiateShutdown: sd.Shutdown,
+		shutdownSvc:      sd,
 	}
 	sd.RegisterCallback(s.shutdown)
 
@@ -108,6 +110,9 @@ type service struct {
 	containers map[string]*container
 
 	initiateShutdown func()
+	eventsClosed     atomic.Bool
+	shutdownSvc      shutdown.Service
+	inflight         atomic.Int64
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -213,8 +218,14 @@ func (s *service) shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Signal last event and stop forwarding
-	s.events <- nil
+	// Stop forwarding events without blocking shutdown.
+	s.eventsClosed.Store(true)
+	func() {
+		defer func() {
+			_ = recover()
+		}()
+		close(s.events)
+	}()
 
 	return errors.Join(errs...)
 }
@@ -427,19 +438,19 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	go func(ns string) {
 		for {
 			ev, err := sc.Recv()
-			if err != nil {
-				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
-					log.G(ctx).Info("vm event stream closed, initiating shim shutdown")
-				} else {
-					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
+				if err != nil {
+					if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
+						log.G(ctx).Info("vm event stream closed, initiating shim shutdown")
+					} else {
+						log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
+					}
+					// VM died - trigger shim shutdown to clean up and exit the shim process.
+					s.requestShutdownAndExit(ctx, "vm event stream closed")
+					return
 				}
-				// VM died - trigger shim shutdown to clean up and notify containerd
-				s.initiateShutdown()
-				return
+				s.send(ev)
 			}
-			s.send(ev)
-		}
-	}(ns)
+		}(ns)
 
 	bundleFiles, err := b.Files()
 	if err != nil {
@@ -542,6 +553,9 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 // 3. Releases network resources (IPs, TAP devices).
 // 4. Removes the container from the shim's state.
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
+	s.inflight.Add(1)
+	defer s.inflight.Add(-1)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("delete: entered")
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("deleting task")
 	vmc, err := s.client()
 	if err != nil {
@@ -549,7 +563,28 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "vm_nil": s.vm == nil, "err": err}).Info("delete: rpc returned")
+	if err != nil {
+		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
+		if r.ExecID == "" && s.vm != nil {
+			log.G(ctx).Info("delete failed, attempting VM shutdown anyway")
+			if err := s.vm.Shutdown(ctx); err != nil {
+				log.G(ctx).WithError(err).Warn("failed to shutdown VM after delete error")
+			}
+		}
+		return resp, err
+	}
 	if err == nil {
+		if r.ExecID == "" && s.vm != nil {
+			vmInst := s.vm
+			log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("delete: requesting VM shutdown")
+			go func() {
+				if err := vmInst.Shutdown(context.Background()); err != nil {
+					log.G(ctx).WithError(err).Warn("delete: VM shutdown request failed")
+				}
+			}()
+		}
+
 		var (
 			needShutdown bool
 			vmInst       vm.Instance
@@ -595,11 +630,21 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		}
 		s.mu.Unlock()
 
+		log.G(ctx).WithFields(log.Fields{
+			"id":            r.ID,
+			"exec":          r.ExecID,
+			"needShutdown":  needShutdown,
+			"vm_nil_after":  vmInst == nil,
+			"vm_nil_locked": s.vm == nil,
+		}).Info("delete: shutdown decision")
+
 		if needShutdown {
 			log.G(ctx).Info("container deleted, shutting down VM")
 			if err := vmInst.Shutdown(ctx); err != nil {
 				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
 			}
+		} else {
+			log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "vm_nil": s.vm == nil}).Info("container deleted, VM shutdown skipped")
 		}
 	}
 	return resp, err
@@ -796,12 +841,16 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 }
 
 func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*ptypes.Empty, error) {
+	s.inflight.Add(1)
+	defer s.inflight.Add(-1)
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("shutdown")
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.initiateShutdown != nil {
+	if s.shutdownSvc != nil {
+		go s.requestShutdownAndExit(ctx, "shutdown rpc")
+	} else if s.initiateShutdown != nil {
 		// Please ensure that temporary resources have been cleaned up or registered
 		// for cleanup before calling shutdown
 		s.initiateShutdown()
@@ -822,16 +871,47 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 }
 
 func (s *service) send(evt interface{}) {
+	if s.eventsClosed.Load() {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
 	s.events <- evt
+}
+
+func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
+	log.G(ctx).WithField("reason", reason).Info("shim shutdown requested")
+	if s.shutdownSvc == nil {
+		log.G(ctx).WithField("reason", reason).Warn("shutdown service missing; exiting immediately")
+		os.Exit(0)
+	}
+
+	s.shutdownSvc.Shutdown()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.inflight.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if s.inflight.Load() > 0 {
+		log.G(ctx).WithFields(log.Fields{
+			"reason":   reason,
+			"inflight": s.inflight.Load(),
+		}).Warn("shutdown waiting for in-flight requests timed out")
+	}
+	select {
+	case <-s.shutdownSvc.Done():
+	case <-time.After(5 * time.Second):
+		log.G(ctx).WithField("reason", reason).Warn("shutdown timeout; exiting anyway")
+	}
+
+	log.G(ctx).WithField("reason", reason).Info("exiting shim after shutdown")
+	os.Exit(0)
 }
 
 func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 	ns, _ := namespaces.Namespace(ctx)
 	ctx = namespaces.WithNamespace(context.Background(), ns)
 	for e := range s.events {
-		if e == nil {
-			break
-		}
 		switch e := e.(type) {
 		case *types.Envelope:
 			// TODO: Transform event fields?

@@ -638,8 +638,13 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 			}
 			q.cmd = nil
 		case <-time.After(3 * time.Second):
-			// Timeout - force kill
-			log.G(ctx).Warn("qemu: process did not exit after 3 seconds, sending SIGKILL")
+			// Timeout - force quit then kill
+			log.G(ctx).Warn("qemu: process did not exit after 3 seconds, sending QMP quit then SIGKILL")
+			if q.qmpClient != nil {
+				if err := q.qmpClient.execute(context.Background(), "quit", nil); err != nil {
+					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command during shutdown timeout")
+				}
+			}
 			if err := q.cmd.Process.Kill(); err != nil {
 				log.G(ctx).WithError(err).Error("qemu: failed to kill process")
 				errs = append(errs, fmt.Errorf("kill process: %w", err))
