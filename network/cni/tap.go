@@ -25,16 +25,7 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 		return "", fmt.Errorf("CNI result is nil")
 	}
 
-	// Debug: Log all interfaces in the result
 	log.L.WithField("count", len(result.Interfaces)).Debug("CNI result interfaces")
-	for i, iface := range result.Interfaces {
-		log.L.WithFields(log.Fields{
-			"index":   i,
-			"name":    iface.Name,
-			"sandbox": iface.Sandbox,
-			"mac":     iface.Mac,
-		}).Debug("CNI interface")
-	}
 
 	// Try tc-redirect-tap detection first (most common case)
 	tapDevice, err := detectTCRedirectTAP(result)
