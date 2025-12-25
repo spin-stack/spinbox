@@ -71,7 +71,7 @@ func transformMount(ctx context.Context, id string, disks *byte, m *types.Mount)
 
 func handleEROFS(ctx context.Context, id string, disks *byte, m *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
-	// virtiofs implementation has a limit of 36 characters for the tag
+	// Keep disk ID reasonably short for logging and tracking
 	if len(disk) > 36 {
 		disk = disk[:36]
 	}
@@ -124,7 +124,7 @@ func handleEROFS(ctx context.Context, id string, disks *byte, m *types.Mount) ([
 
 func handleExt4(id string, disks *byte, m *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
-	// virtiofs implementation has a limit of 36 characters for the tag
+	// Keep disk ID reasonably short for logging and tracking
 	if len(disk) > 36 {
 		disk = disk[:36]
 	}

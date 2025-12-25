@@ -21,7 +21,7 @@ Host (containerd)
     │           └─> crun (OCI runtime)
     │               └─> Container process
     ├─> Network Manager (TAP/bridge)
-    └─> Storage (EROFS via virtio-fs)
+    └─> Storage (EROFS via virtio-blk)
 ```
 
 ## Critical Paths (NEVER modify without understanding)
@@ -83,7 +83,7 @@ Override with environment variables:
 ### Isolation Layers
 1. **Hypervisor** (primary): KVM hardware virtualization
 2. **Network**: Isolated TAP devices + nftables
-3. **Filesystem**: Read-only EROFS via virtio-fs
+3. **Filesystem**: Read-only EROFS via virtio-blk
 4. **OCI Runtime** (crun): cgroups v2 resource limits within VM
 5. **vsock**: Isolated host-VM communication
 
@@ -499,19 +499,19 @@ ps aux | grep qemu-system-x86_64 | grep vsock
 
 ---
 
-## EROFS and virtio-fs
+## EROFS and virtio-blk
 
 ### Storage Layer
 
 ```
-Host: EROFS snapshot mounted at /var/lib/containerd/...
-  ↓ (virtio-fs with DAX)
-VM: Mounted at /run/containerd/...
-  ↓
+Host: EROFS snapshot at /var/lib/containerd/...
+  ↓ (exposed as virtio-blk block device)
+VM: Block device /dev/vdX
+  ↓ (mounted as EROFS)
 Container rootfs: Overlay or direct mount
 ```
 
-**Performance**: virtio-fs with DAX provides near-native filesystem performance
+**Implementation**: EROFS images are exposed to VMs as virtio-blk block devices and mounted inside the guest. This provides good I/O performance with the standard virtio block device stack. The EROFS filesystem itself supports inline compression for efficient storage.
 
 ---
 

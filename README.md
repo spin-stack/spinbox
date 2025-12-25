@@ -187,15 +187,17 @@ You can use any CNI configuration - qemubox has no hardcoded network requirement
 ## Storage
 
 Uses EROFS snapshots for efficient, read-only container images:
-- Images mounted on host and shared to VM via virtio-fs
+- EROFS images exposed to VM as virtio-blk block devices
 - No unpacking inside VM
-- Near-native performance with DAX mode
+- Efficient read-only filesystem with inline compression
 
 ## Resource Management
 
 Two levels of enforcement:
 
 1. **VM level**: QEMU allocates vCPUs and memory (default: 1 vCPU, 512 MiB)
+   - Dynamic CPU hotplug scales vCPUs based on usage (up to maxcpus)
+   - Memory limits set at VM creation
 2. **Container level**: crun enforces cgroups v2 limits within the VM
 
 VM resources are derived from the OCI spec but default conservatively. Container limits are enforced within those bounds.
@@ -206,7 +208,7 @@ Multiple isolation layers:
 
 - **VM boundary**: Hardware virtualization (KVM) isolates each container
 - **Network**: Isolated TAP devices, firewall rules via CNI
-- **Storage**: Read-only EROFS via virtio-fs
+- **Storage**: Read-only EROFS via virtio-blk
 - **Resource**: cgroups v2 prevents resource exhaustion
 - **Communication**: vsock (no network-based IPC)
 
@@ -252,7 +254,6 @@ journalctl -u containerd -f
 - Linux only (KVM required)
 - x86_64 only (arm64 untested)
 - One VM per container (no sharing)
-- Fixed VM resources at startup (no hotplug yet)
 - Cold start for each container (no VM pooling)
 
 ## Documentation

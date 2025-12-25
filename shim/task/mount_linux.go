@@ -15,8 +15,8 @@ import (
 )
 
 // translateMountOptions translates standard mount options to virtiofs-compatible options.
-// virtiofs supports a subset of mount options. This function filters and translates
-// options from bind/overlay mounts to virtiofs equivalents.
+// Note: virtiofs is not currently implemented for QEMU (uses virtio-blk instead).
+// This function exists for potential future virtiofs support.
 func translateMountOptions(ctx context.Context, options []string) []string {
 	var translated []string
 
@@ -81,11 +81,11 @@ func translateMountOptions(ctx context.Context, options []string) []string {
 }
 
 func setupMounts(ctx context.Context, vmi vm.Instance, id string, m []*types.Mount, rootfs, lmounts string) ([]*types.Mount, error) {
-	// Handle mounts using virtiofs (supported by QEMU)
+	// Try virtiofs first (not currently implemented for QEMU), fall back to block devices
 
 	if len(m) == 1 && (m[0].Type == "overlay" || m[0].Type == "bind") {
 		tag := fmt.Sprintf("rootfs-%s", id)
-		// virtiofs implementation has a limit of 36 characters for the tag
+		// Keep disk ID reasonably short for logging and tracking
 		if len(tag) > 36 {
 			tag = tag[:36]
 		}
@@ -107,7 +107,7 @@ func setupMounts(ctx context.Context, vmi vm.Instance, id string, m []*types.Mou
 		}}, nil
 	} else if len(m) == 0 {
 		tag := fmt.Sprintf("rootfs-%s", id)
-		// virtiofs implementation has a limit of 36 characters for the tag
+		// Keep disk ID reasonably short for logging and tracking
 		if len(tag) > 36 {
 			tag = tag[:36]
 		}
@@ -127,7 +127,7 @@ func setupMounts(ctx context.Context, vmi vm.Instance, id string, m []*types.Mou
 
 		// Fallback to original rootfs mount
 		tag := fmt.Sprintf("rootfs-%s", id)
-		// virtiofs implementation has a limit of 36 characters for the tag
+		// Keep disk ID reasonably short for logging and tracking
 		if len(tag) > 36 {
 			tag = tag[:36]
 		}
