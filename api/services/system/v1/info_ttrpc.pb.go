@@ -12,6 +12,8 @@ type TTRPCSystemService interface {
 	Info(context.Context, *emptypb.Empty) (*InfoResponse, error)
 	OfflineCPU(context.Context, *OfflineCPURequest) (*emptypb.Empty, error)
 	OnlineCPU(context.Context, *OnlineCPURequest) (*emptypb.Empty, error)
+	OfflineMemory(context.Context, *OfflineMemoryRequest) (*emptypb.Empty, error)
+	OnlineMemory(context.Context, *OnlineMemoryRequest) (*emptypb.Empty, error)
 }
 
 func RegisterTTRPCSystemService(srv *ttrpc.Server, svc TTRPCSystemService) {
@@ -37,6 +39,20 @@ func RegisterTTRPCSystemService(srv *ttrpc.Server, svc TTRPCSystemService) {
 					return nil, err
 				}
 				return svc.OnlineCPU(ctx, &req)
+			},
+			"OfflineMemory": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req OfflineMemoryRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.OfflineMemory(ctx, &req)
+			},
+			"OnlineMemory": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req OnlineMemoryRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.OnlineMemory(ctx, &req)
 			},
 		},
 	})
@@ -71,6 +87,22 @@ func (c *ttrpcsystemClient) OfflineCPU(ctx context.Context, req *OfflineCPUReque
 func (c *ttrpcsystemClient) OnlineCPU(ctx context.Context, req *OnlineCPURequest) (*emptypb.Empty, error) {
 	var resp emptypb.Empty
 	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "OnlineCPU", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *ttrpcsystemClient) OfflineMemory(ctx context.Context, req *OfflineMemoryRequest) (*emptypb.Empty, error) {
+	var resp emptypb.Empty
+	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "OfflineMemory", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *ttrpcsystemClient) OnlineMemory(ctx context.Context, req *OnlineMemoryRequest) (*emptypb.Empty, error) {
+	var resp emptypb.Empty
+	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "OnlineMemory", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

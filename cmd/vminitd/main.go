@@ -27,12 +27,12 @@ import (
 	"github.com/mdlayher/vsock"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/qemubox/containerd/vminit"
-	"github.com/aledbf/qemubox/containerd/vminit/systools"
+	"github.com/aledbf/qemubox/containerd/internal/guest/vminit"
+	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
 
-	_ "github.com/aledbf/qemubox/containerd/services"
-	_ "github.com/aledbf/qemubox/containerd/vminit/events"
-	_ "github.com/aledbf/qemubox/containerd/vminit/streaming"
+	_ "github.com/aledbf/qemubox/containerd/internal/guest/services"
+	_ "github.com/aledbf/qemubox/containerd/internal/guest/vminit/events"
+	_ "github.com/aledbf/qemubox/containerd/internal/guest/vminit/streaming"
 )
 
 // loadConfig loads configuration from a JSON file and merges it with the provided config.

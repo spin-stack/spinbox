@@ -9,7 +9,7 @@ import (
 	"github.com/containerd/errdefs"
 
 	systemapi "github.com/aledbf/qemubox/containerd/api/services/system/v1"
-	"github.com/aledbf/qemubox/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
 
 func TestSystemInfo(t *testing.T) {

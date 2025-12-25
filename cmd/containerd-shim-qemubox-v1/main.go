@@ -5,8 +5,8 @@ import (
 	"os"
 	"strconv"
 
-	_ "github.com/aledbf/qemubox/containerd/shim"
-	"github.com/aledbf/qemubox/containerd/shim/manager"
+	_ "github.com/aledbf/qemubox/containerd/internal/shim"
+	"github.com/aledbf/qemubox/containerd/internal/shim/manager"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/log"
 )
