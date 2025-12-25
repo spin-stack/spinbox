@@ -26,9 +26,9 @@ graph TB
         qemu[QEMU/KVM]
 
         containerd -->|shim v2 ttrpc| shim
-        shim -->|CNI setup (netns/tap/IPAM)| cni
+        shim -->|"CNI setup (netns/tap/IPAM)"| cni
         cni -->|create/attach| tap
-        shim -->|spawn/config (kernel args, vsock CID)| qemu
+        shim -->|"spawn/config (kernel args, vsock CID)"| qemu
         store -->|rootfs via virtio-blk| qemu
         kernel -->|bzImage| qemu
         initrd -->|initrd| qemu

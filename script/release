@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+
+#
+# Create release tarball with proper directory structure
+#
+set -eu -o pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUTPUT_DIR="${ROOT_DIR}/_output"
+
+cd "${ROOT_DIR}"
+
+echo "Creating release tarball..."
+
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
+RELEASE_NAME="qemubox-${VERSION}-linux-x86_64"
+RELEASE_DIR="${OUTPUT_DIR}/release/${RELEASE_NAME}"
+
+rm -rf "${OUTPUT_DIR}/release"
+mkdir -p "${RELEASE_DIR}/usr/share/qemubox/bin"
+mkdir -p "${RELEASE_DIR}/usr/share/qemubox/kernel"
+mkdir -p "${RELEASE_DIR}/usr/share/qemubox/config"
+
+echo "Copying artifacts to release structure..."
+
+artifacts=(
+  "${OUTPUT_DIR}/qemubox-kernel-x86_64:kernel:qemubox-kernel-x86_64"
+  "${OUTPUT_DIR}/qemubox-initrd:kernel:qemubox-initrd"
+  "${OUTPUT_DIR}/containerd-shim-qemubox-v1:bin:containerd-shim-qemubox-v1"
+  "${OUTPUT_DIR}/vminitd:bin:vminitd"
+)
+
+for entry in "${artifacts[@]}"; do
+  IFS=":" read -r src rel dest <<< "${entry}"
+  if [ -f "${src}" ]; then
+    cp "${src}" "${RELEASE_DIR}/usr/share/qemubox/${rel}/${dest}"
+    echo "  ok: ${dest}"
+  fi
+done
+
+echo "Adding QEMU binaries and firmware..."
+if [ -f "${OUTPUT_DIR}/bin/qemu-system-x86_64" ]; then
+  cp "${OUTPUT_DIR}/bin/qemu-system-x86_64" "${RELEASE_DIR}/usr/share/qemubox/bin/"
+  chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/qemu-system-x86_64"
+  echo "  ok: qemu-system-x86_64"
+else
+  echo "  warn: qemu-system-x86_64 not found - skipping"
+fi
+
+if [ -f "${OUTPUT_DIR}/bin/qemu-img" ]; then
+  cp "${OUTPUT_DIR}/bin/qemu-img" "${RELEASE_DIR}/usr/share/qemubox/bin/"
+  chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/qemu-img"
+  echo "  ok: qemu-img"
+else
+  echo "  warn: qemu-img not found - skipping"
+fi
+
+if [ -d "${OUTPUT_DIR}/share/qemubox/qemu" ]; then
+  mkdir -p "${RELEASE_DIR}/usr/share/qemubox/qemu"
+  cp -r "${OUTPUT_DIR}/share/qemubox/qemu/"* "${RELEASE_DIR}/usr/share/qemubox/qemu/"
+  echo "  ok: QEMU firmware files"
+else
+  echo "  warn: QEMU firmware files not found - skipping"
+fi
+
+echo "Copying configuration files..."
+cp -r release/config/* "${RELEASE_DIR}/usr/share/qemubox/config/"
+echo "  ok: config files (buildkit, containerd)"
+
+echo "Copying systemd services..."
+mkdir -p "${RELEASE_DIR}/usr/share/qemubox/systemd"
+cp release/systemd/*.service "${RELEASE_DIR}/usr/share/qemubox/systemd/"
+echo "  ok: systemd services"
+
+echo "Copying install scripts..."
+cp release/install.sh "${RELEASE_DIR}/"
+cp release/uninstall.sh "${RELEASE_DIR}/"
+chmod +x "${RELEASE_DIR}/install.sh"
+chmod +x "${RELEASE_DIR}/uninstall.sh"
+echo "  ok: install/uninstall scripts"
+
+echo "Downloading nerdctl..."
+NERDCTL_VERSION="${NERDCTL_VERSION:-2.2.0}"
+NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
+NERDCTL_TARBALL="${OUTPUT_DIR}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
+
+if [ ! -f "${NERDCTL_TARBALL}" ]; then
+  curl -L -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
+fi
+
+echo "Extracting nerdctl-full components..."
+tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" \
+  bin/nerdctl \
+  bin/containerd \
+  bin/containerd-shim-runc-v2 \
+  bin/ctr \
+  bin/runc
+echo "  ok: containerd, runc, ctr, nerdctl"
+
+tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" bin/buildkitd bin/buildctl
+echo "  ok: buildkit"
+
+mkdir -p "${RELEASE_DIR}/usr/share/qemubox/libexec/cni"
+tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/libexec/cni" --strip-components=2 \
+  libexec/cni/bandwidth \
+  libexec/cni/bridge \
+  libexec/cni/dhcp \
+  libexec/cni/firewall \
+  libexec/cni/host-device \
+  libexec/cni/host-local \
+  libexec/cni/ipvlan \
+  libexec/cni/loopback \
+  libexec/cni/macvlan \
+  libexec/cni/portmap \
+  libexec/cni/ptp \
+  libexec/cni/tuning \
+  libexec/cni/vlan
+echo "  ok: CNI plugins"
+
+echo "Building tc-redirect-tap CNI plugin..."
+TC_REDIRECT_TAP_DIR="${OUTPUT_DIR}/tc-redirect-tap"
+if [ ! -d "${TC_REDIRECT_TAP_DIR}" ]; then
+  git clone --depth=1 https://github.com/awslabs/tc-redirect-tap "${TC_REDIRECT_TAP_DIR}"
+fi
+
+(cd "${TC_REDIRECT_TAP_DIR}" && \
+  env GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
+
+cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
+  "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/"
+chmod +x "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/tc-redirect-tap"
+echo "  ok: tc-redirect-tap CNI plugin"
+
+echo "Creating tarball..."
+cd "${OUTPUT_DIR}/release"
+tar czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}"
+cd "${ROOT_DIR}"
+
+echo "Release created: ${OUTPUT_DIR}/release/${RELEASE_NAME}.tar.gz"
+echo ""
+echo "Installation:"
+echo "  tar xzf ${RELEASE_NAME}.tar.gz"
+echo "  cd ${RELEASE_NAME}"
+echo "  sudo ./install.sh"
+echo ""
+echo "Uninstallation:"
+echo "  sudo ./uninstall.sh"

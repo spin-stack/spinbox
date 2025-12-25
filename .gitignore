@@ -1,2 +1,4 @@
+bin
 containerd-shim-qemubox-v1
 _output
+.task

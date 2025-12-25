@@ -25,10 +25,15 @@ vars:
   BUILDX: "{{.DOCKER}} buildx"
   MODULE_NAME:
     sh: go list -m
+  ROOT_DIR:
+    sh: pwd
   ARCH:
     sh: uname -m
   OS:
     sh: uname -s
+  OUTPUT_DIR: _output
+  BIN_DIR: bin
+  SCRIPTS_DIR: script
 
   # Build flags
   LDFLAGS: "-s -w"
@@ -46,62 +51,101 @@ tasks:
   # Build Tasks
   # ==========================================================================
 
+  bake:
+    internal: true
+    vars:
+      TARGET: ""
+    cmds:
+      - |
+        set -eou pipefail
+        if [ -n "{{.TARGET}}" ]; then
+          echo "🐳 {{.MESSAGE}}..."
+          {{.BUILDX}} bake {{.TARGET}}
+        else
+          echo "🐳 {{.MESSAGE}}..."
+          {{.BUILDX}} bake
+        fi
+        echo "✓ {{.DONE_MESSAGE}}"
+
+  build:go:
+    internal: true
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building {{.NAME}}..."
+        mkdir -p {{.OUTPUT_DIR}}
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o {{.OUTPUT_DIR}}/{{.OUT}} {{.PKG}}
+        echo "✓ {{.NAME}} built: {{.OUTPUT_DIR}}/{{.OUT}} (static)"
+
   build:
     desc: Build all components (shim, kernel, initrd)
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building all components..."
-        {{.BUILDX}} bake
-        echo "✓ Build complete"
+      - task: bake
+        vars:
+          MESSAGE: "Building all components"
+          DONE_MESSAGE: "Build complete"
 
   build:shim:
     desc: Build containerd shim binary (static, Linux x86_64)
+    sources:
+      - cmd/containerd-shim-qemubox-v1/**
+      - internal/**
+      - pkg/**
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.OUTPUT_DIR}}/containerd-shim-qemubox-v1"
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building containerd-shim-qemubox-v1..."
-        mkdir -p _output
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/containerd-shim-qemubox-v1 ./cmd/containerd-shim-qemubox-v1
-        echo "✓ Shim built: _output/containerd-shim-qemubox-v1 (static)"
+      - task: build:go
+        vars:
+          NAME: containerd-shim-qemubox-v1
+          OUT: containerd-shim-qemubox-v1
+          PKG: ./cmd/containerd-shim-qemubox-v1
 
   build:vminitd:
     desc: Build vminitd binary (static, Linux x86_64)
+    sources:
+      - cmd/vminitd/**
+      - internal/**
+      - pkg/**
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.OUTPUT_DIR}}/vminitd"
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building vminitd..."
-        mkdir -p _output
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/vminitd ./cmd/vminitd
-        echo "✓ vminitd built: _output/vminitd (static)"
+      - task: build:go
+        vars:
+          NAME: vminitd
+          OUT: vminitd
+          PKG: ./cmd/vminitd
 
   build:initrd:
     desc: Build initrd image
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building initrd..."
-        {{.BUILDX}} bake initrd
-        echo "✓ Initrd built: _output/qemubox-initrd"
+      - task: bake
+        vars:
+          TARGET: initrd
+          MESSAGE: "Building initrd"
+          DONE_MESSAGE: "Initrd built: _output/qemubox-initrd"
 
   build:kernel:
     desc: Build kernel
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building kernel..."
-        {{.BUILDX}} bake kernel
-        echo "✓ Kernel built"
+      - task: bake
+        vars:
+          TARGET: kernel
+          MESSAGE: "Building kernel"
+          DONE_MESSAGE: "Kernel built"
 
   build:qemu:
     desc: Build QEMU binaries and firmware (qemu-system-x86_64, qemu-img, BIOS files)
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building QEMU..."
-        {{.BUILDX}} bake qemu
-        echo "✓ QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
-        echo "✓ QEMU firmware: _output/share/qemubox/qemu/"
+      - task: bake
+        vars:
+          TARGET: qemu
+          MESSAGE: "Building QEMU"
+          DONE_MESSAGE: "QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
+      - cmd: 'echo "✓ QEMU firmware: _output/share/qemubox/qemu/"'
 
   # ==========================================================================
   # Development Tasks
@@ -157,20 +201,20 @@ tasks:
   validate:
     desc: Run all validation checks
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Running validation..."
-        {{.BUILDX}} bake validate
-        echo "✓ Validation passed"
+      - task: bake
+        vars:
+          TARGET: validate
+          MESSAGE: "Running validation"
+          DONE_MESSAGE: "Validation passed"
 
   lint:
     desc: Lint code
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Running linters..."
-        {{.BUILDX}} bake lint
-        echo "✓ Linting passed"
+      - task: bake
+        vars:
+          TARGET: lint
+          MESSAGE: "Running linters"
+          DONE_MESSAGE: "Linting passed"
 
   # ==========================================================================
   # Setup and Tool Installation
@@ -181,108 +225,7 @@ tasks:
     cmds:
       - |
         set -eou pipefail
-        echo "🐳 Installing development tools..."
-
-        # Install Go protobuf tools
-        echo "  → Installing Go protobuf tools..."
-        go install github.com/containerd/protobuild@v0.3.0
-        go install github.com/containerd/protobuild/cmd/go-fix-acronym@v0.3.0
-        go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28.1
-        go install github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc@v1.2.5
-        echo "    ✓ Go protobuf tools installed"
-
-        # Install protoc compiler
-        echo "  → Installing protoc compiler..."
-        PROTOBUF_VERSION=3.20.1
-        PROTOBUF_DIR=$(mktemp -d)
-        GOOS=$(go env GOOS)
-        GOARCH=$(go env GOARCH)
-
-        # Determine target platform for protoc download
-        case "${GOOS}-${GOARCH}" in
-          darwin-amd64)  TARGET="osx-x86_64" ;;
-          darwin-arm64)  TARGET="osx-aarch_64" ;;
-          linux-amd64)   TARGET="linux-x86_64" ;;
-          linux-arm64)   TARGET="linux-aarch_64" ;;
-          linux-386)     TARGET="linux-x86_32" ;;
-          linux-ppc64le) TARGET="linux-ppcle_64" ;;
-          windows-amd64) TARGET="win64" ;;
-          windows-386)   TARGET="win32" ;;
-          *)
-            echo "    ⚠ Unsupported platform: ${GOOS}-${GOARCH}"
-            echo "    Please install protoc manually from:"
-            echo "    https://github.com/protocolbuffers/protobuf/releases"
-            exit 1
-            ;;
-        esac
-
-        # Download and install protoc
-        mkdir -p bin
-        curl -sL -o "${PROTOBUF_DIR}/protobuf.zip" \
-          "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-${TARGET}.zip"
-        unzip -qo "${PROTOBUF_DIR}/protobuf.zip" -d bin/
-        rm -rf "${PROTOBUF_DIR}"
-
-        # Install protobuf includes system-wide (requires sudo on most systems)
-        # Try to install, and if it fails due to permissions, show instructions
-        if [ -d /usr/local/include ] && [ -w /usr/local/include ]; then
-          # We have write access
-          cp -r bin/include/google /usr/local/include/
-          mkdir -p /usr/local/include/google/rpc
-          curl -sL \
-            https://raw.githubusercontent.com/grpc/grpc/v1.45.2/src/proto/grpc/status/status.proto \
-            -o /usr/local/include/google/rpc/status.proto
-          echo "    ✓ Protobuf includes installed to /usr/local/include"
-        else
-          # Need sudo
-          echo "    ⚠ Cannot write to /usr/local/include - sudo required"
-          echo ""
-          echo "    Please run the following commands to complete setup:"
-          echo ""
-          echo "      sudo mkdir -p /usr/local/include"
-          echo "      sudo cp -r bin/include/google /usr/local/include/"
-          echo "      sudo mkdir -p /usr/local/include/google/rpc"
-          echo "      sudo curl -L https://raw.githubusercontent.com/grpc/grpc/v1.45.2/src/proto/grpc/status/status.proto -o /usr/local/include/google/rpc/status.proto"
-          echo ""
-        fi
-
-        echo "    ✓ protoc compiler installed to bin/bin/protoc"
-
-        # Install tc-redirect-tap CNI plugin
-        echo "  → Installing tc-redirect-tap CNI plugin..."
-        TC_REDIRECT_TAP_DIR=$(mktemp -d)
-        git clone --depth=1 https://github.com/awslabs/tc-redirect-tap "${TC_REDIRECT_TAP_DIR}"
-
-        # Build tc-redirect-tap (disable workspace mode to avoid module conflicts)
-        (cd "${TC_REDIRECT_TAP_DIR}" && env GOWORK=off go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
-
-        # Install to /opt/cni/bin (requires sudo on most systems)
-        if [ -d /opt/cni/bin ] && [ -w /opt/cni/bin ]; then
-          # We have write access
-          cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" /opt/cni/bin/
-          chmod +x /opt/cni/bin/tc-redirect-tap
-          echo "    ✓ tc-redirect-tap installed to /opt/cni/bin/tc-redirect-tap"
-        else
-          # Need sudo or directory doesn't exist
-          echo "    ⚠ Cannot write to /opt/cni/bin - manual installation required"
-          echo ""
-          echo "    Please run the following commands to complete setup:"
-          echo ""
-          echo "      sudo mkdir -p /opt/cni/bin"
-          echo "      sudo cp ${TC_REDIRECT_TAP_DIR}/tc-redirect-tap /opt/cni/bin/"
-          echo "      sudo chmod +x /opt/cni/bin/tc-redirect-tap"
-          echo ""
-          echo "    Binary is available at: ${TC_REDIRECT_TAP_DIR}/tc-redirect-tap"
-          echo ""
-        fi
-
-        # Keep the directory for manual installation if needed
-        if [ -w /opt/cni/bin ]; then
-          rm -rf "${TC_REDIRECT_TAP_DIR}"
-        fi
-
-        echo ""
-        echo "✓ Setup complete!"
+        {{.SCRIPTS_DIR}}/setup
 
   # ==========================================================================
   # Protobuf Tasks (optional)
@@ -290,6 +233,12 @@ tasks:
 
   protos:
     desc: Generate protobuf files
+    sources:
+      - api/**/*.proto
+      - go.mod
+      - go.sum
+    generates:
+      - api/**/*.pb.go
     cmds:
       - |
         set -eou pipefail
@@ -323,7 +272,7 @@ tasks:
         # Note: We must run in a subshell with PWD set to prevent symlink resolution
         (
           cd "${GOPATH_DIR}/api"
-          export PATH="${GOPATH_DIR}/bin/bin:${HOME}/go/bin:${PATH}"
+          export PATH="${GOPATH_DIR}/bin:${HOME}/go/bin:${PATH}"
           export PWD="${GOPATH_DIR}/api"
 
           # Run protobuild - it should use GOPATH paths
@@ -360,7 +309,7 @@ tasks:
       - |
         set -eou pipefail
         echo "🧹 Cleaning build artifacts..."
-        rm -rf _output
+        rm -rf {{.OUTPUT_DIR}}
         echo "✓ Clean complete"
 
   # ==========================================================================
@@ -398,7 +347,7 @@ tasks:
     cmds:
       - task: build
       - task: validate
-      - echo "✓ All tasks complete"
+      - cmd: echo "✓ All tasks complete"
 
   default:
     desc: Default task (build everything)
@@ -415,155 +364,4 @@ tasks:
       - task: build
       - |
         set -eou pipefail
-        echo "📦 Creating release tarball..."
-
-        # Determine version from git tag or use "dev"
-        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
-        RELEASE_NAME="qemubox-${VERSION}-linux-x86_64"
-        RELEASE_DIR="_output/release/${RELEASE_NAME}"
-
-        # Clean and create release directory structure
-        rm -rf _output/release
-        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/bin"
-        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/kernel"
-        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/config"
-
-        echo "📂 Copying artifacts to release structure..."
-
-        # Copy kernel and initrd to /usr/share/qemubox/kernel
-        if [ -f "_output/qemubox-kernel-x86_64" ]; then
-          cp _output/qemubox-kernel-x86_64 "${RELEASE_DIR}/usr/share/qemubox/kernel/"
-          echo "  ✓ qemubox-kernel-x86_64"
-        fi
-
-        if [ -f "_output/qemubox-initrd" ]; then
-          cp _output/qemubox-initrd "${RELEASE_DIR}/usr/share/qemubox/kernel/"
-          echo "  ✓ qemubox-initrd"
-        fi
-
-        # Copy shim binary to /usr/share/qemubox/bin
-        if [ -f "_output/containerd-shim-qemubox-v1" ]; then
-          cp _output/containerd-shim-qemubox-v1 "${RELEASE_DIR}/usr/share/qemubox/bin/"
-          echo "  ✓ containerd-shim-qemubox-v1"
-        fi
-
-        # Copy QEMU binaries and firmware files (built during build phase)
-        echo "📦 Adding QEMU binaries and firmware..."
-        if [ -f "_output/bin/qemu-system-x86_64" ]; then
-          cp _output/bin/qemu-system-x86_64 "${RELEASE_DIR}/usr/share/qemubox/bin/"
-          chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/qemu-system-x86_64"
-          echo "  ✓ qemu-system-x86_64"
-        else
-          echo "  ⚠ qemu-system-x86_64 not found - skipping"
-        fi
-
-        if [ -f "_output/bin/qemu-img" ]; then
-          cp _output/bin/qemu-img "${RELEASE_DIR}/usr/share/qemubox/bin/"
-          chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/qemu-img"
-          echo "  ✓ qemu-img"
-        else
-          echo "  ⚠ qemu-img not found - skipping"
-        fi
-
-        # Copy QEMU BIOS/firmware files
-        if [ -d "_output/share/qemubox/qemu" ]; then
-          mkdir -p "${RELEASE_DIR}/usr/share/qemubox/qemu"
-          cp -r _output/share/qemubox/qemu/* "${RELEASE_DIR}/usr/share/qemubox/qemu/"
-          echo "  ✓ QEMU firmware files"
-        else
-          echo "  ⚠ QEMU firmware files not found - skipping"
-        fi
-
-        # Copy configuration files
-        echo "📂 Copying configuration files..."
-        cp -r release/config/* "${RELEASE_DIR}/usr/share/qemubox/config/"
-        echo "  ✓ config files (buildkit, containerd)"
-
-        # Copy systemd service files to /usr/share/qemubox/systemd
-        echo "📂 Copying systemd services..."
-        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/systemd"
-        cp release/systemd/*.service "${RELEASE_DIR}/usr/share/qemubox/systemd/"
-        echo "  ✓ systemd services"
-
-        # Copy install/uninstall scripts to tarball root (for easy access)
-        echo "📂 Copying install scripts..."
-        cp release/install.sh "${RELEASE_DIR}/"
-        cp release/uninstall.sh "${RELEASE_DIR}/"
-        chmod +x "${RELEASE_DIR}/install.sh"
-        chmod +x "${RELEASE_DIR}/uninstall.sh"
-        echo "  ✓ install/uninstall scripts"
-
-        # Download and extract nerdctl
-        echo "📥 Downloading nerdctl..."
-        NERDCTL_VERSION="2.2.0"
-        NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
-        NERDCTL_TARBALL="_output/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
-
-        if [ ! -f "${NERDCTL_TARBALL}" ]; then
-          curl -L -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
-        fi
-
-        echo "📂 Extracting nerdctl-full components..."
-        # Extract core binaries to /usr/share/qemubox/bin
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" \
-          bin/nerdctl \
-          bin/containerd \
-          bin/containerd-shim-runc-v2 \
-          bin/ctr \
-          bin/runc
-        echo "  ✓ containerd, runc, ctr, nerdctl"
-
-        # Extract buildkitd and buildctl to /usr/share/qemubox/bin
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" bin/buildkitd bin/buildctl
-        echo "  ✓ buildkit"
-
-        # Extract CNI plugins to /usr/share/qemubox/libexec/cni
-        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/libexec/cni"
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/libexec/cni" --strip-components=2 \
-          libexec/cni/bandwidth \
-          libexec/cni/bridge \
-          libexec/cni/dhcp \
-          libexec/cni/firewall \
-          libexec/cni/host-device \
-          libexec/cni/host-local \
-          libexec/cni/ipvlan \
-          libexec/cni/loopback \
-          libexec/cni/macvlan \
-          libexec/cni/portmap \
-          libexec/cni/ptp \
-          libexec/cni/tuning \
-          libexec/cni/vlan
-        echo "  ✓ CNI plugins"
-
-        # Build and add tc-redirect-tap CNI plugin
-        echo "📦 Building tc-redirect-tap CNI plugin..."
-        TC_REDIRECT_TAP_DIR="_output/tc-redirect-tap"
-        if [ ! -d "${TC_REDIRECT_TAP_DIR}" ]; then
-          git clone --depth=1 https://github.com/awslabs/tc-redirect-tap "${TC_REDIRECT_TAP_DIR}"
-        fi
-
-        # Build tc-redirect-tap (disable workspace mode to avoid module conflicts)
-        (cd "${TC_REDIRECT_TAP_DIR}" && \
-          env GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
-
-        # Copy to release directory
-        cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
-          "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/"
-        chmod +x "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/tc-redirect-tap"
-        echo "  ✓ tc-redirect-tap CNI plugin"
-
-        # Create tarball
-        echo "🗜️  Creating tarball..."
-        cd _output/release
-        tar czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}"
-        cd ../..
-
-        echo "✓ Release created: _output/release/${RELEASE_NAME}.tar.gz"
-        echo ""
-        echo "Installation:"
-        echo "  tar xzf ${RELEASE_NAME}.tar.gz"
-        echo "  cd ${RELEASE_NAME}"
-        echo "  sudo ./install.sh"
-        echo ""
-        echo "Uninstallation:"
-        echo "  sudo ./uninstall.sh"
+        {{.SCRIPTS_DIR}}/release

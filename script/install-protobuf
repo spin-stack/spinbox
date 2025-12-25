@@ -4,56 +4,60 @@
 
 
 #
-# Downloads and installs protobuf
+# Downloads and installs protobuf (local bin/include)
 #
 set -eu -o pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN_DIR="${ROOT_DIR}/bin"
 PROTOBUF_VERSION=3.20.1
 PROTOBUF_DIR=$(mktemp -d)
+GOOS=$(go env GOOS)
+GOARCH=$(go env GOARCH)
 
-# Use `go tool dist list` for the full list of targets
-TARGET="$(go env GOOS)-$(go env GOARCH)"
-TARGET_ORIG=$TARGET
+case "${GOOS}-${GOARCH}" in
+  darwin-amd64)  TARGET="osx-x86_64" ;;
+  darwin-arm64)  TARGET="osx-aarch_64" ;;
+  linux-amd64)   TARGET="linux-x86_64" ;;
+  linux-arm64)   TARGET="linux-aarch_64" ;;
+  linux-386)     TARGET="linux-x86_32" ;;
+  linux-ppc64le) TARGET="linux-ppcle_64" ;;
+  windows-amd64) TARGET="win64" ;;
+  windows-386)   TARGET="win32" ;;
+  *)
+    echo "Unsupported platform: ${GOOS}-${GOARCH}"
+    echo "Please install protoc manually from:"
+    echo "https://github.com/protocolbuffers/protobuf/releases"
+    exit 1
+    ;;
+esac
 
-# Fix up OS/ARCH to get proper download link for https://github.com/protocolbuffers/protobuf/releases
+mkdir -p "${BIN_DIR}"
+curl -sL -o "${PROTOBUF_DIR}/protobuf.zip" \
+  "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-${TARGET}.zip"
+unzip -qo "${PROTOBUF_DIR}/protobuf.zip" -d "${PROTOBUF_DIR}/protobuf"
+cp "${PROTOBUF_DIR}/protobuf/bin/protoc" "${BIN_DIR}/protoc"
+rm -rf "${BIN_DIR}/include"
+cp -r "${PROTOBUF_DIR}/protobuf/include" "${BIN_DIR}/include"
+rm -rf "${PROTOBUF_DIR}"
 
-# Darwin
-TARGET=${TARGET/darwin-amd64/osx-x86_64}
-TARGET=${TARGET/darwin-arm64/osx-aarch_64}
+# Download status.proto locally for builds that don't rely on /usr/local/include.
+mkdir -p "${BIN_DIR}/include/google/rpc"
+curl -sL \
+  https://raw.githubusercontent.com/grpc/grpc/v1.45.2/src/proto/grpc/status/status.proto \
+  -o "${BIN_DIR}/include/google/rpc/status.proto"
 
-# Windows
-TARGET=${TARGET/windows-amd64/win64}
-TARGET=${TARGET/windows-386/win32}
-
-# Linux
-TARGET=${TARGET/linux-386/linux-x86_32}
-TARGET=${TARGET/linux-amd64/linux-x86_64}
-TARGET=${TARGET/linux-arm64/linux-aarch_64}
-TARGET=${TARGET/linux-ppc64le/linux-ppcle_64}
-
-if [[ $TARGET != $TARGET_ORIG ]]
-then
-  wget -O "$PROTOBUF_DIR/protobuf" "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOBUF_VERSION/protoc-$PROTOBUF_VERSION-$TARGET.zip"
-  unzip "$PROTOBUF_DIR/protobuf" -d /usr/local
+# Install protobuf includes system-wide if possible.
+if [ -d /usr/local/include ] && [ -w /usr/local/include ]; then
+  cp -r "${BIN_DIR}/include/google" /usr/local/include/
+  mkdir -p /usr/local/include/google/rpc
+  cp "${BIN_DIR}/include/google/rpc/status.proto" /usr/local/include/google/rpc/status.proto
+  echo "Protobuf includes installed to /usr/local/include"
 else
-  # Build from source
-  wget -O "$PROTOBUF_DIR/protobuf" "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOBUF_VERSION/protobuf-cpp-$PROTOBUF_VERSION.zip"
-  unzip "$PROTOBUF_DIR/protobuf" -d /usr/src/protobuf
-  cd "/usr/src/protobuf/protobuf-$PROTOBUF_VERSION"
-  ./autogen.sh
-  ./configure --disable-shared
-  make
-  make check
-  make install
-  ldconfig
+  echo "Cannot write to /usr/local/include - sudo required"
+  echo "Run:"
+  echo "  sudo mkdir -p /usr/local/include"
+  echo "  sudo cp -r ${BIN_DIR}/include/google /usr/local/include/"
+  echo "  sudo mkdir -p /usr/local/include/google/rpc"
+  echo "  sudo cp ${BIN_DIR}/include/google/rpc/status.proto /usr/local/include/google/rpc/status.proto"
 fi
-
-rm -rf "$PROTOBUF_DIR"
-
-# Download status.proto. grpc repos' one seems copied from
-# https://github.com/googleapis/googleapis/blob/master/google/rpc/status.proto,
-# but we use grpc's since the repos has tags/releases.
-mkdir -p /usr/local/include/google/rpc
-curl \
-	-L https://raw.githubusercontent.com/grpc/grpc/v1.45.2/src/proto/grpc/status/status.proto \
-	-o /usr/local/include/google/rpc/status.proto

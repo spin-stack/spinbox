@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+#
+# Install development tools for qemubox
+#
+set -eu -o pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+echo "Installing development tools..."
+
+echo "  Installing Go protobuf tools..."
+bash "${ROOT_DIR}/script/install-proto-tools"
+echo "    Go protobuf tools installed"
+
+echo "  Installing protoc compiler and includes..."
+bash "${ROOT_DIR}/script/install-protobuf"
+echo "    protoc compiler installed to bin/protoc"
+echo "    protobuf includes installed to bin/include"
+
+echo "  Installing tc-redirect-tap CNI plugin..."
+TC_REDIRECT_TAP_DIR=$(mktemp -d)
+git clone --depth=1 https://github.com/awslabs/tc-redirect-tap "${TC_REDIRECT_TAP_DIR}"
+
+# Build tc-redirect-tap (disable workspace mode to avoid module conflicts)
+(cd "${TC_REDIRECT_TAP_DIR}" && env GOWORK=off GOOS=linux GOARCH=amd64 go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
+
+# Install to /opt/cni/bin (requires sudo on most systems)
+if [ -d /opt/cni/bin ] && [ -w /opt/cni/bin ]; then
+  cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" /opt/cni/bin/
+  chmod +x /opt/cni/bin/tc-redirect-tap
+  echo "    tc-redirect-tap installed to /opt/cni/bin/tc-redirect-tap"
+else
+  echo "    Cannot write to /opt/cni/bin - manual installation required"
+  echo ""
+  echo "    Please run the following commands to complete setup:"
+  echo ""
+  echo "      sudo mkdir -p /opt/cni/bin"
+  echo "      sudo cp ${TC_REDIRECT_TAP_DIR}/tc-redirect-tap /opt/cni/bin/"
+  echo "      sudo chmod +x /opt/cni/bin/tc-redirect-tap"
+  echo ""
+  echo "    Binary is available at: ${TC_REDIRECT_TAP_DIR}/tc-redirect-tap"
+  echo ""
+fi
+
+# Keep the directory for manual installation if needed
+if [ -w /opt/cni/bin ]; then
+  rm -rf "${TC_REDIRECT_TAP_DIR}"
+fi
+
+echo ""
+echo "Setup complete!"
