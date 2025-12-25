@@ -3,7 +3,6 @@
 package cni
 
 import (
-	"context"
 	"encoding/json"
 	"net"
 	"os"
