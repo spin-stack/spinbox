@@ -7,7 +7,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/ttrpc"
 
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 func (s *service) client() (*ttrpc.Client, error) {

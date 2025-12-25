@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aledbf/beacon/containerd/vm"
-	"github.com/aledbf/beacon/containerd/vm/qemu"
+	"github.com/aledbf/qemubox/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/vm/qemu"
 )
 
 func TestMain(m *testing.M) {

@@ -8,8 +8,8 @@ import (
 
 	"github.com/containerd/errdefs"
 
-	systemapi "github.com/aledbf/beacon/containerd/api/services/system/v1"
-	"github.com/aledbf/beacon/containerd/vm"
+	systemapi "github.com/aledbf/qemubox/containerd/api/services/system/v1"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 func TestSystemInfo(t *testing.T) {

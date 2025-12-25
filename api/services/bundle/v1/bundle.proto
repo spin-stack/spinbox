@@ -4,7 +4,7 @@ syntax = "proto3";
 
 package containerd.vminitd.services.bundle.v1;
 
-option go_package = "github.com/aledbf/beacon/containerd/api/services/bundle/v1;bundle";
+option go_package = "github.com/aledbf/qemubox/containerd/api/services/bundle/v1;bundle";
 
 service Bundle {
 	rpc Create(CreateRequest) returns (CreateResponse);

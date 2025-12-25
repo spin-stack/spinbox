@@ -27,21 +27,21 @@ func TestNewCNIManager(t *testing.T) {
 			name:        "valid configuration",
 			confDir:     "/etc/cni/net.d",
 			binDir:      "/opt/cni/bin",
-			networkName: "beacon-net",
+			networkName: "qemubox-net",
 			expectError: false,
 		},
 		{
 			name:        "empty conf dir",
 			confDir:     "",
 			binDir:      "/opt/cni/bin",
-			networkName: "beacon-net",
+			networkName: "qemubox-net",
 			expectError: true,
 		},
 		{
 			name:        "empty bin dir",
 			confDir:     "/etc/cni/net.d",
 			binDir:      "",
-			networkName: "beacon-net",
+			networkName: "qemubox-net",
 			expectError: true,
 		},
 		{
@@ -372,11 +372,11 @@ func TestCNIManager_NetworkNameValidation(t *testing.T) {
 		networkName string
 		valid       bool
 	}{
-		{"simple name", "beacon-net", true},
-		{"name with numbers", "beacon-net-123", true},
-		{"name with underscores", "beacon_net", true},
+		{"simple name", "qemubox-net", true},
+		{"name with numbers", "qemubox-net-123", true},
+		{"name with underscores", "qemubox_net", true},
 		{"empty name", "", false},                // Empty name is not allowed
-		{"name with spaces", "beacon net", true}, // CNI spec allows various names
+		{"name with spaces", "qemubox net", true}, // CNI spec allows various names
 	}
 
 	for _, tt := range tests {

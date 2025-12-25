@@ -1,8 +1,8 @@
-# Build the Linux kernel, initrd, and containerd shim for running beaconbox
+# Build the Linux kernel, initrd, and containerd shim for running qemubox
 # This multi-stage build produces:
 # - Custom Linux kernel with container/virtualization support
 # - initrd with vminitd and crun
-# - containerd shim for beaconbox runtime
+# - containerd shim for qemubox runtime
 
 # Base image versions
 ARG GO_VERSION=1.25.4
@@ -116,7 +116,7 @@ EOT
 
 FROM base AS shim-build
 
-WORKDIR /go/src/github.com/containerd/beaconbox
+WORKDIR /go/src/github.com/containerd/qemubox
 
 ARG GO_DEBUG_GCFLAGS
 ARG GO_GCFLAGS
@@ -128,11 +128,11 @@ ARG TARGETPLATFORM
 
 RUN --mount=type=bind,target=.,rw \
     --mount=type=cache,target=/root/.cache/go-build,id=shim-build-$TARGETPLATFORM \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build ${GO_DEBUG_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o /build/containerd-shim-beaconbox-v1 ${GO_LDFLAGS} -tags 'no_grpc' ./cmd/containerd-shim-beaconbox-v1
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build ${GO_DEBUG_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o /build/containerd-shim-qemubox-v1 ${GO_LDFLAGS} -tags 'no_grpc' ./cmd/containerd-shim-qemubox-v1
 
 FROM base AS vminit-build
 
-WORKDIR /go/src/github.com/containerd/beaconbox
+WORKDIR /go/src/github.com/containerd/qemubox
 
 ARG GO_DEBUG_GCFLAGS
 ARG GO_GCFLAGS
@@ -179,7 +179,7 @@ RUN <<EOT
     fi
 
     mkdir /build
-    (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/beacon-initrd
+    (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/qemubox-initrd
 EOT
 
 # ============================================================================
@@ -188,14 +188,14 @@ EOT
 
 FROM scratch AS kernel
 ARG KERNEL_ARCH="x86_64"
-COPY --from=kernel-build /build/kernel /beacon-kernel-${KERNEL_ARCH}
+COPY --from=kernel-build /build/kernel /qemubox-kernel-${KERNEL_ARCH}
 COPY --from=kernel-build /build/kernel-config /kernel-config
 
 FROM scratch AS initrd
-COPY --from=initrd-build /build/beacon-initrd /beacon-initrd
+COPY --from=initrd-build /build/qemubox-initrd /qemubox-initrd
 
 FROM scratch AS shim
-COPY --from=shim-build /build/containerd-shim-beaconbox-v1 /containerd-shim-beaconbox-v1
+COPY --from=shim-build /build/containerd-shim-qemubox-v1 /containerd-shim-qemubox-v1
 
 # ============================================================================
 # Development Environment
@@ -210,8 +210,8 @@ FROM ${GOLANG_IMAGE} AS dev
 ARG CONTAINERD_VERSION=2.1.4
 ARG TARGETARCH
 
-ENV PATH=/go/src/github.com/aledbf/beacon/containerd/_output:$PATH
-WORKDIR /go/src/github.com/containerd/beaconbox
+ENV PATH=/go/src/github.com/aledbf/qemubox/containerd/_output:$PATH
+WORKDIR /go/src/github.com/containerd/qemubox
 
 RUN --mount=type=cache,sharing=locked,id=dev-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=dev-aptcache,target=/var/cache/apt \

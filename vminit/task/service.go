@@ -35,10 +35,10 @@ import (
 	"github.com/containerd/typeurl/v2"
 	"github.com/moby/sys/userns"
 
-	"github.com/aledbf/beacon/containerd/vminit/systools"
-	"github.com/aledbf/beacon/containerd/vminit/process"
-	"github.com/aledbf/beacon/containerd/vminit/runc"
-	"github.com/aledbf/beacon/containerd/vminit/stream"
+	"github.com/aledbf/qemubox/containerd/vminit/systools"
+	"github.com/aledbf/qemubox/containerd/vminit/process"
+	"github.com/aledbf/qemubox/containerd/vminit/runc"
+	"github.com/aledbf/qemubox/containerd/vminit/stream"
 )
 
 var (

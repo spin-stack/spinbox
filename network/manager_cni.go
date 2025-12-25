@@ -9,8 +9,8 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/beacon/containerd/network/cni"
-	boltstore "github.com/aledbf/beacon/containerd/store"
+	"github.com/aledbf/qemubox/containerd/network/cni"
+	boltstore "github.com/aledbf/qemubox/containerd/store"
 )
 
 // newCNINetworkManager creates a NetworkManager configured for CNI mode.

@@ -2,12 +2,12 @@
 
 syntax = "proto3";
 
-package beaconbox.services.vmevents.v1;
+package qemubox.services.vmevents.v1;
 
 import "github.com/containerd/containerd/api/types/event.proto";
 import "google/protobuf/empty.proto";
 
-option go_package = "github.com/aledbf/beacon/containerd/api/services/vmevents/v1;vmevents";
+option go_package = "github.com/aledbf/qemubox/containerd/api/services/vmevents/v1;vmevents";
 
 service Events {
 	// Stream events

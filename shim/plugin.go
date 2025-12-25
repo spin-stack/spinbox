@@ -9,7 +9,7 @@ import (
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 
-	"github.com/aledbf/beacon/containerd/shim/task"
+	"github.com/aledbf/qemubox/containerd/shim/task"
 )
 
 func init() {

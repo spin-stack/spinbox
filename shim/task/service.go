@@ -1,4 +1,4 @@
-// Package task implements the containerd task service for beaconbox runtime.
+// Package task implements the containerd task service for qemubox runtime.
 // It manages VM lifecycle, container creation, and I/O streams within the shim.
 package task
 
@@ -27,7 +27,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 
-	"github.com/aledbf/beacon/containerd/paths"
+	"github.com/aledbf/qemubox/containerd/paths"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/errdefs/pkg/errgrpc"
@@ -37,16 +37,16 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
-	bundleAPI "github.com/aledbf/beacon/containerd/api/services/bundle/v1"
-	systemAPI "github.com/aledbf/beacon/containerd/api/services/system/v1"
-	"github.com/aledbf/beacon/containerd/api/services/vmevents/v1"
-	"github.com/aledbf/beacon/containerd/network"
-	"github.com/aledbf/beacon/containerd/shim/bundle"
-	boltstore "github.com/aledbf/beacon/containerd/store"
-	"github.com/aledbf/beacon/containerd/vm"
+	bundleAPI "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
+	systemAPI "github.com/aledbf/qemubox/containerd/api/services/system/v1"
+	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
+	"github.com/aledbf/qemubox/containerd/network"
+	"github.com/aledbf/qemubox/containerd/shim/bundle"
+	boltstore "github.com/aledbf/qemubox/containerd/store"
+	"github.com/aledbf/qemubox/containerd/vm"
 
-	"github.com/aledbf/beacon/containerd/shim/cpuhotplug"
-	"github.com/aledbf/beacon/containerd/vm/qemu"
+	"github.com/aledbf/qemubox/containerd/shim/cpuhotplug"
+	"github.com/aledbf/qemubox/containerd/vm/qemu"
 )
 
 const (
@@ -164,7 +164,7 @@ func checkKVM() error {
 }
 
 // initNetworkManager creates and initializes a new NetworkManager instance.
-// Beacon uses CNI (Container Network Interface) for all network management.
+// Qemubox uses CNI (Container Network Interface) for all network management.
 // This store persists CNI network configuration metadata; IP allocation
 // is delegated to CNI IPAM plugins (state stored in /var/lib/cni/networks/).
 func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, error) {
@@ -1170,7 +1170,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	config := cpuhotplug.DefaultConfig()
 
 	// Allow environment variable overrides
-	if interval := os.Getenv("BEACON_CPU_HOTPLUG_INTERVAL"); interval != "" {
+	if interval := os.Getenv("QEMUBOX_CPU_HOTPLUG_INTERVAL"); interval != "" {
 		if d, err := time.ParseDuration(interval); err == nil {
 			config.MonitorInterval = d
 		}

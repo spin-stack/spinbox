@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/vm"
 	"github.com/containerd/ttrpc"
 )
 

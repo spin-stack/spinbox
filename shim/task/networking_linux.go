@@ -10,8 +10,8 @@ import (
 	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/resolvconf"
 
-	"github.com/aledbf/beacon/containerd/network"
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/network"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 // setupNetworking sets up networking using NetworkManager for dynamic IP allocation

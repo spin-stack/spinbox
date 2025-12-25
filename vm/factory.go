@@ -24,8 +24,8 @@ type Factory interface {
 // GetVMType determines which VMM to use.
 // Always returns QEMU as it is the only supported VMM backend.
 func GetVMType() VMType {
-	if vmm := os.Getenv("BEACON_VMM"); vmm != "" && vmm != "qemu" {
-		log.L.WithField("vmm", vmm).Warn("only QEMU is supported, ignoring BEACON_VMM value")
+	if vmm := os.Getenv("QEMUBOX_VMM"); vmm != "" && vmm != "qemu" {
+		log.L.WithField("vmm", vmm).Warn("only QEMU is supported, ignoring QEMUBOX_VMM value")
 	}
 	return VMTypeQEMU
 }

@@ -4,5 +4,5 @@
 [worker.containerd]
   enabled = true
   namespace = "default"
-  address = "/var/run/beacon/containerd.sock"
+  address = "/var/run/qemubox/containerd.sock"
   platforms = [ "linux/amd64" ]

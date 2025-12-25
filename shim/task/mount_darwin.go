@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/vm"
 	"github.com/containerd/containerd/api/types"
 )
 

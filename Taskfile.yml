@@ -1,4 +1,4 @@
-# Beacon Containerd Runtime - Task Runner
+# Qemubox Containerd Runtime - Task Runner
 #
 # Quick Start:
 #   task build           # Build everything (shim, kernel, initrd)
@@ -60,10 +60,10 @@ tasks:
     cmds:
       - |
         set -eou pipefail
-        echo "🐳 Building containerd-shim-beaconbox-v1..."
+        echo "🐳 Building containerd-shim-qemubox-v1..."
         mkdir -p _output
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/containerd-shim-beaconbox-v1 ./cmd/containerd-shim-beaconbox-v1
-        echo "✓ Shim built: _output/containerd-shim-beaconbox-v1 (static)"
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/containerd-shim-qemubox-v1 ./cmd/containerd-shim-qemubox-v1
+        echo "✓ Shim built: _output/containerd-shim-qemubox-v1 (static)"
 
   build:vminitd:
     desc: Build vminitd binary (static, Linux x86_64)
@@ -82,7 +82,7 @@ tasks:
         set -eou pipefail
         echo "🐳 Building initrd..."
         {{.BUILDX}} bake initrd
-        echo "✓ Initrd built: _output/beacon-initrd"
+        echo "✓ Initrd built: _output/qemubox-initrd"
 
   build:kernel:
     desc: Build kernel
@@ -101,7 +101,7 @@ tasks:
         echo "🐳 Building QEMU..."
         {{.BUILDX}} bake qemu
         echo "✓ QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
-        echo "✓ QEMU firmware: _output/share/beacon/qemu/"
+        echo "✓ QEMU firmware: _output/share/qemubox/qemu/"
 
   # ==========================================================================
   # Development Tasks
@@ -116,13 +116,13 @@ tasks:
         {{.BUILDX}} bake dev
         echo "🐳 Starting development shell..."
         {{.DOCKER}} run --rm -it --privileged \
-          --name beacon-dev \
+          --name qemubox-dev \
           -v ./:/go/src/{{.MODULE_NAME}} \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -w /go/src/{{.MODULE_NAME}} \
           -e KERNEL_ARCH={{.ARCH}} \
           -e KERNEL_NPROC \
-          beacon-dev
+          qemubox-dev
 
   menuconfig:
     desc: Configure kernel (requires KERNEL_VERSION and KERNEL_ARCH env vars)
@@ -147,7 +147,7 @@ tasks:
           -w /usr/src/linux \
           -e KCONFIG_CONFIG=/config/config-${KERNEL_VERSION}-${KERNEL_ARCH} \
           -e TERM=${TERM:-xterm-256color} \
-          beacon-menuconfig \
+          qemubox-menuconfig \
           bash -c "make ARCH=${KERNEL_ARCH} menuconfig && cp .config /config/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
 
   # ==========================================================================
@@ -376,8 +376,8 @@ tasks:
         TMPDIR=$(mktemp -d)
         trap "rm -rf $TMPDIR" EXIT
 
-        cp -R . $TMPDIR/beacon
-        cd $TMPDIR/beacon
+        cp -R . $TMPDIR/qemubox
+        cd $TMPDIR/qemubox
         {{.GO}} mod tidy
         {{.GO}} mod verify
 
@@ -419,56 +419,56 @@ tasks:
 
         # Determine version from git tag or use "dev"
         VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
-        RELEASE_NAME="beacon-${VERSION}-linux-x86_64"
+        RELEASE_NAME="qemubox-${VERSION}-linux-x86_64"
         RELEASE_DIR="_output/release/${RELEASE_NAME}"
 
         # Clean and create release directory structure
         rm -rf _output/release
-        mkdir -p "${RELEASE_DIR}/usr/share/beacon/bin"
-        mkdir -p "${RELEASE_DIR}/usr/share/beacon/kernel"
-        mkdir -p "${RELEASE_DIR}/usr/share/beacon/config"
+        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/bin"
+        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/kernel"
+        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/config"
 
         echo "📂 Copying artifacts to release structure..."
 
-        # Copy kernel and initrd to /usr/share/beacon/kernel
-        if [ -f "_output/beacon-kernel-x86_64" ]; then
-          cp _output/beacon-kernel-x86_64 "${RELEASE_DIR}/usr/share/beacon/kernel/"
-          echo "  ✓ beacon-kernel-x86_64"
+        # Copy kernel and initrd to /usr/share/qemubox/kernel
+        if [ -f "_output/qemubox-kernel-x86_64" ]; then
+          cp _output/qemubox-kernel-x86_64 "${RELEASE_DIR}/usr/share/qemubox/kernel/"
+          echo "  ✓ qemubox-kernel-x86_64"
         fi
 
-        if [ -f "_output/beacon-initrd" ]; then
-          cp _output/beacon-initrd "${RELEASE_DIR}/usr/share/beacon/kernel/"
-          echo "  ✓ beacon-initrd"
+        if [ -f "_output/qemubox-initrd" ]; then
+          cp _output/qemubox-initrd "${RELEASE_DIR}/usr/share/qemubox/kernel/"
+          echo "  ✓ qemubox-initrd"
         fi
 
-        # Copy shim binary to /usr/share/beacon/bin
-        if [ -f "_output/containerd-shim-beaconbox-v1" ]; then
-          cp _output/containerd-shim-beaconbox-v1 "${RELEASE_DIR}/usr/share/beacon/bin/"
-          echo "  ✓ containerd-shim-beaconbox-v1"
+        # Copy shim binary to /usr/share/qemubox/bin
+        if [ -f "_output/containerd-shim-qemubox-v1" ]; then
+          cp _output/containerd-shim-qemubox-v1 "${RELEASE_DIR}/usr/share/qemubox/bin/"
+          echo "  ✓ containerd-shim-qemubox-v1"
         fi
 
         # Copy QEMU binaries and firmware files (built during build phase)
         echo "📦 Adding QEMU binaries and firmware..."
         if [ -f "_output/bin/qemu-system-x86_64" ]; then
-          cp _output/bin/qemu-system-x86_64 "${RELEASE_DIR}/usr/share/beacon/bin/"
-          chmod +x "${RELEASE_DIR}/usr/share/beacon/bin/qemu-system-x86_64"
+          cp _output/bin/qemu-system-x86_64 "${RELEASE_DIR}/usr/share/qemubox/bin/"
+          chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/qemu-system-x86_64"
           echo "  ✓ qemu-system-x86_64"
         else
           echo "  ⚠ qemu-system-x86_64 not found - skipping"
         fi
 
         if [ -f "_output/bin/qemu-img" ]; then
-          cp _output/bin/qemu-img "${RELEASE_DIR}/usr/share/beacon/bin/"
-          chmod +x "${RELEASE_DIR}/usr/share/beacon/bin/qemu-img"
+          cp _output/bin/qemu-img "${RELEASE_DIR}/usr/share/qemubox/bin/"
+          chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/qemu-img"
           echo "  ✓ qemu-img"
         else
           echo "  ⚠ qemu-img not found - skipping"
         fi
 
         # Copy QEMU BIOS/firmware files
-        if [ -d "_output/share/beacon/qemu" ]; then
-          mkdir -p "${RELEASE_DIR}/usr/share/beacon/qemu"
-          cp -r _output/share/beacon/qemu/* "${RELEASE_DIR}/usr/share/beacon/qemu/"
+        if [ -d "_output/share/qemubox/qemu" ]; then
+          mkdir -p "${RELEASE_DIR}/usr/share/qemubox/qemu"
+          cp -r _output/share/qemubox/qemu/* "${RELEASE_DIR}/usr/share/qemubox/qemu/"
           echo "  ✓ QEMU firmware files"
         else
           echo "  ⚠ QEMU firmware files not found - skipping"
@@ -476,13 +476,13 @@ tasks:
 
         # Copy configuration files
         echo "📂 Copying configuration files..."
-        cp -r release/config/* "${RELEASE_DIR}/usr/share/beacon/config/"
+        cp -r release/config/* "${RELEASE_DIR}/usr/share/qemubox/config/"
         echo "  ✓ config files (buildkit, containerd)"
 
-        # Copy systemd service files to /usr/share/beacon/systemd
+        # Copy systemd service files to /usr/share/qemubox/systemd
         echo "📂 Copying systemd services..."
-        mkdir -p "${RELEASE_DIR}/usr/share/beacon/systemd"
-        cp release/systemd/*.service "${RELEASE_DIR}/usr/share/beacon/systemd/"
+        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/systemd"
+        cp release/systemd/*.service "${RELEASE_DIR}/usr/share/qemubox/systemd/"
         echo "  ✓ systemd services"
 
         # Copy install/uninstall scripts to tarball root (for easy access)
@@ -504,8 +504,8 @@ tasks:
         fi
 
         echo "📂 Extracting nerdctl-full components..."
-        # Extract core binaries to /usr/share/beacon/bin
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/" \
+        # Extract core binaries to /usr/share/qemubox/bin
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" \
           bin/nerdctl \
           bin/containerd \
           bin/containerd-shim-runc-v2 \
@@ -513,13 +513,13 @@ tasks:
           bin/runc
         echo "  ✓ containerd, runc, ctr, nerdctl"
 
-        # Extract buildkitd and buildctl to /usr/share/beacon/bin
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/" bin/buildkitd bin/buildctl
+        # Extract buildkitd and buildctl to /usr/share/qemubox/bin
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" bin/buildkitd bin/buildctl
         echo "  ✓ buildkit"
 
-        # Extract CNI plugins to /usr/share/beacon/libexec/cni
-        mkdir -p "${RELEASE_DIR}/usr/share/beacon/libexec/cni"
-        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/libexec/cni" --strip-components=2 \
+        # Extract CNI plugins to /usr/share/qemubox/libexec/cni
+        mkdir -p "${RELEASE_DIR}/usr/share/qemubox/libexec/cni"
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/libexec/cni" --strip-components=2 \
           libexec/cni/bandwidth \
           libexec/cni/bridge \
           libexec/cni/dhcp \
@@ -548,8 +548,8 @@ tasks:
 
         # Copy to release directory
         cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
-          "${RELEASE_DIR}/usr/share/beacon/libexec/cni/"
-        chmod +x "${RELEASE_DIR}/usr/share/beacon/libexec/cni/tc-redirect-tap"
+          "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/"
+        chmod +x "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/tc-redirect-tap"
         echo "  ✓ tc-redirect-tap CNI plugin"
 
         # Create tarball

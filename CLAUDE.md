@@ -1,8 +1,8 @@
-# Containerd Runtime - beaconbox Shim
+# Containerd Runtime - qemubox Shim
 
 **Technology**: Go 1.25+, containerd shim API, QEMU, KVM
 **Entry Points**:
-- `containerd/cmd/containerd-shim-beaconbox-v1/main.go` (shim)
+- `containerd/cmd/containerd-shim-qemubox-v1/main.go` (shim)
 - `containerd/cmd/vminitd/main.go` (VM init daemon)
 **Parent Context**: This extends [../CLAUDE.md](../CLAUDE.md)
 
@@ -14,7 +14,7 @@
 
 ```
 Host (containerd)
-└─> containerd-shim-beaconbox-v1
+└─> containerd-shim-qemubox-v1
     ├─> QEMU (VMM)
     │   └─> Linux VM
     │       └─> vminitd (PID 1)
@@ -28,18 +28,18 @@ Host (containerd)
 
 ### Fixed Installation Paths
 ```
-/usr/share/beacon/bin/qemu-system-x86_64  # VMM binary
-/usr/share/beacon/kernel/beacon-kernel-x86_64  # VM kernel
-/usr/share/beacon/kernel/beacon-initrd    # Initial ramdisk
-/var/lib/beacon/cni-config.db             # CNI network configuration metadata
+/usr/share/qemubox/bin/qemu-system-x86_64  # VMM binary
+/usr/share/qemubox/kernel/qemubox-kernel-x86_64  # VM kernel
+/usr/share/qemubox/kernel/qemubox-initrd    # Initial ramdisk
+/var/lib/qemubox/cni-config.db             # CNI network configuration metadata
 /var/lib/cni/networks/                    # CNI IPAM state (IP allocations)
-/var/log/beacon/                          # VM logs
+/var/log/qemubox/                          # VM logs
 ```
 
 Override with environment variables:
-- `BEACON_SHARE_DIR` (default: `/usr/share/beacon`)
-- `BEACON_STATE_DIR` (default: `/var/lib/beacon`)
-- `BEACON_LOG_DIR` (default: `/var/log/beacon`)
+- `QEMUBOX_SHARE_DIR` (default: `/usr/share/qemubox`)
+- `QEMUBOX_STATE_DIR` (default: `/var/lib/qemubox`)
+- `QEMUBOX_LOG_DIR` (default: `/var/log/qemubox`)
 
 ---
 
@@ -65,7 +65,7 @@ Override with environment variables:
 - **CNI-based networking**: Uses standard CNI plugin chains exclusively
 - Creates TAP devices per VM using CNI
 - IP allocation managed by CNI IPAM plugins (host-local, static, dhcp)
-- Creates `beacon0` bridge (10.88.0.0/16) via CNI bridge plugin
+- Creates `qemubox0` bridge (10.88.0.0/16) via CNI bridge plugin
 - Firewall rules managed by CNI firewall plugin
 - **Key files**:
   - `network/network.go` - Network manager interface
@@ -135,32 +135,32 @@ go test -v -timeout 10m ./integration/...
 
 ```bash
 # Check bridge
-ip link show beacon0
-ip addr show beacon0
+ip link show qemubox0
+ip addr show qemubox0
 
 # Check TAP devices
 ip link show | grep -E "tap|beacon"
 
 # Verify CNI configuration
 ls /etc/cni/net.d/
-cat /etc/cni/net.d/10-beacon.conflist | jq .
+cat /etc/cni/net.d/10-qemubox.conflist | jq .
 
 # Check CNI plugins
 ls -la /opt/cni/bin/
 
 # Check CNI network metadata
-ls -la /var/lib/beacon/cni-config.db
+ls -la /var/lib/qemubox/cni-config.db
 
 # Check CNI IPAM state (host-local)
-ls -la /var/lib/cni/networks/beacon-net/
+ls -la /var/lib/cni/networks/qemubox-net/
 
 # Check firewall rules (managed by CNI)
-nft list ruleset | grep beacon
+nft list ruleset | grep qemubox
 
 # Test CNI plugin manually
 CNI_COMMAND=ADD CNI_CONTAINERID=test CNI_NETNS=/var/run/netns/test \
 CNI_IFNAME=eth0 CNI_PATH=/opt/cni/bin \
-/opt/cni/bin/bridge < /etc/cni/net.d/10-beacon.conflist
+/opt/cni/bin/bridge < /etc/cni/net.d/10-qemubox.conflist
 ```
 
 **Common CNI Issues**:
@@ -175,13 +175,13 @@ ls /etc/cni/net.d/*.conflist || echo "Create CNI config"
 sudo chmod +x /opt/cni/bin/*
 
 # IP allocation conflicts
-sudo rm -rf /var/lib/cni/networks/beacon-net/
+sudo rm -rf /var/lib/cni/networks/qemubox-net/
 ```
 
 ### Debugging VM Startup
 ```bash
 # Check logs
-tail -f /var/log/beacon/vm-*.log
+tail -f /var/log/qemubox/vm-*.log
 
 # Check vsock connections
 ss -x | grep vsock
@@ -259,8 +259,8 @@ task build:qemu
 sudo apt-get install qemu-system-x86
 
 # Option 3: Install to beacon directory
-sudo mkdir -p /usr/share/beacon/bin
-sudo cp /usr/bin/qemu-system-x86_64 /usr/share/beacon/bin/
+sudo mkdir -p /usr/share/qemubox/bin
+sudo cp /usr/bin/qemu-system-x86_64 /usr/share/qemubox/bin/
 ```
 
 ### "Permission denied on /dev/kvm"
@@ -270,7 +270,7 @@ sudo usermod -aG kvm $USER
 # Log out and log back in
 ```
 
-### "Network device beacon0 not found"
+### "Network device qemubox0 not found"
 - Bridge is created automatically on first container
 - Check logs for initialization errors
 - Verify nftables is installed
@@ -279,16 +279,16 @@ sudo usermod -aG kvm $USER
 
 ```bash
 # Check CNI network metadata
-ls -la /var/lib/beacon/cni-config.db
+ls -la /var/lib/qemubox/cni-config.db
 
 # Check CNI IPAM state
-ls -la /var/lib/cni/networks/beacon-net/
+ls -la /var/lib/cni/networks/qemubox-net/
 
 # Clear stale allocations
-sudo rm -rf /var/lib/cni/networks/beacon-net/*
+sudo rm -rf /var/lib/cni/networks/qemubox-net/*
 
 # Restart containerd
-systemctl restart beacon-containerd
+systemctl restart qemubox-containerd
 ```
 
 ### "CNI plugin not found"
@@ -300,9 +300,9 @@ mkdir -p /opt/cni/bin
 wget https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz
 tar -xzf cni-plugins-linux-amd64-v1.4.0.tgz -C /opt/cni/bin
 
-# Solution 2: Verify BEACON_CNI_BIN_DIR points to correct directory
-echo $BEACON_CNI_BIN_DIR
-ls $BEACON_CNI_BIN_DIR
+# Solution 2: Verify QEMUBOX_CNI_BIN_DIR points to correct directory
+echo $QEMUBOX_CNI_BIN_DIR
+ls $QEMUBOX_CNI_BIN_DIR
 
 # Solution 3: Check permissions
 sudo chmod +x /opt/cni/bin/*
@@ -319,7 +319,7 @@ go build -o /opt/cni/bin/tc-redirect-tap
 chmod +x /opt/cni/bin/tc-redirect-tap
 
 # Solution 2: Add tc-redirect-tap to CNI configuration
-# Edit /etc/cni/net.d/10-beacon.conflist
+# Edit /etc/cni/net.d/10-qemubox.conflist
 # Add: {"type": "tc-redirect-tap"} to plugins array
 
 # Solution 3: Use a CNI plugin that directly creates TAP devices
@@ -345,10 +345,10 @@ chmod +x /opt/cni/bin/tc-redirect-tap
 ### Network Setup Flow
 
 1. **Network manager init**: `network/network.go:New()`
-2. **Create beacon0 bridge**: If not exists
+2. **Create qemubox0 bridge**: If not exists
 3. **Allocate IP from pool**: 10.88.0.2 - 10.88.255.254
-4. **Create TAP device**: `beacon-<hash>`
-5. **Attach TAP to bridge**: Link TAP to beacon0
+4. **Create TAP device**: `qemubox-<hash>`
+5. **Attach TAP to bridge**: Link TAP to qemubox0
 6. **Configure nftables**: NAT and forwarding rules
 7. **Pass to QEMU**: TAP device and IP as kernel params
 
@@ -412,12 +412,12 @@ Set environment variables to customize CNI settings:
 
 ```bash
 # Optional: Override default paths
-export BEACON_CNI_CONF_DIR=/etc/cni/net.d      # Default
-export BEACON_CNI_BIN_DIR=/opt/cni/bin         # Default
-export BEACON_CNI_NETWORK=beacon-net           # Default
+export QEMUBOX_CNI_CONF_DIR=/etc/cni/net.d      # Default
+export QEMUBOX_CNI_BIN_DIR=/opt/cni/bin         # Default
+export QEMUBOX_CNI_NETWORK=qemubox-net           # Default
 
 # Restart containerd shim
-systemctl restart beacon-containerd
+systemctl restart qemubox-containerd
 ```
 
 **CNI Plugin Installation**:
@@ -433,15 +433,15 @@ cd firecracker-go-sdk/cni/tc-redirect-tap
 go build -o /opt/cni/bin/tc-redirect-tap
 ```
 
-**Example CNI Configuration** (`/etc/cni/net.d/10-beacon.conflist`):
+**Example CNI Configuration** (`/etc/cni/net.d/10-qemubox.conflist`):
 ```json
 {
   "cniVersion": "1.0.0",
-  "name": "beacon-net",
+  "name": "qemubox-net",
   "plugins": [
     {
       "type": "bridge",
-      "bridge": "beacon0",
+      "bridge": "qemubox0",
       "isGateway": true,
       "ipMasq": true,
       "ipam": {
@@ -461,7 +461,7 @@ See `examples/cni/` for more configuration examples.
 ### IP Allocation and State
 
 - **IP allocation**: Managed by CNI IPAM plugins (host-local, static, dhcp)
-- **Network metadata**: `/var/lib/beacon/cni-config.db` (BoltDB - stores CNI network config)
+- **Network metadata**: `/var/lib/qemubox/cni-config.db` (BoltDB - stores CNI network config)
 - **IP allocation state**: `/var/lib/cni/networks/<network-name>/` (managed by CNI IPAM)
 - **Default subnet**: 10.88.0.0/16 (configured in CNI conflist)
   - Gateway: 10.88.0.1
@@ -471,7 +471,7 @@ See `examples/cni/` for more configuration examples.
 
 ```bash
 # View beacon firewall rules
-nft list ruleset | grep beacon_runner
+nft list ruleset | grep qemubox_runner
 
 # Tables created:
 # - beacon_runner_filter (forwarding)

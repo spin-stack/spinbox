@@ -9,16 +9,16 @@ disabled_plugins = [
 
 imports = [
   "/etc/containerd/conf.d/*.toml",
-  "/usr/share/beacon/config/containerd/conf.d/*.toml"
+  "/usr/share/qemubox/config/containerd/conf.d/*.toml"
 ]
 
 oom_score = 0
-root = "/var/lib/beacon/containerd"
-state = "/run/beacon/containerd"
+root = "/var/lib/qemubox/containerd"
+state = "/run/qemubox/containerd"
 version = 3
 
 [grpc]
-address = "/var/run/beacon/containerd.sock"
+address = "/var/run/qemubox/containerd.sock"
 gid = 0
 uid = 0
 
@@ -49,10 +49,10 @@ grpc_histogram = false
     sandbox = "registry.k8s.io/pause:3.10.1"
 
     [plugins."io.containerd.cri.v1.images".registry]
-    config_path = "/usr/share/beacon/config/containerd/certs.d:/usr/share/beacon/config/docker/certs.d"
+    config_path = "/usr/share/qemubox/config/containerd/certs.d:/usr/share/qemubox/config/docker/certs.d"
 
   [plugins."io.containerd.cri.v1.runtime"]
-  cdi_spec_dirs = [ "/usr/share/beacon/config/cdi", "/var/run/cdi" ]
+  cdi_spec_dirs = [ "/usr/share/qemubox/config/cdi", "/var/run/cdi" ]
   enable_cdi = true
   enable_selinux = false
   enable_unprivileged_icmp = true
@@ -61,8 +61,8 @@ grpc_histogram = false
 
     [plugins."io.containerd.cri.v1.runtime".cni]
     bin_dir = ""
-    bin_dirs = [ "/usr/share/beacon/libexec/cni" ]
-    conf_dir = "/usr/share/beacon/config/cni/net.d"
+    bin_dirs = [ "/usr/share/qemubox/libexec/cni" ]
+    conf_dir = "/usr/share/qemubox/config/cni/net.d"
     conf_template = ""
     ip_pref = ""
     max_conf_num = 1
@@ -97,16 +97,16 @@ sandboxer = "podsandbox"
   enable_tls_streaming = false
 
   [plugins."io.containerd.internal.v1.opt"]
-  path = "/usr/share/beacon/opt"
+  path = "/usr/share/qemubox/opt"
 
   [plugins."io.containerd.nri.v1.nri"]
   disable = false
   disable_connections = false
-  plugin_config_path = "/usr/share/beacon/config/nri/conf.d"
-  plugin_path = "/usr/share/beacon/nri/plugins"
+  plugin_config_path = "/usr/share/qemubox/config/nri/conf.d"
+  plugin_path = "/usr/share/qemubox/nri/plugins"
   plugin_registration_timeout = "5s"
   plugin_request_timeout = "2s"
-  socket_path = "/var/run/beacon/nri/nri.sock"
+  socket_path = "/var/run/qemubox/nri/nri.sock"
 
     [plugins."io.containerd.nri.v1.nri".default_validator]
     enable = false

@@ -10,8 +10,8 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/beacon/containerd/mountutil"
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/mountutil"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 // translateMountOptions translates standard mount options to virtiofs-compatible options.

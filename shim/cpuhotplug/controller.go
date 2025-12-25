@@ -9,7 +9,7 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/beacon/containerd/vm/qemu"
+	"github.com/aledbf/qemubox/containerd/vm/qemu"
 )
 
 // Controller manages dynamic vCPU allocation for a VM based on CPU usage

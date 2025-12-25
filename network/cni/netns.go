@@ -19,7 +19,7 @@ const (
 
 // CreateNetNS creates a new network namespace for CNI plugin execution.
 //
-// CNI plugins expect to run in a network namespace, even though Beacon VMs
+// CNI plugins expect to run in a network namespace, even though Qemubox VMs
 // don't use network namespaces for the actual containers. This function
 // creates a temporary network namespace that CNI plugins can use, which
 // will be cleaned up after TAP device extraction.

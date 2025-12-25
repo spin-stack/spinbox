@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aledbf/beacon/containerd/network"
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/network"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 // setupNetworking is a stub for Darwin

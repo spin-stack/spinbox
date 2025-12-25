@@ -17,7 +17,7 @@ import (
 	"github.com/containerd/plugin/registry"
 	"github.com/mdlayher/vsock"
 
-	"github.com/aledbf/beacon/containerd/vminit"
+	"github.com/aledbf/qemubox/containerd/vminit"
 )
 
 type serviceConfig struct {

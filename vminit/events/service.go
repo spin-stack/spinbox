@@ -13,7 +13,7 @@ import (
 	"github.com/containerd/typeurl/v2"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/aledbf/beacon/containerd/api/services/vmevents/v1"
+	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
 )
 
 func init() {

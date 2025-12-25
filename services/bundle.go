@@ -1,4 +1,4 @@
-// Package services registers containerd plugins used by beacon.
+// Package services registers containerd plugins used by qemubox.
 package services
 
 import (
@@ -13,8 +13,8 @@ import (
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
 
-	api "github.com/aledbf/beacon/containerd/api/services/bundle/v1"
-	"github.com/aledbf/beacon/containerd/vminit/bundle"
+	api "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
+	"github.com/aledbf/qemubox/containerd/vminit/bundle"
 )
 
 func init() {

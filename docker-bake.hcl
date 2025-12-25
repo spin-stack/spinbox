@@ -73,7 +73,7 @@ variable "DESTDIR" {
 target "menuconfig" {
   inherits = ["_common"]
   target = "kernel-build-base"
-  output = ["type=image,name=beacon-menuconfig"]
+  output = ["type=image,name=qemubox-menuconfig"]
 }
 
 # Build Linux kernel
@@ -118,7 +118,7 @@ group "default" {
 target "dev" {
   inherits = ["_common"]
   target = "dev"
-  output = ["type=image,name=beacon-dev"]
+  output = ["type=image,name=qemubox-dev"]
 }
 
 # ============================================================================

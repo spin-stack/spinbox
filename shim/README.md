@@ -1,6 +1,6 @@
-# containerd-shim-beaconbox-v1
+# containerd-shim-qemubox-v1
 
-This directory contains the source code for the `beaconbox` containerd shim.
+This directory contains the source code for the `qemubox` containerd shim.
 
 ## Overview
 

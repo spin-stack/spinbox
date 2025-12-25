@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 type factory struct{}

@@ -10,13 +10,13 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/beacon/containerd/network/cni"
-	"github.com/aledbf/beacon/containerd/store"
+	"github.com/aledbf/qemubox/containerd/network/cni"
+	"github.com/aledbf/qemubox/containerd/store"
 )
 
 const (
 	// Bridge name used by CNI (for compatibility)
-	bridgeName = "beacon0"
+	bridgeName = "qemubox0"
 )
 
 // NetworkMode represents the network management mode.
@@ -40,16 +40,16 @@ type NetworkConfig struct {
 	CNIBinDir string
 
 	// CNINetworkName is the name of the CNI network to use.
-	// Default: beacon-net
+	// Default: qemubox-net
 	CNINetworkName string
 }
 
 // LoadNetworkConfig loads network configuration from environment variables.
 //
 // Environment variables:
-//   - BEACON_CNI_CONF_DIR: CNI configuration directory (default: /etc/cni/net.d)
-//   - BEACON_CNI_BIN_DIR: CNI plugin binary directory (default: /opt/cni/bin)
-//   - BEACON_CNI_NETWORK: CNI network name (default: beacon-net)
+//   - QEMUBOX_CNI_CONF_DIR: CNI configuration directory (default: /etc/cni/net.d)
+//   - QEMUBOX_CNI_BIN_DIR: CNI plugin binary directory (default: /opt/cni/bin)
+//   - QEMUBOX_CNI_NETWORK: CNI network name (default: qemubox-net)
 //
 // The subnet is determined by the CNI IPAM plugin configuration.
 func LoadNetworkConfig() NetworkConfig {
@@ -57,21 +57,21 @@ func LoadNetworkConfig() NetworkConfig {
 		Mode:           NetworkModeCNI,
 		CNIConfDir:     "/etc/cni/net.d",
 		CNIBinDir:      "/opt/cni/bin",
-		CNINetworkName: "beacon-net",
+		CNINetworkName: "qemubox-net",
 	}
 
 	// Override CNI config directory if specified
-	if confDir := os.Getenv("BEACON_CNI_CONF_DIR"); confDir != "" {
+	if confDir := os.Getenv("QEMUBOX_CNI_CONF_DIR"); confDir != "" {
 		cfg.CNIConfDir = confDir
 	}
 
 	// Override CNI bin directory if specified
-	if binDir := os.Getenv("BEACON_CNI_BIN_DIR"); binDir != "" {
+	if binDir := os.Getenv("QEMUBOX_CNI_BIN_DIR"); binDir != "" {
 		cfg.CNIBinDir = binDir
 	}
 
 	// Override CNI network name if specified
-	if networkName := os.Getenv("BEACON_CNI_NETWORK"); networkName != "" {
+	if networkName := os.Getenv("QEMUBOX_CNI_NETWORK"); networkName != "" {
 		cfg.CNINetworkName = networkName
 	}
 

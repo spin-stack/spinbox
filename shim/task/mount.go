@@ -13,8 +13,8 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/beacon/containerd/erofs"
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/erofs"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 type diskOptions struct {

@@ -11,42 +11,42 @@ import (
 
 func TestLoadNetworkConfig_Defaults(t *testing.T) {
 	// Clear all CNI environment variables
-	os.Unsetenv("BEACON_CNI_CONF_DIR")
-	os.Unsetenv("BEACON_CNI_BIN_DIR")
-	os.Unsetenv("BEACON_CNI_NETWORK")
+	os.Unsetenv("QEMUBOX_CNI_CONF_DIR")
+	os.Unsetenv("QEMUBOX_CNI_BIN_DIR")
+	os.Unsetenv("QEMUBOX_CNI_NETWORK")
 
 	cfg := LoadNetworkConfig()
 
 	assert.Equal(t, NetworkModeCNI, cfg.Mode)
 	assert.Equal(t, "/etc/cni/net.d", cfg.CNIConfDir)
 	assert.Equal(t, "/opt/cni/bin", cfg.CNIBinDir)
-	assert.Equal(t, "beacon-net", cfg.CNINetworkName)
+	assert.Equal(t, "qemubox-net", cfg.CNINetworkName)
 }
 
 func TestLoadNetworkConfig_CustomCNIConfDir(t *testing.T) {
-	t.Setenv("BEACON_CNI_CONF_DIR", "/custom/cni/conf")
+	t.Setenv("QEMUBOX_CNI_CONF_DIR", "/custom/cni/conf")
 
 	cfg := LoadNetworkConfig()
 
 	assert.Equal(t, NetworkModeCNI, cfg.Mode)
 	assert.Equal(t, "/custom/cni/conf", cfg.CNIConfDir)
 	assert.Equal(t, "/opt/cni/bin", cfg.CNIBinDir)    // Default
-	assert.Equal(t, "beacon-net", cfg.CNINetworkName) // Default
+	assert.Equal(t, "qemubox-net", cfg.CNINetworkName) // Default
 }
 
 func TestLoadNetworkConfig_CustomCNIBinDir(t *testing.T) {
-	t.Setenv("BEACON_CNI_BIN_DIR", "/custom/cni/bin")
+	t.Setenv("QEMUBOX_CNI_BIN_DIR", "/custom/cni/bin")
 
 	cfg := LoadNetworkConfig()
 
 	assert.Equal(t, NetworkModeCNI, cfg.Mode)
 	assert.Equal(t, "/etc/cni/net.d", cfg.CNIConfDir) // Default
 	assert.Equal(t, "/custom/cni/bin", cfg.CNIBinDir)
-	assert.Equal(t, "beacon-net", cfg.CNINetworkName) // Default
+	assert.Equal(t, "qemubox-net", cfg.CNINetworkName) // Default
 }
 
 func TestLoadNetworkConfig_CustomCNINetwork(t *testing.T) {
-	t.Setenv("BEACON_CNI_NETWORK", "custom-network")
+	t.Setenv("QEMUBOX_CNI_NETWORK", "custom-network")
 
 	cfg := LoadNetworkConfig()
 
@@ -57,9 +57,9 @@ func TestLoadNetworkConfig_CustomCNINetwork(t *testing.T) {
 }
 
 func TestLoadNetworkConfig_AllCustomValues(t *testing.T) {
-	t.Setenv("BEACON_CNI_CONF_DIR", "/custom/conf")
-	t.Setenv("BEACON_CNI_BIN_DIR", "/custom/bin")
-	t.Setenv("BEACON_CNI_NETWORK", "custom-net")
+	t.Setenv("QEMUBOX_CNI_CONF_DIR", "/custom/conf")
+	t.Setenv("QEMUBOX_CNI_BIN_DIR", "/custom/bin")
+	t.Setenv("QEMUBOX_CNI_NETWORK", "custom-net")
 
 	cfg := LoadNetworkConfig()
 
@@ -71,15 +71,15 @@ func TestLoadNetworkConfig_AllCustomValues(t *testing.T) {
 
 func TestLoadNetworkConfig_EmptyEnvironmentVariables(t *testing.T) {
 	// Empty strings should use defaults
-	t.Setenv("BEACON_CNI_CONF_DIR", "")
-	t.Setenv("BEACON_CNI_BIN_DIR", "")
-	t.Setenv("BEACON_CNI_NETWORK", "")
+	t.Setenv("QEMUBOX_CNI_CONF_DIR", "")
+	t.Setenv("QEMUBOX_CNI_BIN_DIR", "")
+	t.Setenv("QEMUBOX_CNI_NETWORK", "")
 
 	cfg := LoadNetworkConfig()
 
 	assert.Equal(t, "/etc/cni/net.d", cfg.CNIConfDir)
 	assert.Equal(t, "/opt/cni/bin", cfg.CNIBinDir)
-	assert.Equal(t, "beacon-net", cfg.CNINetworkName)
+	assert.Equal(t, "qemubox-net", cfg.CNINetworkName)
 }
 
 func TestNetworkMode_String(t *testing.T) {
@@ -98,7 +98,7 @@ func TestNetworkConfig_Validation(t *testing.T) {
 				Mode:           NetworkModeCNI,
 				CNIConfDir:     "/etc/cni/net.d",
 				CNIBinDir:      "/opt/cni/bin",
-				CNINetworkName: "beacon-net",
+				CNINetworkName: "qemubox-net",
 			},
 			valid: true,
 		},
@@ -129,7 +129,7 @@ func TestNetworkConfig_Validation(t *testing.T) {
 
 func TestLoadNetworkConfig_Idempotent(t *testing.T) {
 	// Loading config multiple times should give same results
-	t.Setenv("BEACON_CNI_NETWORK", "test-net")
+	t.Setenv("QEMUBOX_CNI_NETWORK", "test-net")
 
 	cfg1 := LoadNetworkConfig()
 	cfg2 := LoadNetworkConfig()
@@ -142,15 +142,15 @@ func TestLoadNetworkConfig_Idempotent(t *testing.T) {
 
 func TestLoadNetworkConfig_PartialOverride(t *testing.T) {
 	// Override only some CNI settings
-	t.Setenv("BEACON_CNI_CONF_DIR", "/my/conf")
-	// Don't set BEACON_CNI_BIN_DIR or BEACON_CNI_NETWORK
+	t.Setenv("QEMUBOX_CNI_CONF_DIR", "/my/conf")
+	// Don't set QEMUBOX_CNI_BIN_DIR or QEMUBOX_CNI_NETWORK
 
 	cfg := LoadNetworkConfig()
 
 	assert.Equal(t, NetworkModeCNI, cfg.Mode)
 	assert.Equal(t, "/my/conf", cfg.CNIConfDir)
 	assert.Equal(t, "/opt/cni/bin", cfg.CNIBinDir)    // Default
-	assert.Equal(t, "beacon-net", cfg.CNINetworkName) // Default
+	assert.Equal(t, "qemubox-net", cfg.CNINetworkName) // Default
 }
 
 func TestNetworkConfig_AlwaysCNI(t *testing.T) {
@@ -161,7 +161,7 @@ func TestNetworkConfig_AlwaysCNI(t *testing.T) {
 
 func TestLoadNetworkConfig_WhitespaceInEnvVars(t *testing.T) {
 	// Test that whitespace in env vars is preserved
-	t.Setenv("BEACON_CNI_CONF_DIR", "  /path/with/spaces  ")
+	t.Setenv("QEMUBOX_CNI_CONF_DIR", "  /path/with/spaces  ")
 
 	cfg := LoadNetworkConfig()
 
@@ -179,15 +179,15 @@ func TestNetworkMode_TypeSafety(t *testing.T) {
 
 func TestLoadNetworkConfig_EnvironmentChanges(t *testing.T) {
 	// Test that environment changes are reflected
-	os.Unsetenv("BEACON_CNI_NETWORK")
+	os.Unsetenv("QEMUBOX_CNI_NETWORK")
 	cfg1 := LoadNetworkConfig()
-	assert.Equal(t, "beacon-net", cfg1.CNINetworkName)
+	assert.Equal(t, "qemubox-net", cfg1.CNINetworkName)
 
-	t.Setenv("BEACON_CNI_NETWORK", "custom-net")
+	t.Setenv("QEMUBOX_CNI_NETWORK", "custom-net")
 	cfg2 := LoadNetworkConfig()
 	assert.Equal(t, "custom-net", cfg2.CNINetworkName)
 
-	os.Unsetenv("BEACON_CNI_NETWORK")
+	os.Unsetenv("QEMUBOX_CNI_NETWORK")
 	cfg3 := LoadNetworkConfig()
-	assert.Equal(t, "beacon-net", cfg3.CNINetworkName)
+	assert.Equal(t, "qemubox-net", cfg3.CNINetworkName)
 }

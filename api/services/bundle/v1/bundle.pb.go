@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.28.1
 // 	protoc        v3.20.1
-// source: github.com/aledbf/beacon/containerd/api/services/bundle/v1/bundle.proto
+// source: github.com/aledbf/qemubox/containerd/api/services/bundle/v1/bundle.proto
 
 package bundle
 
@@ -32,7 +32,7 @@ type CreateRequest struct {
 func (x *CreateRequest) Reset() {
 	*x = CreateRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes[0]
+		mi := &file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes[0]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -45,7 +45,7 @@ func (x *CreateRequest) String() string {
 func (*CreateRequest) ProtoMessage() {}
 
 func (x *CreateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes[0]
+	mi := &file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes[0]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -58,7 +58,7 @@ func (x *CreateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRequest.ProtoReflect.Descriptor instead.
 func (*CreateRequest) Descriptor() ([]byte, []int) {
-	return file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescGZIP(), []int{0}
+	return file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *CreateRequest) GetID() string {
@@ -86,7 +86,7 @@ type CreateResponse struct {
 func (x *CreateResponse) Reset() {
 	*x = CreateResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes[1]
+		mi := &file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes[1]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -99,7 +99,7 @@ func (x *CreateResponse) String() string {
 func (*CreateResponse) ProtoMessage() {}
 
 func (x *CreateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes[1]
+	mi := &file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes[1]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -112,7 +112,7 @@ func (x *CreateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateResponse.ProtoReflect.Descriptor instead.
 func (*CreateResponse) Descriptor() ([]byte, []int) {
-	return file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescGZIP(), []int{1}
+	return file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *CreateResponse) GetBundle() string {
@@ -122,9 +122,9 @@ func (x *CreateResponse) GetBundle() string {
 	return ""
 }
 
-var File_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto protoreflect.FileDescriptor
+var File_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto protoreflect.FileDescriptor
 
-var file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDesc = []byte{
+var file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDesc = []byte{
 	0x0a, 0x47, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x61, 0x6c, 0x65,
 	0x64, 0x62, 0x66, 0x2f, 0x62, 0x65, 0x61, 0x63, 0x6f, 0x6e, 0x2f, 0x63, 0x6f, 0x6e, 0x74, 0x61,
 	0x69, 0x6e, 0x65, 0x72, 0x64, 0x2f, 0x61, 0x70, 0x69, 0x2f, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63,
@@ -162,24 +162,24 @@ var file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto
 }
 
 var (
-	file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescOnce sync.Once
-	file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescData = file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDesc
+	file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescOnce sync.Once
+	file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescData = file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDesc
 )
 
-func file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescGZIP() []byte {
-	file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescOnce.Do(func() {
-		file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescData = protoimpl.X.CompressGZIP(file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescData)
+func file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescGZIP() []byte {
+	file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescOnce.Do(func() {
+		file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescData = protoimpl.X.CompressGZIP(file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescData)
 	})
-	return file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDescData
+	return file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDescData
 }
 
-var file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
-var file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_goTypes = []interface{}{
+var file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_goTypes = []interface{}{
 	(*CreateRequest)(nil),  // 0: containerd.vminitd.services.bundle.v1.CreateRequest
 	(*CreateResponse)(nil), // 1: containerd.vminitd.services.bundle.v1.CreateResponse
 	nil,                    // 2: containerd.vminitd.services.bundle.v1.CreateRequest.FilesEntry
 }
-var file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_depIdxs = []int32{
+var file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_depIdxs = []int32{
 	2, // 0: containerd.vminitd.services.bundle.v1.CreateRequest.files:type_name -> containerd.vminitd.services.bundle.v1.CreateRequest.FilesEntry
 	0, // 1: containerd.vminitd.services.bundle.v1.Bundle.Create:input_type -> containerd.vminitd.services.bundle.v1.CreateRequest
 	1, // 2: containerd.vminitd.services.bundle.v1.Bundle.Create:output_type -> containerd.vminitd.services.bundle.v1.CreateResponse
@@ -190,13 +190,13 @@ var file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_init() }
-func file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_init() {
-	if File_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto != nil {
+func init() { file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_init() }
+func file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_init() {
+	if File_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto != nil {
 		return
 	}
 	if !protoimpl.UnsafeEnabled {
-		file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
+		file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*CreateRequest); i {
 			case 0:
 				return &v.state
@@ -208,7 +208,7 @@ func file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_prot
 				return nil
 			}
 		}
-		file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
+		file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*CreateResponse); i {
 			case 0:
 				return &v.state
@@ -225,18 +225,18 @@ func file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_prot
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDesc,
+			RawDescriptor: file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDesc,
 			NumEnums:      0,
 			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_goTypes,
-		DependencyIndexes: file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_depIdxs,
-		MessageInfos:      file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_msgTypes,
+		GoTypes:           file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_goTypes,
+		DependencyIndexes: file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_depIdxs,
+		MessageInfos:      file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_msgTypes,
 	}.Build()
-	File_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto = out.File
-	file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_rawDesc = nil
-	file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_goTypes = nil
-	file_github_com_aledbf_beacon_containerd_api_services_bundle_v1_bundle_proto_depIdxs = nil
+	File_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto = out.File
+	file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_rawDesc = nil
+	file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_goTypes = nil
+	file_github_com_aledbf_qemubox_containerd_api_services_bundle_v1_bundle_proto_depIdxs = nil
 }

@@ -7,9 +7,9 @@ import (
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 
-	"github.com/aledbf/beacon/containerd/vminit/bundle"
-	"github.com/aledbf/beacon/containerd/vminit/stream"
-	"github.com/aledbf/beacon/containerd/vminit/task"
+	"github.com/aledbf/qemubox/containerd/vminit/bundle"
+	"github.com/aledbf/qemubox/containerd/vminit/stream"
+	"github.com/aledbf/qemubox/containerd/vminit/task"
 )
 
 func init() {

@@ -20,8 +20,8 @@ import (
 	runc "github.com/containerd/go-runc"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/beacon/containerd/iobuf"
-	"github.com/aledbf/beacon/containerd/vminit/stream"
+	"github.com/aledbf/qemubox/containerd/iobuf"
+	"github.com/aledbf/qemubox/containerd/vminit/stream"
 )
 
 const (

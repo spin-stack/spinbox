@@ -1,6 +1,6 @@
-# beaconbox: containerd runtime shim with VM isolation
+# qemubox: containerd runtime shim with VM isolation
 
-___(Experimental)___ beaconbox (contaiNERD sandBOX) is a containerd runtime shim which
+___(Experimental)___ qemubox (contaiNERD sandBOX) is a containerd runtime shim which
 isolates container processes using lightweight virtual machines. It is designed for running
 Linux containers with enhanced security and isolation.
 
@@ -11,7 +11,7 @@ Linux containers with enhanced security and isolation.
  - Simplified architecture using QEMU
  - CNI-based networking for standard container networking with IPAM plugin support
 
-beaconbox is a **non-core** sub-project of containerd.
+qemubox is a **non-core** sub-project of containerd.
 
 ## Architecture
 
@@ -19,10 +19,10 @@ beaconbox is a **non-core** sub-project of containerd.
 graph TB
     subgraph "Host"
         containerd[containerd]
-        shim[containerd-shim-beaconbox-v1]
+        shim[containerd-shim-qemubox-v1]
         qemu[QEMU]
         nm[Network Manager]
-        bridge[beacon0 bridge]
+        bridge[qemubox0 bridge]
 
         containerd -->|runtime API| shim
         shim -->|manages| qemu
@@ -61,11 +61,11 @@ graph TB
 
 ### How it works
 
-1. **Container Creation**: When containerd creates a container with the beaconbox runtime, it spawns the `containerd-shim-beaconbox-v1` shim process
+1. **Container Creation**: When containerd creates a container with the qemubox runtime, it spawns the `containerd-shim-qemubox-v1` shim process
 2. **VM Setup**: The shim creates a QEMU VM instance with:
    - Linux kernel and initrd (containing vminitd)
    - EROFS container image layers mounted via virtio-fs
-   - TAP network device connected to the beacon0 bridge
+   - TAP network device connected to the qemubox0 bridge
 3. **Network Allocation**: The network manager allocates an IP address from the 10.88.0.0/16 subnet and creates a TAP device
 4. **VM Boot**: QEMU boots the Linux kernel with the allocated network configuration
 5. **Container Execution**: Inside the VM, vminitd communicates with the shim via vsock and uses crun (OCI runtime) to execute the container process
@@ -75,7 +75,7 @@ graph TB
 
 #### Host Components
 
-**containerd-shim-beaconbox-v1**
+**containerd-shim-qemubox-v1**
 - Implements containerd's runtime shim API
 - Manages QEMU VM lifecycle (create, start, stop, delete)
 - Handles network setup via integrated network manager
@@ -84,11 +84,11 @@ graph TB
 
 **Network Manager**
 - **CNI-based networking**: Executes standard CNI plugin chains (bridge, firewall, tc-redirect-tap, IPAM)
-- Manages the `beacon0` bridge (10.88.0.0/16 subnet) via CNI bridge plugin
+- Manages the `qemubox0` bridge (10.88.0.0/16 subnet) via CNI bridge plugin
 - Allocates unique IP addresses using CNI IPAM plugins (host-local, static, or dhcp)
 - Creates TAP devices for each VM via CNI plugins (tc-redirect-tap for Firecracker compatibility)
 - Configures firewall rules via CNI firewall plugin (iptables/nftables)
-- Stores network configuration metadata in `/var/lib/beacon/cni-config.db` (BoltDB)
+- Stores network configuration metadata in `/var/lib/qemubox/cni-config.db` (BoltDB)
 - IP allocation state managed by CNI IPAM in `/var/lib/cni/networks/`
 - Automatically reconciles and cleans up stale resources
 - See `docs/CNI_SETUP.md` for CNI configuration guide
@@ -185,7 +185,7 @@ graph TB
 
 ### Network Architecture
 
-beaconbox uses CNI (Container Network Interface) for all networking, integrating with the standard CNI plugin ecosystem:
+qemubox uses CNI (Container Network Interface) for all networking, integrating with the standard CNI plugin ecosystem:
 
 ```
 Internet
@@ -194,7 +194,7 @@ Host network interface
     ↓
 CNI Firewall Plugin (iptables/nftables)
     ↓
-beacon0 bridge (CNI-managed, 10.88.0.1/16)
+qemubox0 bridge (CNI-managed, 10.88.0.1/16)
     ├─ tapXXX (CNI tc-redirect-tap) → VM 1 (10.88.0.2)
     ├─ tapYYY (CNI tc-redirect-tap) → VM 2 (10.88.0.3)
     └─ tapZZZ (CNI tc-redirect-tap) → VM 3 (10.88.0.4)
@@ -204,7 +204,7 @@ beacon0 bridge (CNI-managed, 10.88.0.1/16)
 - Bridge gateway: 10.88.0.1
 - Container IPs: 10.88.0.2 - 10.88.255.254 (65,533 addresses)
 - Managed by CNI IPAM plugins (host-local, static, or dhcp)
-- Network configuration metadata stored in `/var/lib/beacon/cni-config.db` (BoltDB)
+- Network configuration metadata stored in `/var/lib/qemubox/cni-config.db` (BoltDB)
 - IP allocation state stored in `/var/lib/cni/networks/<network-name>/`
 - Automatic lease cleanup on container deletion
 
@@ -221,9 +221,9 @@ beacon0 bridge (CNI-managed, 10.88.0.1/16)
 Set environment variables to customize (all optional, defaults shown):
 
 ```bash
-export BEACON_CNI_CONF_DIR=/etc/cni/net.d     # CNI config directory
-export BEACON_CNI_BIN_DIR=/opt/cni/bin        # CNI plugin binaries
-export BEACON_CNI_NETWORK=beacon-net          # CNI network name
+export QEMUBOX_CNI_CONF_DIR=/etc/cni/net.d     # CNI config directory
+export QEMUBOX_CNI_BIN_DIR=/opt/cni/bin        # CNI plugin binaries
+export QEMUBOX_CNI_NETWORK=qemubox-net          # CNI network name
 
 # Restart containerd
 systemctl restart beacon-containerd
@@ -238,22 +238,22 @@ wget https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni
 tar -xzf cni-plugins-linux-amd64-v1.4.0.tgz -C /opt/cni/bin
 ```
 
-2. (Optional) Install tc-redirect-tap for Firecracker pattern:
+2. Install tc-redirect-tap for Firecracker pattern:
 ```bash
 git clone https://github.com/firecracker-microvm/firecracker-go-sdk
 cd firecracker-go-sdk/cni/tc-redirect-tap
 go build -o /opt/cni/bin/tc-redirect-tap
 ```
 
-3. Create CNI configuration `/etc/cni/net.d/10-beacon.conflist`:
+3. Create CNI configuration `/etc/cni/net.d/10-qemubox.conflist`:
 ```json
 {
   "cniVersion": "1.0.0",
-  "name": "beacon-net",
+  "name": "qemubox-net",
   "plugins": [
     {
       "type": "bridge",
-      "bridge": "beacon0",
+      "bridge": "qemubox0",
       "isGateway": true,
       "ipMasq": true,
       "ipam": {
@@ -321,7 +321,7 @@ sequenceDiagram
 
 ### Security Model
 
-beaconbox provides defense-in-depth with multiple isolation layers:
+qemubox provides defense-in-depth with multiple isolation layers:
 
 **Layer 1: Hypervisor Isolation (Primary)**
 - Each container runs in its own KVM virtual machine
@@ -365,7 +365,7 @@ beaconbox provides defense-in-depth with multiple isolation layers:
 
 ## VMM Backend
 
-beaconbox uses [QEMU](https://www.qemu.org/) as its virtual machine monitor. Features:
+qemubox uses [QEMU](https://www.qemu.org/) as its virtual machine monitor. Features:
 
 - KVM-based virtualization
 - QEMU microvm machine type for fast boot
@@ -442,13 +442,13 @@ journalctl -u beacon-containerd | grep -i cni
 
 # Verify CNI configuration
 ls /etc/cni/net.d/
-cat /etc/cni/net.d/10-beacon.conflist | jq .
+cat /etc/cni/net.d/10-qemubox.conflist | jq .
 
 # Check CNI plugins
 ls -la /opt/cni/bin/
 
 # Check CNI IPAM state
-ls -la /var/lib/cni/networks/beacon-net/
+ls -la /var/lib/cni/networks/qemubox-net/
 
 # Check TAP devices (if using tc-redirect-tap)
 ip link show | grep -E "tap|beacon"
@@ -460,9 +460,9 @@ ip link show | grep -E "tap|beacon"
 containerd --log-level debug
 
 # Check binaries are installed
-ls -la /usr/share/beacon/kernel/beacon-kernel-x86_64
-ls -la /usr/share/beacon/kernel/beacon-initrd
-ls -la /usr/share/beacon/bin/qemu-system-x86_64
+ls -la /usr/share/qemubox/kernel/qemubox-kernel-x86_64
+ls -la /usr/share/qemubox/kernel/qemubox-initrd
+ls -la /usr/share/qemubox/bin/qemu-system-x86_64
 
 # Verify KVM access
 ls -la /dev/kvm
@@ -476,27 +476,27 @@ ss -x | grep vsock
 
 **Common issues:**
 
-1. **"qemu-system-x86_64 binary not found at /usr/share/beacon/bin/qemu-system-x86_64"**
-   - Install QEMU to `/usr/share/beacon/bin/qemu-system-x86_64`
-   - Or set `BEACON_QEMU_PATH` to override the location
+1. **"qemu-system-x86_64 binary not found at /usr/share/qemubox/bin/qemu-system-x86_64"**
+   - Install QEMU to `/usr/share/qemubox/bin/qemu-system-x86_64`
+   - Or set `QEMUBOX_QEMU_PATH` to override the location
 
-2. **"kernel not found at /usr/share/beacon/kernel/beacon-kernel-x86_64"**
-   - Install the kernel to `/usr/share/beacon/kernel/beacon-kernel-x86_64`
-   - Or use `BEACON_SHARE_DIR` environment variable to override the location
+2. **"kernel not found at /usr/share/qemubox/kernel/qemubox-kernel-x86_64"**
+   - Install the kernel to `/usr/share/qemubox/kernel/qemubox-kernel-x86_64`
+   - Or use `QEMUBOX_SHARE_DIR` environment variable to override the location
 
 3. **"Permission denied on /dev/kvm"**
    - Add user to `kvm` group: `sudo usermod -aG kvm $USER`
 
-4. **"Network device beacon0 not found"**
+4. **"Network device qemubox0 not found"**
    - Network manager creates bridge on first container
    - Check logs for initialization errors
 
 5. **"IP allocation failed"**
-   - Check CNI IPAM state: `ls /var/lib/cni/networks/beacon-net/`; clear stale allocations: `sudo rm -rf /var/lib/cni/networks/beacon-net/*`
+   - Check CNI IPAM state: `ls /var/lib/cni/networks/qemubox-net/`; clear stale allocations: `sudo rm -rf /var/lib/cni/networks/qemubox-net/*`
 
 6. **"CNI plugin not found"** (CNI mode only)
    - Install CNI plugins: See CNI Mode setup section above
-   - Verify `BEACON_CNI_BIN_DIR` points to `/opt/cni/bin`
+   - Verify `QEMUBOX_CNI_BIN_DIR` points to `/opt/cni/bin`
    - Check permissions: `sudo chmod +x /opt/cni/bin/*`
 
 7. **"No TAP device found in CNI result"** (CNI mode only)
@@ -537,40 +537,40 @@ task build
 ```
 
 The results will be in the `_output` directory:
-- `containerd-shim-beaconbox-v1` - The runtime shim
-- `beacon-kernel-x86_64` - Linux kernel for the VM
-- `beacon-initrd` - Initial ramdisk containing vminitd
+- `containerd-shim-qemubox-v1` - The runtime shim
+- `qemubox-kernel-x86_64` - Linux kernel for the VM
+- `qemubox-initrd` - Initial ramdisk containing vminitd
 
 ### Installation Paths
 
 beacon uses the following standardized paths - these are **not** searched, they must exist at these exact locations:
 
-- **Binaries and config**: `/usr/share/beacon/`
-  - `/usr/share/beacon/bin/` - Executable binaries
+- **Binaries and config**: `/usr/share/qemubox/`
+  - `/usr/share/qemubox/bin/` - Executable binaries
     - `containerd`, `ctr`, `runc` - Container runtime components
     - `nerdctl` - Docker-compatible CLI
     - `buildkitd`, `buildctl` - BuildKit components
     - `qemu-system-x86_64`, `qemu-img` - QEMU VM binaries
-    - `containerd-shim-beaconbox-v1` - Beacon runtime shim
-  - `/usr/share/beacon/kernel/` - Kernel files
-    - `beacon-kernel-x86_64` - VM kernel
-    - `beacon-initrd` - Initial ramdisk
-  - `/usr/share/beacon/libexec/cni/` - CNI plugins
-  - `/usr/share/beacon/config/` - Configuration files
-  - `/usr/share/beacon/systemd/` - Systemd service files
+    - `containerd-shim-qemubox-v1` - Beacon runtime shim
+  - `/usr/share/qemubox/kernel/` - Kernel files
+    - `qemubox-kernel-x86_64` - VM kernel
+    - `qemubox-initrd` - Initial ramdisk
+  - `/usr/share/qemubox/libexec/cni/` - CNI plugins
+  - `/usr/share/qemubox/config/` - Configuration files
+  - `/usr/share/qemubox/systemd/` - Systemd service files
 
-- **State files**: `/var/lib/beacon/`
-  - `/var/lib/beacon/network.db` - Network allocation database
-  - `/var/lib/beacon/containerd/` - containerd state
-  - Per-container state directories under `/var/lib/beacon/`
+- **State files**: `/var/lib/qemubox/`
+  - `/var/lib/qemubox/network.db` - Network allocation database
+  - `/var/lib/qemubox/containerd/` - containerd state
+  - Per-container state directories under `/var/lib/qemubox/`
 
-- **Logs**: `/var/log/beacon/`
+- **Logs**: `/var/log/qemubox/`
   - VM and container logs
 
 These paths can be overridden using environment variables:
-- `BEACON_SHARE_DIR` - Override `/usr/share/beacon`
-- `BEACON_STATE_DIR` - Override `/var/lib/beacon`
-- `BEACON_LOG_DIR` - Override `/var/log/beacon`
+- `QEMUBOX_SHARE_DIR` - Override `/usr/share/qemubox`
+- `QEMUBOX_STATE_DIR` - Override `/var/lib/qemubox`
+- `QEMUBOX_LOG_DIR` - Override `/var/log/qemubox`
 
 **Note**: Binaries are not searched for in `$PATH` or other locations. They must be installed at the exact paths shown above.
 
@@ -605,7 +605,7 @@ Add EROFS snapshotter configuration:
 
 ### Running
 
-Run containerd with the shim and beaconbox components in the PATH:
+Run containerd with the shim and qemubox components in the PATH:
 
 ```bash
 PATH=$(pwd)/_output:$PATH containerd
@@ -617,10 +617,10 @@ Pull a container image:
 ctr image pull --snapshotter erofs docker.io/library/alpine:latest
 ```
 
-Start a container with the beaconbox runtime:
+Start a container with the qemubox runtime:
 
 ```bash
-ctr run -t --rm --snapshotter erofs --runtime io.containerd.beaconbox.v1 \
+ctr run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 \
   docker.io/library/alpine:latest test /bin/sh
 ```
 
@@ -633,9 +633,9 @@ Install QEMU to the beacon share directory or use the system package:
 sudo apt-get install -y qemu-system-x86
 
 # Option 2: copy the built artifacts from `task build:qemu`
-sudo mkdir -p /usr/share/beacon/bin
-sudo cp _output/bin/qemu-system-x86_64 /usr/share/beacon/bin/
-sudo cp _output/bin/qemu-img /usr/share/beacon/bin/
+sudo mkdir -p /usr/share/qemubox/bin
+sudo cp _output/bin/qemu-system-x86_64 /usr/share/qemubox/bin/
+sudo cp _output/bin/qemu-img /usr/share/qemubox/bin/
 ```
 
 ### Current Limitations
@@ -670,17 +670,17 @@ sudo cp _output/bin/qemu-img /usr/share/beacon/bin/
 
 ### VM-based container runtimes
 
- - **Kata Containers** - Mature containerd runtime with VM isolation supporting multiple hypervisors. beaconbox is similar in approach but focuses on simplicity with a single VMM backend (QEMU) and tight integration with modern containerd features like EROFS.
+ - **Kata Containers** - Mature containerd runtime with VM isolation supporting multiple hypervisors. qemubox is similar in approach but focuses on simplicity with a single VMM backend (QEMU) and tight integration with modern containerd features like EROFS.
 
- - **gVisor** - Provides container isolation using a user-space kernel. More lightweight than beaconbox but with different security trade-offs and compatibility considerations.
+ - **gVisor** - Provides container isolation using a user-space kernel. More lightweight than qemubox but with different security trade-offs and compatibility considerations.
 
 ### Comparison with Lima/Docker Desktop
 
  - **Lima** and **Docker Desktop** run a single VM containing the entire container runtime (containerd/dockerd), with the API exposed to the host.
 
- - **beaconbox** runs containerd natively on the host, with each container getting its own dedicated VM for maximum isolation. This provides better security boundaries between containers.
+ - **qemubox** runs containerd natively on the host, with each container getting its own dedicated VM for maximum isolation. This provides better security boundaries between containers.
 
-### Why beaconbox?
+### Why qemubox?
 
 **Simplicity:**
 - Uses standard upstream components (QEMU, crun, containerd)

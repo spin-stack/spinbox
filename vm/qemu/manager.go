@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aledbf/beacon/containerd/paths"
+	"github.com/aledbf/qemubox/containerd/paths"
 )
 
 // findQemu returns the path to the qemu-system-x86_64 binary
@@ -22,7 +22,7 @@ func findKernel() (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("kernel not found at %s (use BEACON_SHARE_DIR to override)", path)
+	return "", fmt.Errorf("kernel not found at %s (use QEMUBOX_SHARE_DIR to override)", path)
 }
 
 // findInitrd returns the path to the initrd for QEMU
@@ -31,5 +31,5 @@ func findInitrd() (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("initrd not found at %s (use BEACON_SHARE_DIR to override)", path)
+	return "", fmt.Errorf("initrd not found at %s (use QEMUBOX_SHARE_DIR to override)", path)
 }

@@ -1,4 +1,4 @@
-module github.com/aledbf/beacon/containerd
+module github.com/aledbf/qemubox/containerd
 
 go 1.25
 

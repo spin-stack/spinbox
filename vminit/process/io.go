@@ -24,8 +24,8 @@ import (
 	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/beacon/containerd/iobuf"
-	"github.com/aledbf/beacon/containerd/vminit/stream"
+	"github.com/aledbf/qemubox/containerd/iobuf"
+	"github.com/aledbf/qemubox/containerd/vminit/stream"
 )
 
 const binaryIOProcTermTimeout = 12 * time.Second // Give logger process solid 10 seconds for cleanup

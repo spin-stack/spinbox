@@ -1,6 +1,6 @@
 //go:build darwin
 
-// Package network provides CNI-based network management for beacon VMs.
+// Package network provides CNI-based network management for qemubox VMs.
 // On Darwin, all network operations return errors as networking is not supported.
 package network
 
@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 
-	boltstore "github.com/aledbf/beacon/containerd/store"
+	boltstore "github.com/aledbf/qemubox/containerd/store"
 )
 
 // NetworkMode represents the network management mode.
@@ -36,7 +36,7 @@ func LoadNetworkConfig() NetworkConfig {
 		Mode:           NetworkModeCNI,
 		CNIConfDir:     "/etc/cni/net.d",
 		CNIBinDir:      "/opt/cni/bin",
-		CNINetworkName: "beacon-net",
+		CNINetworkName: "qemubox-net",
 	}
 }
 

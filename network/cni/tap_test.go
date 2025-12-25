@@ -20,7 +20,7 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 			name: "tap device with tap prefix",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "beacon0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
+					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
 					{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: ""},
 				},
 			},
@@ -41,7 +41,7 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 			name: "multiple interfaces, tap is second",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "beacon0", Sandbox: ""},
+					{Name: "qemubox0", Sandbox: ""},
 					{Name: "tap999", Sandbox: ""},
 					{Name: "veth0", Sandbox: "/var/run/netns/test"},
 				},
@@ -138,7 +138,7 @@ func TestExtractTAPDevice_ErrorMessages(t *testing.T) {
 			name: "bridge interface only",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "beacon0", Sandbox: ""},
+					{Name: "qemubox0", Sandbox: ""},
 				},
 			},
 			errorContains: "no TAP device found",
@@ -158,7 +158,7 @@ func TestExtractTAPDevice_MultipleMatches(t *testing.T) {
 	// When multiple TAP devices exist, return the first one
 	result := &current.Result{
 		Interfaces: []*current.Interface{
-			{Name: "beacon0", Sandbox: ""},
+			{Name: "qemubox0", Sandbox: ""},
 			{Name: "tap111", Sandbox: ""},
 			{Name: "tap222", Sandbox: ""},
 			{Name: "tap333", Sandbox: ""},

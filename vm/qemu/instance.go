@@ -24,8 +24,8 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 
-	"github.com/aledbf/beacon/containerd/paths"
-	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/qemubox/containerd/paths"
+	"github.com/aledbf/qemubox/containerd/vm"
 )
 
 // newInstance creates a new QEMU microvm instance
@@ -65,7 +65,7 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 	}
 
 	// Use dedicated log directory per container
-	logDir := filepath.Join("/var/log/beacon", containerID)
+	logDir := filepath.Join("/var/log/qemubox", containerID)
 	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(git mv:*)",
+      "Bash(find:*)",
+      "Bash(task proto:*)",
+      "Bash(task protos:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(task build:shim)"
+    ]
+  }
+}

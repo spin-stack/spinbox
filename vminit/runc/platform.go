@@ -19,9 +19,9 @@ import (
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/fifo"
 
-	"github.com/aledbf/beacon/containerd/iobuf"
-	"github.com/aledbf/beacon/containerd/vminit/process"
-	"github.com/aledbf/beacon/containerd/vminit/stream"
+	"github.com/aledbf/qemubox/containerd/iobuf"
+	"github.com/aledbf/qemubox/containerd/vminit/process"
+	"github.com/aledbf/qemubox/containerd/vminit/stream"
 )
 
 // NewPlatform returns a linux platform for use with I/O operations

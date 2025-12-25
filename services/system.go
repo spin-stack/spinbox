@@ -17,7 +17,7 @@ import (
 	"github.com/containerd/ttrpc"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
-	api "github.com/aledbf/beacon/containerd/api/services/system/v1"
+	api "github.com/aledbf/qemubox/containerd/api/services/system/v1"
 )
 
 const (

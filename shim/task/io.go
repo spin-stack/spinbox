@@ -17,7 +17,7 @@ import (
 	"github.com/containerd/fifo"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/beacon/containerd/iobuf"
+	"github.com/aledbf/qemubox/containerd/iobuf"
 )
 
 const (

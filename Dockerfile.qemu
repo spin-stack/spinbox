@@ -5,7 +5,7 @@
 FROM ubuntu:25.10 AS builder
 
 # Build arguments
-ARG QEMU_VERSION=10.1.2
+ARG QEMU_VERSION=10.2.0
 ARG JOBS=8
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -66,7 +66,7 @@ RUN curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o qemu.t
 WORKDIR /build/qemu-src
 
 # Configure QEMU for minimal build with libc compatibility
-# Focused on microvm use case with virtio devices
+# Focused on VMs use case with virtio devices
 # Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
 # Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
 RUN ./configure \
@@ -78,7 +78,7 @@ RUN ./configure \
     --disable-docs \
     --disable-debug-info \
     --disable-werror \
-    # Disable graphical output (headless microvm)
+    # Disable graphical output (headless VMs)
     --disable-sdl \
     --disable-gtk \
     --disable-opengl \
@@ -92,7 +92,7 @@ RUN ./configure \
     --disable-pa \
     --disable-jack \
     --disable-sndio \
-    # Enable features needed for microvm
+    # Enable features needed for VMs
     --enable-kvm \
     --enable-virtfs \
     --enable-linux-aio \
@@ -140,7 +140,7 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /usr/share/beacon/qemu/pvh.bin
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /usr/share/qemubox/qemu/pvh.bin
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
@@ -154,4 +154,4 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/beacon/qemu/pvh.bin
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemubox/qemu/pvh.bin
