@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Task
+        uses: go-task/setup-task@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify go.mod/go.sum
+        run: task verify:vendor
+
+      - name: Build shim
+        run: task build:shim
+
+      - name: Build vminitd
+        run: task build:vminitd
+
+      - name: Lint
+        run: task lint
+
+      - name: Validate
+        run: task validate

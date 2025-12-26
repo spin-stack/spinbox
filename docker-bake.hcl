@@ -125,6 +125,18 @@ target "dev" {
 # Validation Targets
 # ============================================================================
 
+# Lint checks
+target "lint" {
+  inherits = ["_common"]
+  target = "lint"
+}
+
+# Validation checks
+target "validate" {
+  inherits = ["_common"]
+  target = "validate"
+}
+
 # Validate Dockerfile syntax
 target "validate-dockerfile" {
   matrix = {
