@@ -363,6 +363,32 @@ tasks:
         cleanup_ctr
         trap - EXIT
 
+        ${SUDO} env \
+          QEMUBOX_CONTAINERD_SOCKET="${SOCKET}" \
+          QEMUBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
+          QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
+          QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
+          QEMUBOX_FIFO_DIR="/run/qemubox/containerd/fifo" \
+          go test ./integration -run TestContainerdRunQemubox -count=1 || {
+            echo "---- qemubox-containerd logs ----"
+            ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
+            echo "---- qemubox qemu.log (latest) ----"
+            QEMU_LOG=$(ls -1t /var/log/qemubox/*/qemu.log 2>/dev/null | head -n 1 || true)
+            if [ -n "${QEMU_LOG:-}" ]; then
+              ${SUDO} tail -n 200 "${QEMU_LOG}" || true
+            else
+              echo "No qemu.log found under /var/log/qemubox/"
+            fi
+            echo "---- qemubox console.log (latest) ----"
+            CONSOLE_LOG=$(ls -1t /var/log/qemubox/*/console.log 2>/dev/null | head -n 1 || true)
+            if [ -n "${CONSOLE_LOG:-}" ]; then
+              ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
+            else
+              echo "No console.log found under /var/log/qemubox/"
+            fi
+            exit 1
+          }
+
         if [ "${CLEANUP:-0}" = "1" ]; then
           ${SUDO} systemctl stop qemubox-containerd || true
           ${SUDO} "${WORKDIR}/${RELEASE_NAME}/uninstall.sh" || true
