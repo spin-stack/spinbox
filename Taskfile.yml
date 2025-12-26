@@ -244,6 +244,8 @@ tasks:
         tar -xzf "${TARBALL}" -C "${WORKDIR}"
 
         SUDO="${SUDO:-sudo}"
+        ${SUDO} systemctl stop qemubox-containerd || true
+        ${SUDO} systemctl stop qemubox-buildkit || true
         ${SUDO} "${WORKDIR}/${RELEASE_NAME}/install.sh"
         ${SUDO} systemctl enable --now qemubox-containerd
 
