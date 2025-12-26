@@ -81,7 +81,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 		t.Fatalf("start task: %v", err)
 	}
 	if st, err := task.Status(ctx); err == nil {
-		t.Logf("task status after start: %s (pid=%d)", st.Status.String(), st.Pid)
+		t.Logf("task status after start: %s (pid=%d)", st.Status, task.Pid())
 	} else {
 		t.Logf("task status after start failed: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 		if code != 0 {
 			if st, err := task.Status(ctx); err == nil {
-				t.Logf("task status on non-zero exit: %s (pid=%d)", st.Status.String(), st.Pid)
+				t.Logf("task status on non-zero exit: %s (pid=%d)", st.Status, task.Pid())
 			} else {
 				t.Logf("task status on non-zero exit failed: %v", err)
 			}
