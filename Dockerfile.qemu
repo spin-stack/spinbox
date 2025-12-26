@@ -140,6 +140,7 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
+COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /usr/share/qemubox/qemu/bios-256k.bin
 COPY --from=builder /opt/qemu/share/qemu/pvh.bin /usr/share/qemubox/qemu/pvh.bin
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
@@ -154,4 +155,5 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
+COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/qemubox/qemu/bios-256k.bin
 COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemubox/qemu/pvh.bin
