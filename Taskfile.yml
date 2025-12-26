@@ -305,15 +305,28 @@ tasks:
           --snapshotter "{{.INTEGRATION_SNAPSHOTTER}}" \
           "{{.INTEGRATION_IMAGE}}"
 
+        cleanup_ctr() {
+          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks kill --signal SIGKILL "${CTR_ID}" >/dev/null 2>&1 || true
+          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks delete "${CTR_ID}" >/dev/null 2>&1 || true
+          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" containers delete "${CTR_ID}" >/dev/null 2>&1 || true
+        }
+        trap 'cleanup_ctr' EXIT
+
         ${SUDO} "${CTR_BIN}" \
           --address "${SOCKET}" \
           --namespace "${CTR_NAMESPACE}" \
-          run --privileged --detach \
+          containers create --privileged \
           --snapshotter "{{.INTEGRATION_SNAPSHOTTER}}" \
           --runtime "{{.INTEGRATION_RUNTIME}}" \
           "{{.INTEGRATION_IMAGE}}" \
           "${CTR_ID}" \
           /sbin/init
+
+        ${SUDO} "${CTR_BIN}" \
+          --address "${SOCKET}" \
+          --namespace "${CTR_NAMESPACE}" \
+          tasks start --detach \
+          "${CTR_ID}"
 
         STATUS=""
         for _ in $(seq 1 30); do
@@ -347,9 +360,8 @@ tasks:
           exit 1
         fi
 
-        ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks kill --signal SIGKILL "${CTR_ID}" || true
-        ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks delete "${CTR_ID}" || true
-        ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" containers delete "${CTR_ID}" || true
+        cleanup_ctr
+        trap - EXIT
 
         if [ "${CLEANUP:-0}" = "1" ]; then
           ${SUDO} systemctl stop qemubox-containerd || true
