@@ -88,12 +88,12 @@ func TestContainerdRunQemubox(t *testing.T) {
 		_, _ = task.Delete(ctx)
 	}()
 
+	if err := task.Start(ctx); err != nil {
+		t.Fatalf("start task: %v", err)
+	}
 	statusCh, err := task.Wait(ctx)
 	if err != nil {
 		t.Fatalf("wait task: %v", err)
-	}
-	if err := task.Start(ctx); err != nil {
-		t.Fatalf("start task: %v", err)
 	}
 
 	select {
