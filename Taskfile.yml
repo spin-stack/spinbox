@@ -330,8 +330,14 @@ tasks:
         {{.GO}} mod tidy
         {{.GO}} mod verify
 
-        if ! diff -r go.mod go.sum {{.ROOT_DIR}}/; then
-          echo "👹 Error: go.mod or go.sum are out of date"
+        if ! diff -u go.mod "{{.ROOT_DIR}}/go.mod"; then
+          echo "👹 Error: go.mod is out of date"
+          echo "   Run 'go mod tidy' to update"
+          exit 1
+        fi
+
+        if ! diff -u go.sum "{{.ROOT_DIR}}/go.sum"; then
+          echo "👹 Error: go.sum is out of date"
           echo "   Run 'go mod tidy' to update"
           exit 1
         fi
