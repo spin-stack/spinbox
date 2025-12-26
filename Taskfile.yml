@@ -238,6 +238,20 @@ tasks:
           exit 1
         fi
 
+        echo "📦 Verifying QEMU firmware in build output..."
+        if [ -d "{{.OUTPUT_DIR}}/share/qemubox/qemu" ]; then
+          ls -la "{{.OUTPUT_DIR}}/share/qemubox/qemu"
+        else
+          echo "👹 Error: {{.OUTPUT_DIR}}/share/qemubox/qemu not found"
+          exit 1
+        fi
+
+        if ! tar -tzf "${TARBALL}" | grep -q "usr/share/qemubox/qemu/bios-256k.bin"; then
+          echo "👹 Error: bios-256k.bin missing from release tarball"
+          tar -tzf "${TARBALL}" | grep "usr/share/qemubox/qemu" || true
+          exit 1
+        fi
+
         WORKDIR="$(mktemp -d)"
         trap 'rm -rf "${WORKDIR}"' EXIT
 
