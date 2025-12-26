@@ -273,6 +273,13 @@ tasks:
           go test ./integration -run TestContainerdRunQemubox -count=1 || {
             echo "---- qemubox-containerd logs ----"
             ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
+            echo "---- qemubox qemu.log (latest) ----"
+            QEMU_LOG=$(ls -1t /var/log/qemubox/*/qemu.log 2>/dev/null | head -n 1 || true)
+            if [ -n "${QEMU_LOG:-}" ]; then
+              ${SUDO} tail -n 200 "${QEMU_LOG}" || true
+            else
+              echo "No qemu.log found under /var/log/qemubox/"
+            fi
             exit 1
           }
 
