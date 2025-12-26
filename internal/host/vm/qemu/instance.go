@@ -739,7 +739,8 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		// When using fd=, QEMU expects the TAP to be already configured
 		args = append(args,
 			"-netdev", fmt.Sprintf("tap,id=net%d,fd=%d", i, fd),
-			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s", i, nic.MAC),
+			// Disable option ROM loading (e.g., efi-virtio.rom) to avoid firmware dependency.
+			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s,romfile=", i, nic.MAC),
 		)
 	}
 
