@@ -232,8 +232,7 @@ func TestObjectAddDel(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmpSocketPath := "/tmp/test-qemu-qmp.sock"
-	qmp, err := NewQMPClient(ctx, qmpSocketPath)
+	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}

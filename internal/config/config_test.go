@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+const (
+	testVMM = "qemu"
+)
+
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -22,8 +26,8 @@ func TestDefaultConfig(t *testing.T) {
 	}
 
 	// Verify runtime
-	if cfg.Runtime.VMM != "qemu" {
-		t.Errorf("expected VMM qemu, got %s", cfg.Runtime.VMM)
+	if cfg.Runtime.VMM != testVMM {
+		t.Errorf("expected VMM %s, got %s", testVMM, cfg.Runtime.VMM)
 	}
 	if cfg.Runtime.ShimDebug != false {
 		t.Errorf("expected ShimDebug false, got %v", cfg.Runtime.ShimDebug)
@@ -67,7 +71,7 @@ func TestLoadFrom_InvalidJSON(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.json")
 
 	// Write invalid JSON
-	if err := os.WriteFile(configPath, []byte("{invalid json}"), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("{invalid json}"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,23 +93,23 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 	stateDir := filepath.Join(tmpDir, "state")
 	logDir := filepath.Join(tmpDir, "log")
 
-	if err := os.MkdirAll(kernelDir, 0755); err != nil {
+	if err := os.MkdirAll(kernelDir, 0750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create dummy kernel and initrd
 	kernelPath := filepath.Join(kernelDir, "qemubox-kernel-x86_64")
 	initrdPath := filepath.Join(kernelDir, "qemubox-initrd")
-	if err := os.WriteFile(kernelPath, []byte("dummy"), 0644); err != nil {
+	if err := os.WriteFile(kernelPath, []byte("dummy"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(initrdPath, []byte("dummy"), 0644); err != nil {
+	if err := os.WriteFile(initrdPath, []byte("dummy"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +120,7 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 			LogDir:   logDir,
 		},
 		Runtime: RuntimeConfig{
-			VMM:       "qemu",
+			VMM:       testVMM,
 			ShimDebug: true,
 		},
 		CPUHotplug: CPUHotplugConfig{
@@ -149,7 +153,7 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,8 +197,8 @@ func TestApplyDefaults(t *testing.T) {
 		t.Errorf("expected default LogDir, got %s", cfg.Paths.LogDir)
 	}
 
-	if cfg.Runtime.VMM != "qemu" {
-		t.Errorf("expected default VMM, got %s", cfg.Runtime.VMM)
+	if cfg.Runtime.VMM != testVMM {
+		t.Errorf("expected default VMM %s, got %s", testVMM, cfg.Runtime.VMM)
 	}
 
 	if cfg.CPUHotplug.MonitorInterval != "5s" {
@@ -274,76 +278,4 @@ func TestValidate_InvalidThresholds(t *testing.T) {
 			t.Logf("Error message: %s", err)
 		})
 	}
-}
-
-func TestToCPUHotplugConfig(t *testing.T) {
-	cfg := DefaultConfig()
-
-	hotplugCfg, err := cfg.ToCPUHotplugConfig()
-	if err != nil {
-		t.Fatalf("failed to convert to CPU hotplug config: %v", err)
-	}
-
-	if hotplugCfg.MonitorInterval.String() != "5s" {
-		t.Errorf("expected MonitorInterval 5s, got %s", hotplugCfg.MonitorInterval)
-	}
-
-	if hotplugCfg.ScaleUpThreshold != 80.0 {
-		t.Errorf("expected ScaleUpThreshold 80.0, got %.2f", hotplugCfg.ScaleUpThreshold)
-	}
-
-	if hotplugCfg.EnableScaleDown != true {
-		t.Errorf("expected EnableScaleDown true, got %v", hotplugCfg.EnableScaleDown)
-	}
-}
-
-func TestToMemHotplugConfig(t *testing.T) {
-	cfg := DefaultConfig()
-
-	hotplugCfg, err := cfg.ToMemHotplugConfig()
-	if err != nil {
-		t.Fatalf("failed to convert to memory hotplug config: %v", err)
-	}
-
-	if hotplugCfg.MonitorInterval.String() != "10s" {
-		t.Errorf("expected MonitorInterval 10s, got %s", hotplugCfg.MonitorInterval)
-	}
-
-	if hotplugCfg.ScaleUpThreshold != 85.0 {
-		t.Errorf("expected ScaleUpThreshold 85.0, got %.2f", hotplugCfg.ScaleUpThreshold)
-	}
-
-	// Check MB to bytes conversion
-	expectedBytes := int64(128 * 1024 * 1024)
-	if hotplugCfg.IncrementSize != expectedBytes {
-		t.Errorf("expected IncrementSize %d bytes, got %d", expectedBytes, hotplugCfg.IncrementSize)
-	}
-
-	if hotplugCfg.EnableScaleDown != false {
-		t.Errorf("expected EnableScaleDown false, got %v", hotplugCfg.EnableScaleDown)
-	}
-}
-
-func TestToCPUHotplugConfig_InvalidDuration(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CPUHotplug.MonitorInterval = "invalid-duration"
-
-	_, err := cfg.ToCPUHotplugConfig()
-	if err == nil {
-		t.Fatal("expected error for invalid duration")
-	}
-
-	t.Logf("Error message: %s", err)
-}
-
-func TestToMemHotplugConfig_InvalidDuration(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.MemHotplug.ScaleUpCooldown = "not-a-duration"
-
-	_, err := cfg.ToMemHotplugConfig()
-	if err == nil {
-		t.Fatal("expected error for invalid duration")
-	}
-
-	t.Logf("Error message: %s", err)
 }

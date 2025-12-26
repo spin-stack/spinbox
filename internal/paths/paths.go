@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/aledbf/qemubox/containerd/pkg/config"
+	"github.com/aledbf/qemubox/containerd/internal/config"
 )
 
 // GetShareDir returns the qemubox share directory from configuration

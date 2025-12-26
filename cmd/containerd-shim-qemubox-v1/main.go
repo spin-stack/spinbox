@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"os"
 
-	_ "github.com/aledbf/qemubox/containerd/internal/shim"
-	"github.com/aledbf/qemubox/containerd/internal/shim/manager"
-	"github.com/aledbf/qemubox/containerd/pkg/config"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/log"
+
+	"github.com/aledbf/qemubox/containerd/internal/config"
+	_ "github.com/aledbf/qemubox/containerd/internal/shim"
+	"github.com/aledbf/qemubox/containerd/internal/shim/manager"
 )
 
 func main() {

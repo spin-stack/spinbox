@@ -6,7 +6,7 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/pkg/config"
+	"github.com/aledbf/qemubox/containerd/internal/config"
 )
 
 // VMType identifies the VMM backend

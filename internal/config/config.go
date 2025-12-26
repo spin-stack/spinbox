@@ -8,10 +8,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
-
-	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
-	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
 )
 
 const (
@@ -255,65 +251,4 @@ func (c *Config) applyMemHotplugDefaults(defaults *Config) {
 	if c.MemHotplug.ScaleDownStability == 0 {
 		c.MemHotplug.ScaleDownStability = defaults.MemHotplug.ScaleDownStability
 	}
-}
-
-// ToCPUHotplugConfig converts the config to cpuhotplug.Config
-func (c *Config) ToCPUHotplugConfig() (cpuhotplug.Config, error) {
-	monitorInterval, err := time.ParseDuration(c.CPUHotplug.MonitorInterval)
-	if err != nil {
-		return cpuhotplug.Config{}, fmt.Errorf("invalid cpu_hotplug.monitor_interval: %w", err)
-	}
-
-	scaleUpCooldown, err := time.ParseDuration(c.CPUHotplug.ScaleUpCooldown)
-	if err != nil {
-		return cpuhotplug.Config{}, fmt.Errorf("invalid cpu_hotplug.scale_up_cooldown: %w", err)
-	}
-
-	scaleDownCooldown, err := time.ParseDuration(c.CPUHotplug.ScaleDownCooldown)
-	if err != nil {
-		return cpuhotplug.Config{}, fmt.Errorf("invalid cpu_hotplug.scale_down_cooldown: %w", err)
-	}
-
-	return cpuhotplug.Config{
-		MonitorInterval:      monitorInterval,
-		ScaleUpCooldown:      scaleUpCooldown,
-		ScaleDownCooldown:    scaleDownCooldown,
-		ScaleUpThreshold:     c.CPUHotplug.ScaleUpThreshold,
-		ScaleDownThreshold:   c.CPUHotplug.ScaleDownThreshold,
-		ScaleUpThrottleLimit: c.CPUHotplug.ScaleUpThrottleLimit,
-		ScaleUpStability:     c.CPUHotplug.ScaleUpStability,
-		ScaleDownStability:   c.CPUHotplug.ScaleDownStability,
-		EnableScaleDown:      c.CPUHotplug.EnableScaleDown,
-	}, nil
-}
-
-// ToMemHotplugConfig converts the config to memhotplug.Config
-func (c *Config) ToMemHotplugConfig() (memhotplug.Config, error) {
-	monitorInterval, err := time.ParseDuration(c.MemHotplug.MonitorInterval)
-	if err != nil {
-		return memhotplug.Config{}, fmt.Errorf("invalid memory_hotplug.monitor_interval: %w", err)
-	}
-
-	scaleUpCooldown, err := time.ParseDuration(c.MemHotplug.ScaleUpCooldown)
-	if err != nil {
-		return memhotplug.Config{}, fmt.Errorf("invalid memory_hotplug.scale_up_cooldown: %w", err)
-	}
-
-	scaleDownCooldown, err := time.ParseDuration(c.MemHotplug.ScaleDownCooldown)
-	if err != nil {
-		return memhotplug.Config{}, fmt.Errorf("invalid memory_hotplug.scale_down_cooldown: %w", err)
-	}
-
-	return memhotplug.Config{
-		MonitorInterval:    monitorInterval,
-		ScaleUpCooldown:    scaleUpCooldown,
-		ScaleDownCooldown:  scaleDownCooldown,
-		ScaleUpThreshold:   c.MemHotplug.ScaleUpThreshold,
-		ScaleDownThreshold: c.MemHotplug.ScaleDownThreshold,
-		OOMSafetyMarginMB:  c.MemHotplug.OOMSafetyMarginMB,
-		IncrementSize:      c.MemHotplug.IncrementSizeMB * 1024 * 1024, // Convert MB to bytes
-		ScaleUpStability:   c.MemHotplug.ScaleUpStability,
-		ScaleDownStability: c.MemHotplug.ScaleDownStability,
-		EnableScaleDown:    c.MemHotplug.EnableScaleDown,
-	}, nil
 }

@@ -39,13 +39,13 @@ import (
 	bundleAPI "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
 	systemAPI "github.com/aledbf/qemubox/containerd/api/services/system/v1"
 	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
+	"github.com/aledbf/qemubox/containerd/internal/config"
 	"github.com/aledbf/qemubox/containerd/internal/host/network"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
 	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
-	"github.com/aledbf/qemubox/containerd/pkg/config"
 )
 
 const (
@@ -484,6 +484,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(err)
 	}
 	// Start forwarding events using service lifetime context (not request-scoped)
+	//nolint:contextcheck // intentionally using service context, not request context
 	if err := s.startEventForwarder(s.context, vmc); err != nil {
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
@@ -1175,10 +1176,26 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		log.G(ctx).WithError(err).Error("cpu-hotplug: failed to load config, using defaults")
 		cpuConfig = cpuhotplug.DefaultConfig()
 	} else {
-		cpuConfig, err = cfg.ToCPUHotplugConfig()
+		// Parse durations from config
+		monitorInterval, err := time.ParseDuration(cfg.CPUHotplug.MonitorInterval)
 		if err != nil {
-			log.G(ctx).WithError(err).Error("cpu-hotplug: invalid config, using defaults")
+			log.G(ctx).WithError(err).Error("cpu-hotplug: invalid monitor_interval, using defaults")
 			cpuConfig = cpuhotplug.DefaultConfig()
+		} else {
+			scaleUpCooldown, _ := time.ParseDuration(cfg.CPUHotplug.ScaleUpCooldown)
+			scaleDownCooldown, _ := time.ParseDuration(cfg.CPUHotplug.ScaleDownCooldown)
+
+			cpuConfig = cpuhotplug.Config{
+				MonitorInterval:      monitorInterval,
+				ScaleUpCooldown:      scaleUpCooldown,
+				ScaleDownCooldown:    scaleDownCooldown,
+				ScaleUpThreshold:     cfg.CPUHotplug.ScaleUpThreshold,
+				ScaleDownThreshold:   cfg.CPUHotplug.ScaleDownThreshold,
+				ScaleUpThrottleLimit: cfg.CPUHotplug.ScaleUpThrottleLimit,
+				ScaleUpStability:     cfg.CPUHotplug.ScaleUpStability,
+				ScaleDownStability:   cfg.CPUHotplug.ScaleDownStability,
+				EnableScaleDown:      cfg.CPUHotplug.EnableScaleDown,
+			}
 		}
 	}
 
@@ -1300,10 +1317,27 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 		log.G(ctx).WithError(err).Error("memory-hotplug: failed to load config, using defaults")
 		memConfig = memhotplug.DefaultConfig()
 	} else {
-		memConfig, err = cfg.ToMemHotplugConfig()
+		// Parse durations from config
+		monitorInterval, err := time.ParseDuration(cfg.MemHotplug.MonitorInterval)
 		if err != nil {
-			log.G(ctx).WithError(err).Error("memory-hotplug: invalid config, using defaults")
+			log.G(ctx).WithError(err).Error("memory-hotplug: invalid monitor_interval, using defaults")
 			memConfig = memhotplug.DefaultConfig()
+		} else {
+			scaleUpCooldown, _ := time.ParseDuration(cfg.MemHotplug.ScaleUpCooldown)
+			scaleDownCooldown, _ := time.ParseDuration(cfg.MemHotplug.ScaleDownCooldown)
+
+			memConfig = memhotplug.Config{
+				MonitorInterval:    monitorInterval,
+				ScaleUpCooldown:    scaleUpCooldown,
+				ScaleDownCooldown:  scaleDownCooldown,
+				ScaleUpThreshold:   cfg.MemHotplug.ScaleUpThreshold,
+				ScaleDownThreshold: cfg.MemHotplug.ScaleDownThreshold,
+				OOMSafetyMarginMB:  cfg.MemHotplug.OOMSafetyMarginMB,
+				IncrementSize:      cfg.MemHotplug.IncrementSizeMB * 1024 * 1024, // Convert MB to bytes
+				ScaleUpStability:   cfg.MemHotplug.ScaleUpStability,
+				ScaleDownStability: cfg.MemHotplug.ScaleDownStability,
+				EnableScaleDown:    cfg.MemHotplug.EnableScaleDown,
+			}
 		}
 	}
 
