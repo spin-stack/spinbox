@@ -58,6 +58,11 @@ target "_common" {
     GO_DEBUG_GCFLAGS = GO_DEBUG_GCFLAGS
     GO_LDFLAGS = GO_LDFLAGS
   }
+  dockerfile = "Dockerfile"
+}
+
+# Cache configuration for build targets
+target "_cache" {
   cache-from = ["type=local,src=/var/lib/qemubox-buildkit-cache"]
   cache-to = ["type=local,dest=/var/lib/qemubox-buildkit-cache,mode=min,compression=zstd"]
 }
@@ -73,14 +78,14 @@ variable "DESTDIR" {
 
 # Interactive kernel menuconfig (for adjusting kernel configuration)
 target "menuconfig" {
-  inherits = ["_common"]
+  inherits = ["_common", "_cache"]
   target = "kernel-build-base"
   output = ["type=image,name=qemubox-menuconfig"]
 }
 
 # Build Linux kernel
 target "kernel" {
-  inherits = ["_common"]
+  inherits = ["_common", "_cache"]
   target = "kernel"
   platforms = ["linux/amd64"]
   output = ["${DESTDIR}"]
@@ -88,7 +93,7 @@ target "kernel" {
 
 # Build initrd with vminitd and crun
 target "initrd" {
-  inherits = ["_common"]
+  inherits = ["_common", "_cache"]
   target = "initrd"
   platforms = ["linux/amd64"]
   output = ["${DESTDIR}"]
@@ -96,7 +101,7 @@ target "initrd" {
 
 # Build containerd shim
 target "shim" {
-  inherits = ["_common"]
+  inherits = ["_common", "_cache"]
   target = "shim"
   platforms = ["linux/amd64"]
   output = ["${DESTDIR}"]
@@ -104,7 +109,7 @@ target "shim" {
 
 # Build QEMU binaries (qemu-system-x86_64 and qemu-img)
 target "qemu" {
-  inherits = ["_common"]
+  inherits = ["_common", "_cache"]
   dockerfile = "Dockerfile.qemu"
   target = "extract"
   platforms = ["linux/amd64"]
@@ -118,7 +123,7 @@ group "default" {
 
 # Development environment with containerd, docker CLI, and delve
 target "dev" {
-  inherits = ["_common"]
+  inherits = ["_common", "_cache"]
   target = "dev"
   output = ["type=image,name=qemubox-dev"]
 }
