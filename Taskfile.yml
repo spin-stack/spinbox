@@ -238,6 +238,9 @@ tasks:
           exit 1
         fi
 
+        WORKDIR="$(mktemp -d)"
+        trap 'rm -rf "${WORKDIR}"' EXIT
+
         echo "📦 Verifying QEMU firmware in build output..."
         if [ -d "{{.OUTPUT_DIR}}/share/qemubox/qemu" ]; then
           ls -la "{{.OUTPUT_DIR}}/share/qemubox/qemu"
@@ -257,9 +260,6 @@ tasks:
           grep "usr/share/qemubox/qemu" "${TARBALL_LIST}" || true
           exit 1
         fi
-
-        WORKDIR="$(mktemp -d)"
-        trap 'rm -rf "${WORKDIR}"' EXIT
 
         tar -xzf "${TARBALL}" -C "${WORKDIR}"
 
