@@ -1263,8 +1263,9 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	s.cpuHotplugController = controller
 	s.mu.Unlock()
 
-	// Start monitoring loop
-	controller.Start(ctx)
+	// Start monitoring loop with service context (not request context)
+	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC
+	controller.Start(s.context)
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": containerID,
@@ -1410,8 +1411,9 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	s.memoryHotplugController = controller
 	s.mu.Unlock()
 
-	// Start monitoring loop
-	controller.Start(ctx)
+	// Start monitoring loop with service context (not request context)
+	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC
+	controller.Start(s.context)
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id":   containerID,
