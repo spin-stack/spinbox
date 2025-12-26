@@ -293,7 +293,7 @@ func (s *service) initVMInstance(ctx context.Context, r *taskAPI.CreateTaskReque
 		}
 		vmState = filepath.Join(vmStateRoot, namespace, r.ID)
 	}
-	if err := os.Mkdir(vmState, 0700); err != nil {
+	if err := os.MkdirAll(vmState, 0700); err != nil {
 		return nil, errgrpc.ToGRPCf(err, "failed to create vm state directory %q", vmState)
 	}
 	return s.vmInstance(ctx, r.ID, vmState, resourceCfg)
