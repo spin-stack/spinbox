@@ -7,6 +7,7 @@ import (
 	"github.com/containerd/containerd/v2/core/events"
 	"github.com/containerd/containerd/v2/pkg/protobuf"
 	cplugins "github.com/containerd/containerd/v2/plugins"
+	"github.com/containerd/log"
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
@@ -68,8 +69,14 @@ func (s *service) Stream(ctx context.Context, _ *emptypb.Empty, ss vmevents.TTRP
 				return err
 			}
 		case err := <-errs:
+			if err != nil {
+				log.G(ctx).WithError(err).Warn("vmevents stream error")
+			} else {
+				log.G(ctx).Warn("vmevents stream closed without error")
+			}
 			return err
 		case <-ctx.Done():
+			log.G(ctx).WithError(ctx.Err()).Warn("vmevents stream context done")
 			return ctx.Err()
 		}
 	}

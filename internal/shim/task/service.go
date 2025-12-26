@@ -381,7 +381,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 				}
 
 				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
-					log.G(ctx).Info("vm event stream closed unexpectedly, initiating shim shutdown")
+					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, initiating shim shutdown")
 				} else {
 					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
 				}
