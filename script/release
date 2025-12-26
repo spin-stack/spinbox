@@ -83,6 +83,11 @@ echo "Copying configuration files..."
 cp -r release/config/* "${RELEASE_DIR}/usr/share/qemubox/config/"
 echo "  ok: config files (buildkit, containerd)"
 
+echo "Copying qemubox config example..."
+mkdir -p "${RELEASE_DIR}/usr/share/qemubox/config/qemubox"
+cp examples/config.json "${RELEASE_DIR}/usr/share/qemubox/config/qemubox/config.json"
+echo "  ok: qemubox config.json example"
+
 echo "Copying systemd services..."
 mkdir -p "${RELEASE_DIR}/usr/share/qemubox/systemd"
 cp release/systemd/*.service "${RELEASE_DIR}/usr/share/qemubox/systemd/"

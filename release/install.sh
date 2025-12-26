@@ -77,6 +77,18 @@ mkdir -p /var/run/qemubox
 mkdir -p /var/log/qemubox
 echo -e "    ${GREEN}✓${NC} State directories created"
 
+# Install qemubox configuration file
+echo "  → Installing qemubox configuration..."
+mkdir -p /etc/qemubox
+if [ ! -f /etc/qemubox/config.json ]; then
+    echo "    → Creating /etc/qemubox/config.json from example..."
+    cp "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" /etc/qemubox/config.json
+    echo -e "    ${GREEN}✓${NC} Configuration file created at /etc/qemubox/config.json"
+else
+    echo -e "    ${YELLOW}⚠${NC}  /etc/qemubox/config.json already exists, skipping (preserving existing configuration)"
+    echo "      → Example config available at /usr/share/qemubox/config/qemubox/config.json"
+fi
+
 # Install systemd services
 echo "  → Installing systemd services to /usr/share/qemubox/systemd..."
 mkdir -p /usr/share/qemubox/systemd
@@ -121,6 +133,8 @@ check_file "/usr/share/qemubox/kernel/qemubox-initrd"
 check_file "/usr/share/qemubox/config/containerd/config.toml"
 check_file "/usr/share/qemubox/config/buildkit/config.toml"
 check_file "/usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
+check_file "/usr/share/qemubox/config/qemubox/config.json"
+check_file "/etc/qemubox/config.json"
 check_file "/usr/share/qemubox/systemd/qemubox-containerd.service"
 check_file "/usr/share/qemubox/systemd/qemubox-buildkit.service"
 check_file "/etc/systemd/system/qemubox-containerd.service"
@@ -141,19 +155,23 @@ if [ $ERRORS -eq 0 ]; then
     echo "================================================"
     echo ""
     echo "Next steps:"
-    echo "  1. Enable and start containerd:"
+    echo "  1. Review and customize configuration (if needed):"
+    echo "     vi /etc/qemubox/config.json"
+    echo "     (See /usr/share/qemubox/config/qemubox/config.json for defaults)"
+    echo ""
+    echo "  2. Enable and start containerd:"
     echo "     systemctl enable qemubox-containerd"
     echo "     systemctl start qemubox-containerd"
     echo ""
-    echo "  2. (Optional) Enable and start buildkit:"
+    echo "  3. (Optional) Enable and start buildkit:"
     echo "     systemctl enable qemubox-buildkit"
     echo "     systemctl start qemubox-buildkit"
     echo ""
-    echo "  3. Check service status:"
+    echo "  4. Check service status:"
     echo "     systemctl status qemubox-containerd"
     echo "     systemctl status qemubox-buildkit"
     echo ""
-    echo "  4. Add /usr/share/qemubox/bin to PATH:"
+    echo "  5. Add /usr/share/qemubox/bin to PATH:"
     echo "     export PATH=/usr/share/qemubox/bin:\$PATH"
     echo ""
 else

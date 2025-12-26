@@ -3,9 +3,10 @@ package vm
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/containerd/log"
+
+	"github.com/aledbf/qemubox/containerd/pkg/config"
 )
 
 // VMType identifies the VMM backend
@@ -21,13 +22,18 @@ type Factory interface {
 	NewInstance(ctx context.Context, containerID, stateDir string, cfg *VMResourceConfig) (Instance, error)
 }
 
-// GetVMType determines which VMM to use.
+// GetVMType determines which VMM to use from configuration.
 // Always returns QEMU as it is the only supported VMM backend.
 func GetVMType() VMType {
-	if vmm := os.Getenv("QEMUBOX_VMM"); vmm != "" && vmm != "qemu" {
-		log.L.WithField("vmm", vmm).Warn("only QEMU is supported, ignoring QEMUBOX_VMM value")
+	cfg, err := config.Get()
+	if err != nil {
+		// Config should be loaded at startup; this is a fallback
+		log.L.WithError(err).Warn("failed to load config, defaulting to QEMU")
+		return VMTypeQEMU
 	}
-	return VMTypeQEMU
+
+	// Config validation ensures VMM is "qemu", so this is guaranteed
+	return VMType(cfg.Runtime.VMM)
 }
 
 // NewFactory creates a factory for the specified VMM type.

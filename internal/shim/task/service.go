@@ -45,6 +45,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
 	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
+	"github.com/aledbf/qemubox/containerd/pkg/config"
 )
 
 const (
@@ -1167,13 +1168,17 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		}).Debug("cpu-hotplug: hotpluggable CPU slots")
 	}
 
-	// Create controller configuration from environment variables
-	config := cpuhotplug.DefaultConfig()
-
-	// Allow environment variable overrides
-	if interval := os.Getenv("QEMUBOX_CPU_HOTPLUG_INTERVAL"); interval != "" {
-		if d, err := time.ParseDuration(interval); err == nil {
-			config.MonitorInterval = d
+	// Create controller configuration from config file
+	var cpuConfig cpuhotplug.Config
+	cfg, err := config.Get()
+	if err != nil {
+		log.G(ctx).WithError(err).Error("cpu-hotplug: failed to load config, using defaults")
+		cpuConfig = cpuhotplug.DefaultConfig()
+	} else {
+		cpuConfig, err = cfg.ToCPUHotplugConfig()
+		if err != nil {
+			log.G(ctx).WithError(err).Error("cpu-hotplug: invalid config, using defaults")
+			cpuConfig = cpuhotplug.DefaultConfig()
 		}
 	}
 
@@ -1233,7 +1238,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		onlineCPU,
 		resourceCfg.BootCPUs,
 		resourceCfg.MaxCPUs,
-		config,
+		cpuConfig,
 	)
 
 	// Store controller in service
@@ -1288,17 +1293,21 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 		}).Debug("memory-hotplug: initial memory state")
 	}
 
-	// Create controller configuration
-	config := memhotplug.DefaultConfig()
-
-	// Allow environment variable overrides
-	if interval := os.Getenv("QEMUBOX_MEMORY_HOTPLUG_INTERVAL"); interval != "" {
-		if d, err := time.ParseDuration(interval); err == nil {
-			config.MonitorInterval = d
+	// Create controller configuration from config file
+	var memConfig memhotplug.Config
+	cfg, err := config.Get()
+	if err != nil {
+		log.G(ctx).WithError(err).Error("memory-hotplug: failed to load config, using defaults")
+		memConfig = memhotplug.DefaultConfig()
+	} else {
+		memConfig, err = cfg.ToMemHotplugConfig()
+		if err != nil {
+			log.G(ctx).WithError(err).Error("memory-hotplug: invalid config, using defaults")
+			memConfig = memhotplug.DefaultConfig()
 		}
 	}
-	if scaleDown := os.Getenv("QEMUBOX_MEMORY_HOTPLUG_SCALE_DOWN"); scaleDown == "true" {
-		config.EnableScaleDown = true
+
+	if memConfig.EnableScaleDown {
 		log.G(ctx).Warn("memory-hotplug: scale-down enabled (EXPERIMENTAL)")
 	}
 
@@ -1359,7 +1368,7 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 		onlineMemory,
 		resourceCfg.MemorySize,
 		resourceCfg.MemoryHotplugSize,
-		config,
+		memConfig,
 	)
 
 	// Store controller in service

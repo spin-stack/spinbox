@@ -1,0 +1,36 @@
+{
+  "paths": {
+    "share_dir": "/usr/share/qemubox",
+    "state_dir": "/var/lib/qemubox",
+    "log_dir": "/var/log/qemubox",
+    "qemu_path": "",
+    "qemu_share_path": ""
+  },
+  "runtime": {
+    "vmm": "qemu",
+    "shim_debug": false
+  },
+  "cpu_hotplug": {
+    "monitor_interval": "5s",
+    "scale_up_cooldown": "10s",
+    "scale_down_cooldown": "30s",
+    "scale_up_threshold": 80.0,
+    "scale_down_threshold": 50.0,
+    "scale_up_throttle_limit": 5.0,
+    "scale_up_stability": 2,
+    "scale_down_stability": 6,
+    "enable_scale_down": true
+  },
+  "memory_hotplug": {
+    "monitor_interval": "10s",
+    "scale_up_cooldown": "30s",
+    "scale_down_cooldown": "60s",
+    "scale_up_threshold": 85.0,
+    "scale_down_threshold": 60.0,
+    "oom_safety_margin_mb": 128,
+    "increment_size_mb": 128,
+    "scale_up_stability": 3,
+    "scale_down_stability": 6,
+    "enable_scale_down": false
+  }
+}

@@ -24,10 +24,32 @@ Host (containerd)
     └─> Storage (EROFS via virtio-blk)
 ```
 
-## Critical Paths (NEVER modify without understanding)
+## Configuration
 
-### Fixed Installation Paths
+### Configuration File
+
+qemubox uses a **required** JSON configuration file at `/etc/qemubox/config.json`.
+
+- **Location**: `/etc/qemubox/config.json` (override with `QEMUBOX_CONFIG` env var)
+- **Format**: JSON
+- **Required**: Yes (system fails fast if missing or invalid)
+- **Example**: `examples/config.json`
+- **Documentation**: `docs/CONFIGURATION.md`
+
+**Configuration sections**:
+- `paths` - Filesystem paths (share, state, log directories)
+- `runtime` - Runtime behavior (VMM backend, debug logging)
+- `cpu_hotplug` - Dynamic CPU allocation settings
+- `memory_hotplug` - Dynamic memory allocation settings
+
+See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) for comprehensive reference.
+
+### Critical Paths
+
+Default installation paths (configurable via config file):
+
 ```
+/etc/qemubox/config.json                   # Configuration file (REQUIRED)
 /usr/share/qemubox/bin/qemu-system-x86_64  # VMM binary
 /usr/share/qemubox/kernel/qemubox-kernel-x86_64  # VM kernel
 /usr/share/qemubox/kernel/qemubox-initrd    # Initial ramdisk
@@ -35,11 +57,6 @@ Host (containerd)
 /var/lib/cni/networks/                    # CNI IPAM state (IP allocations)
 /var/log/qemubox/                          # VM logs
 ```
-
-Override with environment variables:
-- `QEMUBOX_SHARE_DIR` (default: `/usr/share/qemubox`)
-- `QEMUBOX_STATE_DIR` (default: `/var/lib/qemubox`)
-- `QEMUBOX_LOG_DIR` (default: `/var/log/qemubox`)
 
 ---
 
@@ -212,18 +229,21 @@ ps aux | grep qemu-system-x86_64
 
 ## Key Files to Study
 
-1. `internal/shim/task/service.go` - Shim service implementation
-2. `internal/guest/vminit/task/service.go` - VM init service
-3. `internal/host/vm/qemu/instance.go` - QEMU integration
-4. `internal/host/network/network.go` - CNI-based network manager interface
-5. `internal/host/network/manager_cni.go` - CNI mode implementation
-6. `internal/host/network/cni/cni.go` - CNI plugin executor
-7. `integration/vm_test.go` - Integration test examples
+1. `pkg/config/config.go` - Centralized configuration management
+2. `internal/shim/task/service.go` - Shim service implementation
+3. `internal/guest/vminit/task/service.go` - VM init service
+4. `internal/host/vm/qemu/instance.go` - QEMU integration
+5. `internal/paths/paths.go` - Path resolution (uses config)
+6. `internal/host/network/network.go` - CNI-based network manager interface
+7. `internal/host/network/manager_cni.go` - CNI mode implementation
+8. `internal/host/network/cni/cni.go` - CNI plugin executor
+9. `integration/vm_test.go` - Integration test examples
 
 **Documentation**:
-- `containerd/README.md` - Comprehensive architecture documentation
-- `containerd/docs/CNI_SETUP.md` - CNI setup and configuration guide
-- `containerd/examples/cni/` - Example CNI configurations
+- `docs/CONFIGURATION.md` - Configuration file reference (comprehensive)
+- `examples/config.json` - Example configuration with defaults
+- `CLAUDE.md` - This file - architecture and development guide
+- `README.md` - Main documentation
 
 ---
 
@@ -248,6 +268,31 @@ If you don't have KVM access (e.g., macOS development):
 ---
 
 ## Common Issues
+
+### "Config file not found"
+```
+FATAL: Failed to load qemubox configuration: config file not found at /etc/qemubox/config.json
+```
+**Solution**: Create config file from example:
+```bash
+sudo mkdir -p /etc/qemubox
+sudo cp examples/config.json /etc/qemubox/config.json
+# Edit as needed
+sudo vi /etc/qemubox/config.json
+```
+
+### "Invalid configuration"
+```
+FATAL: Failed to load qemubox configuration: invalid configuration in /etc/qemubox/config.json
+```
+**Common causes**:
+- Invalid JSON syntax (use `jq` to validate: `cat /etc/qemubox/config.json | jq .`)
+- Invalid threshold values (must be 0-100)
+- Invalid duration strings (use Go format: "5s", "1m", etc.)
+- Memory increment not 128MB-aligned
+- Missing required paths (share_dir, state_dir, log_dir)
+
+**Solution**: Check detailed error message and fix validation errors. See `docs/CONFIGURATION.md` for valid values.
 
 ### "qemu-system-x86_64 binary not found"
 ```bash

@@ -1,44 +1,41 @@
 // Package paths provides standard filesystem paths used by qemubox.
+// All paths are now loaded from the centralized configuration file.
 package paths
 
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/aledbf/qemubox/containerd/pkg/config"
 )
 
-const (
-	// ShareDir is the binaries and config directory.
-	ShareDir = "/usr/share/qemubox"
-
-	// StateDir is the state files directory.
-	StateDir = "/var/lib/qemubox"
-
-	// LogDir is the logs directory.
-	LogDir = "/var/log/qemubox"
-)
-
-// GetShareDir returns the qemubox share directory, checking environment variables first
+// GetShareDir returns the qemubox share directory from configuration
 func GetShareDir() string {
-	if dir := os.Getenv("QEMUBOX_SHARE_DIR"); dir != "" {
-		return dir
+	cfg, err := config.Get()
+	if err != nil {
+		// This should never happen as config is loaded at startup
+		// Return default as fallback
+		return "/usr/share/qemubox"
 	}
-	return ShareDir
+	return cfg.Paths.ShareDir
 }
 
-// GetStateDir returns the qemubox state directory, checking environment variables first
+// GetStateDir returns the qemubox state directory from configuration
 func GetStateDir() string {
-	if dir := os.Getenv("QEMUBOX_STATE_DIR"); dir != "" {
-		return dir
+	cfg, err := config.Get()
+	if err != nil {
+		return "/var/lib/qemubox"
 	}
-	return StateDir
+	return cfg.Paths.StateDir
 }
 
-// GetLogDir returns the qemubox log directory, checking environment variables first
+// GetLogDir returns the qemubox log directory from configuration
 func GetLogDir() string {
-	if dir := os.Getenv("QEMUBOX_LOG_DIR"); dir != "" {
-		return dir
+	cfg, err := config.Get()
+	if err != nil {
+		return "/var/log/qemubox"
 	}
-	return LogDir
+	return cfg.Paths.LogDir
 }
 
 // CNIConfigDBPath returns the path to the CNI network configuration database.
@@ -60,34 +57,82 @@ func InitrdPath() string {
 
 // QemuPath returns the full path to the qemu-system-x86_64 binary
 func QemuPath() string {
-	// Check custom path first
-	if path := os.Getenv("QEMUBOX_QEMU_PATH"); path != "" {
-		return path
+	cfg, err := config.Get()
+	if err != nil {
+		return "/usr/bin/qemu-system-x86_64"
 	}
 
-	// Check qemubox share directory
-	customPath := filepath.Join(GetShareDir(), "bin", "qemu-system-x86_64")
-	if _, err := os.Stat(customPath); err == nil {
-		return customPath
+	// If explicitly configured, use that path
+	if cfg.Paths.QEMUPath != "" {
+		return cfg.Paths.QEMUPath
 	}
 
-	// Fall back to system QEMU
-	return "/usr/bin/qemu-system-x86_64"
+	// Otherwise perform auto-discovery
+	return discoverQemuPath(cfg.Paths.ShareDir)
 }
 
 // QemuSharePath returns the path to QEMU's share directory containing BIOS files
 func QemuSharePath() string {
-	// Check custom path first
-	if path := os.Getenv("QEMUBOX_QEMU_SHARE_PATH"); path != "" {
-		return path
+	cfg, err := config.Get()
+	if err != nil {
+		return "/usr/share/qemu"
 	}
 
-	// Check qemubox share directory
-	customPath := filepath.Join(GetShareDir(), "qemu")
-	if _, err := os.Stat(customPath); err == nil {
-		return customPath
+	// If explicitly configured, use that path
+	if cfg.Paths.QEMUSharePath != "" {
+		return cfg.Paths.QEMUSharePath
 	}
 
-	// Fall back to system QEMU share path
+	// Otherwise perform auto-discovery
+	return discoverQemuSharePath(cfg.Paths.ShareDir)
+}
+
+// discoverQemuPath attempts to find qemu-system-x86_64 binary
+func discoverQemuPath(shareDir string) string {
+	// Check qemubox share directory first
+	candidates := []string{
+		filepath.Join(shareDir, "bin", "qemu-system-x86_64"),
+		"/usr/bin/qemu-system-x86_64",
+		"/usr/local/bin/qemu-system-x86_64",
+	}
+
+	for _, path := range candidates {
+		if fileExists(path) {
+			return path
+		}
+	}
+
+	// Default fallback
+	return "/usr/bin/qemu-system-x86_64"
+}
+
+// discoverQemuSharePath attempts to find QEMU share directory
+func discoverQemuSharePath(shareDir string) string {
+	// Check qemubox share directory first
+	candidates := []string{
+		filepath.Join(shareDir, "qemu"),
+		"/usr/share/qemu",
+		"/usr/local/share/qemu",
+	}
+
+	for _, path := range candidates {
+		if dirExists(path) {
+			return path
+		}
+	}
+
+	// Default fallback
 	return "/usr/share/qemu"
+}
+
+// fileExists checks if a file exists
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// dirExists checks if a directory exists
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
