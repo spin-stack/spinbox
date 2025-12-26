@@ -59,7 +59,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	}()
 
-	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithNullIO))
+	task, err := container.NewTask(ctx, cio.NullIO)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
