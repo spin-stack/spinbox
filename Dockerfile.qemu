@@ -12,7 +12,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install build dependencies
-RUN apt-get update && apt-get upgrade -y && \
+RUN --mount=type=cache,sharing=locked,id=qemu-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=qemu-aptcache,target=/var/cache/apt \
+    apt-get update && apt-get upgrade -y && \
     apt-get --no-install-recommends install -y \
         # Core build tools
         build-essential \
@@ -57,19 +59,24 @@ RUN apt-get update && apt-get upgrade -y && \
 
 WORKDIR /build
 
-# Download QEMU source
-RUN curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o qemu.tar.xz && \
-    tar -xf qemu.tar.xz && \
-    rm qemu.tar.xz && \
-    mv qemu-${QEMU_VERSION} qemu-src
+# Download QEMU source (cached across builds)
+RUN --mount=type=cache,sharing=locked,id=qemu-src,target=/var/cache/qemu \
+    if [ ! -f "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" ]; then \
+        curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz"; \
+    fi && \
+    rm -rf /build/qemu-src && \
+    tar -xf "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" -C /build && \
+    mv /build/qemu-${QEMU_VERSION} /build/qemu-src
 
-WORKDIR /build/qemu-src
+RUN mkdir -p /build/qemu-build
+WORKDIR /build/qemu-build
 
 # Configure QEMU for minimal build with libc compatibility
 # Focused on VMs use case with virtio devices
 # Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
 # Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
-RUN ./configure \
+RUN --mount=type=cache,sharing=locked,id=qemu-build,target=/build/qemu-build \
+    ../qemu-src/configure \
     --prefix=/opt/qemu \
     --target-list=x86_64-softmmu \
     --enable-tools \
@@ -100,13 +107,9 @@ RUN ./configure \
     --enable-cap-ng \
     --enable-seccomp \
     --disable-slirp \
-    --disable-gio
-
-# Build QEMU
-RUN make -j${JOBS}
-
-# Install to prefix
-RUN make install
+    --disable-gio && \
+    make -j${JOBS} && \
+    make install
 
 # Strip the binary to reduce size
 RUN strip /opt/qemu/bin/qemu-system-x86_64
@@ -124,7 +127,9 @@ FROM ubuntu:25.10 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Install only runtime libraries required by QEMU
-RUN apt-get update && \
+RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=qemu-runtime-aptcache,target=/var/cache/apt \
+    apt-get update && \
     apt-get --no-install-recommends install -y \
         libglib2.0-0 \
         libpixman-1-0 \
