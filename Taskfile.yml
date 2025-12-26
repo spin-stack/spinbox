@@ -270,6 +270,15 @@ tasks:
         ${SUDO} systemctl enable --now qemubox-containerd
         ${SUDO} systemctl reset-failed qemubox-containerd || true
 
+        if [ ! -e /dev/vsock ]; then
+          echo "👹 Error: /dev/vsock not found"
+          ${SUDO} lsmod | grep vhost_vsock || true
+          exit 1
+        fi
+
+        echo "✓ /dev/vsock present"
+        ${SUDO} lsmod | grep vhost_vsock || true
+
         SOCKET="/var/run/qemubox/containerd.sock"
 
         for _ in $(seq 1 30); do

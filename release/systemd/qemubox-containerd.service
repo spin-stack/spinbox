@@ -16,6 +16,7 @@ ExecSearchPath=/sbin
 ExecSearchPath=/bin
 ExecStartPre=-/sbin/modprobe overlay
 ExecStartPre=-/sbin/modprobe erofs
+ExecStartPre=-/sbin/modprobe vhost_vsock
 ExecStart=/usr/share/qemubox/bin/containerd --config /usr/share/qemubox/config/containerd/config.toml
 
 Type=notify
