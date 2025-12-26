@@ -60,10 +60,10 @@ tasks:
         set -eou pipefail
         if [ -n "{{.TARGET}}" ]; then
           echo "🐳 {{.MESSAGE}}..."
-          {{.BUILDX}} bake {{.TARGET}}
+          {{.BUILDX}} bake --allow=fs=/var/lib/qemubox-buildkit-cache {{.TARGET}}
         else
           echo "🐳 {{.MESSAGE}}..."
-          {{.BUILDX}} bake
+          {{.BUILDX}} bake --allow=fs=/var/lib/qemubox-buildkit-cache
         fi
         echo "✓ {{.DONE_MESSAGE}}"
 
