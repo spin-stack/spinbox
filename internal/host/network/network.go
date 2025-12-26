@@ -5,6 +5,8 @@ package network
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/containerd/log"
@@ -43,6 +45,24 @@ type NetworkConfig struct {
 // Network configuration is auto-discovered from the first .conflist file
 // in the CNI config directory (sorted alphabetically by filename).
 func LoadNetworkConfig() NetworkConfig {
+	if dir := os.Getenv("QEMUBOX_CNI_CONF_DIR"); dir != "" {
+		return NetworkConfig{
+			Mode:       NetworkModeCNI,
+			CNIConfDir: dir,
+			CNIBinDir:  os.Getenv("QEMUBOX_CNI_BIN_DIR"),
+		}
+	}
+
+	qemuboxConfDir := filepath.Join("/usr/share/qemubox", "config", "cni", "net.d")
+	qemuboxBinDir := filepath.Join("/usr/share/qemubox", "libexec", "cni")
+	if _, err := os.Stat(qemuboxConfDir); err == nil {
+		return NetworkConfig{
+			Mode:       NetworkModeCNI,
+			CNIConfDir: qemuboxConfDir,
+			CNIBinDir:  qemuboxBinDir,
+		}
+	}
+
 	return NetworkConfig{
 		Mode:       NetworkModeCNI,
 		CNIConfDir: "/etc/cni/net.d",
