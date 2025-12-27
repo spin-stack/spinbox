@@ -565,6 +565,16 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(fmt.Errorf("checkpoints not supported: %w", errdefs.ErrNotImplemented))
 	}
 
+	s.containersMu.Lock()
+	existingContainers := len(s.containers)
+	s.containersMu.Unlock()
+	s.vmMu.Lock()
+	hasVM := s.vm != nil
+	s.vmMu.Unlock()
+	if existingContainers > 0 || hasVM {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim already running a container; requires fresh shim per container")
+	}
+
 	presetup := time.Now()
 
 	b, err := loadBundleForCreate(ctx, r.Bundle)
@@ -622,6 +632,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	}
 	bootTime := time.Since(prestart)
 	log.G(ctx).WithField("bootTime", bootTime).Debug("VM started")
+	s.intentionalShutdown.Store(false)
 
 	vmc, err := s.client()
 	if err != nil {
@@ -894,6 +905,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
 			}
 		}
+		go s.requestShutdownAndExit(ctx, "container deleted")
 	}
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("task deleted successfully")

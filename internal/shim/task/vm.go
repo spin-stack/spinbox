@@ -35,21 +35,22 @@ func (s *service) dialClient(ctx context.Context) (*ttrpc.Client, error) {
 func (s *service) vmInstance(ctx context.Context, containerID, state string, resourceCfg *vm.VMResourceConfig) (vm.Instance, error) {
 	s.vmMu.Lock()
 	defer s.vmMu.Unlock()
-	if s.vm == nil {
-		// Get VMM type from environment or default
-		vmmType := vm.GetVMType()
+	if s.vm != nil {
+		return nil, fmt.Errorf("vm already exists; shim requires one VM per container: %w", errdefs.ErrAlreadyExists)
+	}
+	// Get VMM type from environment or default
+	vmmType := vm.GetVMType()
 
-		// Create factory for selected VMM
-		factory, err := vm.NewFactory(ctx, vmmType)
-		if err != nil {
-			return nil, err
-		}
+	// Create factory for selected VMM
+	factory, err := vm.NewFactory(ctx, vmmType)
+	if err != nil {
+		return nil, err
+	}
 
-		// Create instance
-		s.vm, err = factory.NewInstance(ctx, containerID, state, resourceCfg)
-		if err != nil {
-			return nil, err
-		}
+	// Create instance
+	s.vm, err = factory.NewInstance(ctx, containerID, state, resourceCfg)
+	if err != nil {
+		return nil, err
 	}
 	return s.vm, nil
 }

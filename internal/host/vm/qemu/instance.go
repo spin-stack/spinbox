@@ -751,7 +751,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 // This is used for the event stream and should not be shared for concurrent RPCs.
 func (q *Instance) Client() *ttrpc.Client {
 	// Return nil if VM is shutdown
-	if vmState(q.vmState.Load()) == vmStateShutdown {
+	if vmState(q.vmState.Load()) != vmStateRunning {
 		return nil
 	}
 
@@ -998,6 +998,9 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 
 // StartStream creates a new stream connection to the VM for I/O operations.
 func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
+	if vmState(q.vmState.Load()) != vmStateRunning {
+		return 0, nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
+	}
 	const timeIncrement = 10 * time.Millisecond
 	for d := timeIncrement; d < time.Second; d += timeIncrement {
 		// Generate unique stream ID
