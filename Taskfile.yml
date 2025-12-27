@@ -363,13 +363,17 @@ tasks:
         cleanup_ctr
         trap - EXIT
 
+        TEST_ID="qbx-ci-$(date +%s)"
         ${SUDO} env \
           QEMUBOX_CONTAINERD_SOCKET="${SOCKET}" \
           QEMUBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
           QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
           QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
           QEMUBOX_FIFO_DIR="/run/qemubox/containerd/fifo" \
+          QEMUBOX_TEST_ID="${TEST_ID}" \
           go test -v -run TestContainerdRunQemubox -count=1 ./integration -test.v || {
+            echo "---- qemubox-containerd logs for ${TEST_ID} ----"
+            ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 | grep "${TEST_ID}" || true
             echo "---- qemubox-containerd logs ----"
             ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
             echo "---- qemubox qemu.log (latest) ----"

@@ -3,7 +3,9 @@
 package integration
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +45,12 @@ func TestContainerdRunQemubox(t *testing.T) {
 		t.Fatalf("pull image: %v", err)
 	}
 
-	containerName := "qbx-ci-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+	containerName := getenvDefault("QEMUBOX_TEST_ID", "")
+	if containerName == "" {
+		containerName = "qbx-ci-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+	}
+	t.Logf("container name: %s", containerName)
+
 	container, err := client.NewContainer(
 		ctx,
 		containerName,
@@ -69,23 +76,22 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	}()
 
-	var ioCreator cio.Creator
+	// Main task IO (container logs)
+	var taskIOCreator cio.Creator
 	if testing.Verbose() {
-		// In verbose mode, output to stdout/stderr
-		ioCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(os.Stdin, os.Stdout, os.Stderr))
+		taskIOCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(os.Stdin, os.Stdout, os.Stderr))
 	} else {
-		// Otherwise, write to a log file
 		logPath := filepath.Join(os.TempDir(), containerName+"-log.txt")
 		logFile, err := os.Create(logPath)
 		if err != nil {
 			t.Fatalf("create log file: %v", err)
 		}
 		defer logFile.Close()
-		ioCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(nil, logFile, logFile))
+		taskIOCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(nil, logFile, logFile))
 		t.Logf("Container logs written to: %s", logPath)
 	}
 
-	task, err := container.NewTask(ctx, ioCreator)
+	task, err := container.NewTask(ctx, taskIOCreator)
 	if err != nil {
 		if existing, loadErr := container.Task(ctx, nil); loadErr == nil {
 			_ = existing.Kill(ctx, syscall.SIGKILL)
@@ -98,11 +104,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 		_, _ = task.Delete(ctx)
 	}()
 
-	// Give the task creation, event stream, and vsock connection time to stabilize.
-	// Without this delay, rapid successive RPC calls (CreateTask, Connect, Start) over
-	// the same vsock connection can cause CID corruption (0xFFFFFFFF = VMADDR_CID_ANY)
-	// leading to "no such device" errors. This mimics the natural delays that occur
-	// when using separate ctr commands.
+	// Small stabilization delay for your vsock/CID issue.
 	time.Sleep(100 * time.Millisecond)
 
 	if err := task.Start(ctx); err != nil {
@@ -114,6 +116,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 		t.Fatalf("wait task: %v", err)
 	}
 
+	// Ensure it didn't immediately die
 	select {
 	case status := <-statusCh:
 		code, _, err := status.Result()
@@ -122,9 +125,33 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 		t.Fatalf("task exited early with code %d", code)
 	default:
-		// Task is still running; proceed with controlled shutdown.
 	}
 
+	// Wait for init/boot/userspace to be ready enough to exec.
+	// This also validates that exec path is functional (the thing you called out).
+	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer waitCancel()
+
+	if err := waitForExecReady(waitCtx, task); err != nil {
+		t.Fatalf("exec never became ready: %v", err)
+	}
+
+	// Now run an assertion command and verify output.
+	stdout, stderr, exitCode, err := execInTask(ctx, task,
+		[]string{"/bin/sh", "-lc", "echo __QEMUBOX_OK__ && id -u && uname -a >/dev/null"},
+		30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("exec failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exec exit code = %d (want 0)\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "__QEMUBOX_OK__") {
+		t.Fatalf("missing marker in stdout\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	// Controlled shutdown (still using SIGKILL here, but now we validated exec first)
 	if err := task.Kill(ctx, syscall.SIGKILL); err != nil {
 		t.Fatalf("kill task: %v", err)
 	}
@@ -140,6 +167,77 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatalf("task timeout: %v", ctx.Err())
+	}
+}
+
+func waitForExecReady(ctx context.Context, task containerd.Task) error {
+	// Retry a cheap exec until it works.
+	// This covers boot time, init bringing up namespaces, etc.
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("%w; last exec error: %v", ctx.Err(), lastErr)
+			}
+			return ctx.Err()
+		case <-ticker.C:
+			_, _, code, err := execInTask(ctx, task, []string{"/bin/sh", "-lc", "echo ready"}, 10*time.Second)
+			if err == nil && code == 0 {
+				return nil
+			}
+			if err != nil {
+				lastErr = err
+			} else {
+				lastErr = fmt.Errorf("non-zero exit code: %d", code)
+			}
+		}
+	}
+}
+
+func execInTask(ctx context.Context, task containerd.Task, argv []string, timeout time.Duration) (stdout string, stderr string, exitCode uint32, _ error) {
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Unique exec ID
+	execID := "exec-" + strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "")
+
+	var outBuf, errBuf bytes.Buffer
+	creator := cio.NewCreator(cio.WithStreams(nil, &outBuf, &errBuf))
+
+	proc, err := task.Exec(execCtx, execID, &containerd.ProcessSpec{
+		Args: argv,
+	}, creator)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("task exec create: %w", err)
+	}
+	defer func() {
+		// Ensure the exec process is cleaned up. Ignore errors: it may already be gone.
+		_, _ = proc.Delete(context.Background())
+	}()
+
+	waitCh, err := proc.Wait(execCtx)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("task exec wait: %w", err)
+	}
+
+	if err := proc.Start(execCtx); err != nil {
+		return outBuf.String(), errBuf.String(), 0, fmt.Errorf("task exec start: %w", err)
+	}
+
+	select {
+	case st := <-waitCh:
+		code, _, err := st.Result()
+		if err != nil {
+			return outBuf.String(), errBuf.String(), 0, fmt.Errorf("task exec result: %w", err)
+		}
+		return outBuf.String(), errBuf.String(), code, nil
+	case <-execCtx.Done():
+		_ = proc.Kill(context.Background(), syscall.SIGKILL)
+		return outBuf.String(), errBuf.String(), 0, fmt.Errorf("task exec timeout: %w", execCtx.Err())
 	}
 }
 
