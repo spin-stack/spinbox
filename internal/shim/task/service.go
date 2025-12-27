@@ -80,7 +80,20 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 		})
 	}
 
-	go s.forward(ctx, publisher)
+	// Start event forwarding goroutine with lifecycle tracking
+	forwardReady := make(chan struct{})
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.G(ctx).WithField("panic", r).Error("event forwarding goroutine panicked")
+			}
+			log.G(ctx).Info("event forwarding goroutine exited")
+		}()
+		s.forward(ctx, publisher, forwardReady)
+	}()
+
+	// Wait for forwarder to signal ready
+	<-forwardReady
 
 	return s, nil
 }
@@ -1260,12 +1273,16 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 	os.Exit(0)
 }
 
-func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
+func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready chan<- struct{}) {
 	ns, _ := namespaces.Namespace(ctx)
 	// Create a fresh background context with the namespace preserved.
 	// This is intentional: event forwarding must continue even if the parent context is cancelled,
 	// so we need an independent context that will live until the publisher is closed.
 	ctx = namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
+
+	// Signal that we're ready to process events
+	close(ready)
+
 	for e := range s.events {
 		switch e := e.(type) {
 		case *types.Envelope:
@@ -1489,13 +1506,15 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	// Start monitoring loop with detached context (not request context)
 	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC.
 	// Cleanup happens via controller.Stop() in shutdown/delete, not via context cancellation.
+	// Note: controller.Start() is non-blocking and launches its own goroutine internally.
+	// The controller manages its own lifecycle and will log any errors in its monitor loop.
 	controller.Start(context.Background())
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": containerID,
 		"boot_cpus":    resourceCfg.BootCPUs,
 		"max_cpus":     resourceCfg.MaxCPUs,
-	}).Info("cpu-hotplug: controller started")
+	}).Info("cpu-hotplug: controller started (monitoring in background)")
 }
 
 func (s *service) startMemoryHotplugController(ctx context.Context, containerID string, vmi vm.Instance, resourceCfg *vm.VMResourceConfig) {
@@ -1594,11 +1613,13 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	// Start monitoring loop with detached context (not request context)
 	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC.
 	// Cleanup happens via controller.Stop() in shutdown/delete, not via context cancellation.
+	// Note: controller.Start() is non-blocking and launches its own goroutine internally.
+	// The controller manages its own lifecycle and will log any errors in its monitor loop.
 	controller.Start(context.Background())
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id":   containerID,
 		"boot_memory_mb": resourceCfg.MemorySize / (1024 * 1024),
 		"max_memory_mb":  resourceCfg.MemoryHotplugSize / (1024 * 1024),
-	}).Info("memory-hotplug: controller started")
+	}).Info("memory-hotplug: controller started (monitoring in background)")
 }

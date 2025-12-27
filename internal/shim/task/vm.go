@@ -11,8 +11,8 @@ import (
 )
 
 func (s *service) client() (*ttrpc.Client, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.vmMu.Lock()
+	defer s.vmMu.Unlock()
 	if s.vm == nil {
 		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
 	}
@@ -24,8 +24,8 @@ func (s *service) client() (*ttrpc.Client, error) {
 }
 
 func (s *service) dialClient(ctx context.Context) (*ttrpc.Client, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.vmMu.Lock()
+	defer s.vmMu.Unlock()
 	if s.vm == nil {
 		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
 	}
@@ -33,8 +33,8 @@ func (s *service) dialClient(ctx context.Context) (*ttrpc.Client, error) {
 }
 
 func (s *service) vmInstance(ctx context.Context, containerID, state string, resourceCfg *vm.VMResourceConfig) (vm.Instance, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.vmMu.Lock()
+	defer s.vmMu.Unlock()
 	if s.vm == nil {
 		// Get VMM type from environment or default
 		vmmType := vm.GetVMType()
