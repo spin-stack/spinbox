@@ -95,8 +95,7 @@ type container struct {
 
 // service is the shim implementation of a remote shim over GRPC
 type service struct {
-	mu      sync.Mutex
-	rpcMu   sync.Mutex // Protects TTRPC client RPC calls to prevent vsock corruption
+	mu sync.Mutex
 
 	// vm is the VM instance used to run the container
 	vm vm.Instance
@@ -582,9 +581,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -714,16 +710,12 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("delete: entered")
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("deleting task")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
 	vmc, err := s.client()
 	if err != nil {
-		s.rpcMu.Unlock()
 		return nil, errgrpc.ToGRPC(err)
 	}
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
-	s.rpcMu.Unlock()
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "vm_nil": s.vm == nil, "err": err}).Info("delete: rpc returned")
 	if err != nil {
@@ -792,10 +784,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		Spec:     r.Spec,
 	}
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
 	resp, err := taskAPI.NewTTRPCTaskClient(vmc).Exec(ctx, vr)
-	s.rpcMu.Unlock()
 
 	if err != nil {
 		s.mu.Lock()
@@ -818,9 +807,6 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("resize pty")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -834,9 +820,6 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("state: called")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -858,9 +841,6 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("pause")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -874,9 +854,6 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("resume")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -890,9 +867,6 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("kill")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -906,9 +880,6 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("all pids")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -922,9 +893,6 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Info("close io")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -944,9 +912,6 @@ func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskReque
 func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("update")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -960,9 +925,6 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("wait")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -990,7 +952,6 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	vr, err := tc.Connect(ctx, r)
 	if err != nil {
@@ -1029,9 +990,6 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("stats")
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
@@ -1282,7 +1240,6 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 
 	// Create and start the controller
 	statsProvider := func(ctx context.Context) (uint64, uint64, error) {
-		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return 0, 0, err
@@ -1310,7 +1267,6 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}
 
 	offlineCPU := func(ctx context.Context, cpuID int) error {
-		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
@@ -1321,7 +1277,6 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}
 
 	onlineCPU := func(ctx context.Context, cpuID int) error {
-		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
@@ -1432,7 +1387,6 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 
 	// Create stats provider (reads cgroup v2 memory.current)
 	statsProvider := func(ctx context.Context) (int64, error) {
-		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return 0, err
@@ -1461,7 +1415,6 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	}
 
 	offlineMemory := func(ctx context.Context, memoryID int) error {
-		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
@@ -1472,7 +1425,6 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	}
 
 	onlineMemory := func(ctx context.Context, memoryID int) error {
-		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
