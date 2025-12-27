@@ -158,15 +158,21 @@ func (nm *NetworkManager) releaseNetworkResourcesCNI(env *Environment) error {
 
 	// Execute CNI DEL operation
 	// This will clean up veth pairs, IP allocations, firewall rules, etc.
-	if netnsPath != "" {
-		if err := nm.cniManager.Teardown(nm.ctx, env.ID, netnsPath); err != nil {
+	// IMPORTANT: Always attempt teardown even without netns, as some CNI plugins
+	// (especially IPAM plugins) can clean up IP allocations without netns
+	if err := nm.cniManager.Teardown(nm.ctx, env.ID, netnsPath); err != nil {
+		if netnsPath == "" {
+			// Expected to have some errors without netns, but IPAM cleanup might still work
+			log.G(nm.ctx).WithError(err).WithField("vmID", env.ID).
+				Debug("CNI teardown failed without netns (expected), but IPAM cleanup may have succeeded")
+		} else {
 			log.G(nm.ctx).WithError(err).WithField("vmID", env.ID).
 				Warn("Failed to teardown CNI network")
-			// Continue with cleanup - we still want to remove state
 		}
-	} else {
+		// Continue with cleanup - we still want to remove state
+	} else if netnsPath == "" {
 		log.G(nm.ctx).WithField("vmID", env.ID).
-			Warn("Skipping CNI teardown - no valid netns available")
+			Info("CNI teardown succeeded without netns (IPAM cleanup likely successful)")
 	}
 
 	// Clean up netns (whether it's the original or temporary)

@@ -482,6 +482,25 @@ func (q *Instance) rollbackStart(success *bool) {
 		return
 	}
 	q.vmState.Store(uint32(vmStateNew))
+
+	// Close vsock connection FIRST (before killing QEMU)
+	if q.vsockConn != nil {
+		_ = q.vsockConn.Close()
+		q.vsockConn = nil
+	}
+
+	// Close TTRPC client
+	if q.client != nil {
+		_ = q.client.Close()
+		q.client = nil
+	}
+
+	// Close QMP client
+	if q.qmpClient != nil {
+		_ = q.qmpClient.Close()
+		q.qmpClient = nil
+	}
+
 	// Close console file and remove FIFO on failure
 	if q.consoleFile != nil {
 		_ = q.consoleFile.Close()
@@ -490,6 +509,7 @@ func (q *Instance) rollbackStart(success *bool) {
 	if q.consoleFifoPath != "" {
 		_ = os.Remove(q.consoleFifoPath)
 	}
+
 	// Close any opened TAP FDs on failure
 	for _, nic := range q.nets {
 		if nic.TapFile != nil {

@@ -108,6 +108,7 @@ func DefaultConfig() Config {
 }
 
 // NewController creates a new memory hotplug controller.
+// Returns nil if hotplug is not needed (maxMemory <= bootMemory).
 // In production, qmpClient should be a *qemu.QMPClient.
 func NewController(
 	containerID string,
@@ -118,6 +119,13 @@ func NewController(
 	bootMemory, maxMemory int64,
 	config Config,
 ) *Controller {
+	// Only create controller if hotplug is actually needed
+	// This prevents channel leaks when maxMemory == bootMemory
+	if maxMemory <= bootMemory {
+		return nil
+	}
+
+	// Create channels only when controller will actually run
 	return &Controller{
 		containerID:   containerID,
 		qmpClient:     qmpClient,

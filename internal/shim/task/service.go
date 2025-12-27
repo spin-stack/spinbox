@@ -66,11 +66,13 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 	}
 
 	s := &service{
-		events:           make(chan any, eventChannelBuffer),
-		containers:       make(map[string]*container),
-		networkManager:   nm,
-		initiateShutdown: sd.Shutdown,
-		shutdownSvc:      sd,
+		events:                   make(chan any, eventChannelBuffer),
+		containers:               make(map[string]*container),
+		cpuHotplugControllers:    make(map[string]*cpuhotplug.Controller),
+		memoryHotplugControllers: make(map[string]*memhotplug.Controller),
+		networkManager:           nm,
+		initiateShutdown:         sd.Shutdown,
+		shutdownSvc:              sd,
 	}
 	sd.RegisterCallback(s.shutdown)
 
@@ -118,11 +120,10 @@ type service struct {
 	// networkManager handles network resource allocation and cleanup
 	networkManager network.NetworkManagerInterface
 
-	// cpuHotplugController manages dynamic vCPU allocation (QEMU only)
-	cpuHotplugController *cpuhotplug.Controller
-
-	// memoryHotplugController manages dynamic memory allocation (QEMU only)
-	memoryHotplugController *memhotplug.Controller
+	// Per-container hotplug controllers (QEMU only)
+	// Using maps prevents race conditions when multiple VMs are created concurrently
+	cpuHotplugControllers    map[string]*cpuhotplug.Controller  // key: containerID
+	memoryHotplugControllers map[string]*memhotplug.Controller // key: containerID
 
 	events chan any
 
@@ -613,13 +614,25 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Cleanup helper for network resources on failure
+	// Cleanup helper for network resources on failure - defined immediately after allocation
+	// Use defer pattern to ensure cleanup on any error path
+	var networkCleanupDone bool
 	cleanupNetwork := func() {
+		if networkCleanupDone {
+			return
+		}
 		env := &network.Environment{ID: r.ID}
 		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
 		}
+		networkCleanupDone = true
 	}
+	// Defer cleanup - will be called on error, but skipped if we succeed
+	defer func() {
+		if !networkCleanupDone {
+			cleanupNetwork()
+		}
+	}()
 
 	prestart := time.Now()
 	startOpts := []vm.StartOpt{
@@ -741,6 +754,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Start memory hotplug controller if conditions are met
 	s.startMemoryHotplugController(ctx, r.ID, vmi, resourceCfg)
 
+	// Mark network cleanup as done since we succeeded
+	networkCleanupDone = true
+
 	return &taskAPI.CreateTaskResponse{
 		Pid: resp.Pid,
 	}, nil
@@ -853,10 +869,10 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	// Get controllers and VM state (only for container, not exec)
 	if r.ExecID == "" {
 		s.controllerMu.Lock()
-		cpuController = s.cpuHotplugController
-		s.cpuHotplugController = nil
-		memController = s.memoryHotplugController
-		s.memoryHotplugController = nil
+		cpuController = s.cpuHotplugControllers[r.ID]
+		delete(s.cpuHotplugControllers, r.ID)
+		memController = s.memoryHotplugControllers[r.ID]
+		delete(s.memoryHotplugControllers, r.ID)
 		s.controllerMu.Unlock()
 
 		s.vmMu.Lock()
@@ -1485,9 +1501,18 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		cpuConfig,
 	)
 
-	// Store controller in service
+	// NewController returns nil if hotplug not needed (maxCPUs <= bootCPUs)
+	if controller == nil {
+		log.G(ctx).WithFields(log.Fields{
+			"boot_cpus": resourceCfg.BootCPUs,
+			"max_cpus":  resourceCfg.MaxCPUs,
+		}).Debug("cpu-hotplug: not enabled (MaxCPUs <= BootCPUs, no room for scaling)")
+		return
+	}
+
+	// Store controller in service by container ID (prevents race condition)
 	s.controllerMu.Lock()
-	s.cpuHotplugController = controller
+	s.cpuHotplugControllers[containerID] = controller
 	s.controllerMu.Unlock()
 
 	// Start monitoring loop with detached context (not request context)
@@ -1505,15 +1530,6 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 }
 
 func (s *service) startMemoryHotplugController(ctx context.Context, containerID string, vmi vm.Instance, resourceCfg *vm.VMResourceConfig) {
-	// Only enable for VMs that support hotplug (MemoryHotplugSize > MemorySize)
-	if resourceCfg.MemoryHotplugSize <= resourceCfg.MemorySize {
-		log.G(ctx).WithFields(log.Fields{
-			"boot_memory_mb": resourceCfg.MemorySize / (1024 * 1024),
-			"max_memory_mb":  resourceCfg.MemoryHotplugSize / (1024 * 1024),
-		}).Debug("memory-hotplug: not enabled (MaxMemory == BootMemory, no room for scaling)")
-		return
-	}
-
 	// Type assert to check if this is a QEMU instance (only QEMU supports memory hotplug currently)
 	qemuVM, ok := vmi.(*qemu.Instance)
 	if !ok {
@@ -1588,9 +1604,18 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 		memConfig,
 	)
 
-	// Store controller in service
+	// NewController returns nil if hotplug not needed (maxMemory <= bootMemory)
+	if controller == nil {
+		log.G(ctx).WithFields(log.Fields{
+			"boot_memory_mb": resourceCfg.MemorySize / (1024 * 1024),
+			"max_memory_mb":  resourceCfg.MemoryHotplugSize / (1024 * 1024),
+		}).Debug("memory-hotplug: not enabled (MaxMemory <= BootMemory, no room for scaling)")
+		return
+	}
+
+	// Store controller in service by container ID (prevents race condition)
 	s.controllerMu.Lock()
-	s.memoryHotplugController = controller
+	s.memoryHotplugControllers[containerID] = controller
 	s.controllerMu.Unlock()
 
 	// Start monitoring loop with detached context (not request context)

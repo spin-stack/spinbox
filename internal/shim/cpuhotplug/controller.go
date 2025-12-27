@@ -93,8 +93,14 @@ func DefaultConfig() Config {
 	}
 }
 
-// NewController creates a new CPU hotplug controller
+// NewController creates a new CPU hotplug controller.
+// Returns nil if hotplug is not needed (maxCPUs <= bootCPUs).
 func NewController(containerID string, qmpClient *qemu.QMPClient, stats StatsProvider, offliner CPUOffliner, onliner CPUOnliner, bootCPUs, maxCPUs int, config Config) *Controller {
+	// Only create controller if hotplug is actually needed
+	if maxCPUs <= bootCPUs {
+		return nil
+	}
+
 	return &Controller{
 		containerID: containerID,
 		qmpClient:   qmpClient,
