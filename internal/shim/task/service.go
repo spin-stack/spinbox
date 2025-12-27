@@ -109,9 +109,9 @@ type container struct {
 // service is the shim implementation of a remote shim over GRPC
 type service struct {
 	// Separate mutexes for different concerns to avoid contention
-	containerMu   sync.Mutex // Protects container field
-	controllerMu  sync.Mutex // Protects hotplug controllers
-	vmMu          sync.Mutex // Protects VM instance
+	containerMu  sync.Mutex // Protects container field
+	controllerMu sync.Mutex // Protects hotplug controllers
+	vmMu         sync.Mutex // Protects VM instance
 
 	// vm is the VM instance used to run the container
 	vm vm.Instance
@@ -125,15 +125,16 @@ type service struct {
 
 	// Per-container hotplug controllers (QEMU only)
 	// Using maps prevents race conditions when multiple VMs are created concurrently
-	cpuHotplugControllers    map[string]cpuhotplug.CPUHotplugController       // key: containerID
-	memoryHotplugControllers map[string]memhotplug.MemoryHotplugController    // key: containerID
+	cpuHotplugControllers    map[string]cpuhotplug.CPUHotplugController    // key: containerID
+	memoryHotplugControllers map[string]memhotplug.MemoryHotplugController // key: containerID
 
 	events chan any
 
 	initiateShutdown    func()
 	eventsClosed        atomic.Bool
-	eventsCloseOnce     sync.Once // Ensures events channel is only closed once
+	eventsCloseOnce     sync.Once   // Ensures events channel is only closed once
 	intentionalShutdown atomic.Bool // Set when we intentionally close VM (not a crash)
+	deletionInProgress  atomic.Bool // Set during Delete to prevent Create requests
 	shutdownSvc         shutdown.Service
 	inflight            atomic.Int64
 }
@@ -344,11 +345,13 @@ func (s *service) shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Shutdown VM
+	// Shutdown VM (idempotent - may be nil if Delete already cleared it)
 	if s.vm != nil {
 		if err := s.vm.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("vm shutdown: %w", err))
 		}
+		// Clear s.vm if not already nil
+		s.vm = nil
 	}
 
 	// Close network manager (this closes the database)
@@ -567,12 +570,23 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(fmt.Errorf("checkpoints not supported: %w", errdefs.ErrNotImplemented))
 	}
 
+	// Check if deletion is in progress
+	if s.deletionInProgress.Load() {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
+	}
+
 	s.containerMu.Lock()
 	hasContainer := s.container != nil
 	s.containerMu.Unlock()
 	s.vmMu.Lock()
 	hasVM := s.vm != nil
 	s.vmMu.Unlock()
+
+	// Double-check deletion flag (prevent TOCTOU race)
+	if s.deletionInProgress.Load() {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
+	}
+
 	if hasContainer || hasVM {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim already running a container; requires fresh shim per container")
 	}
@@ -791,7 +805,6 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return resp, nil
 }
 
-
 func isProcessAlreadyFinished(err error) bool {
 	if err == nil {
 		return false
@@ -812,6 +825,15 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("deleting task")
+
+	// Mark deletion in progress to prevent new Create requests
+	// Only do this for container deletion (not exec)
+	if r.ExecID == "" {
+		if !s.deletionInProgress.CompareAndSwap(false, true) {
+			return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "delete already in progress")
+		}
+		// Note: Don't clear this flag - keep it true until shim exits
+	}
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -925,6 +947,15 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
 			}
 		}
+
+		// CRITICAL: Clear s.vm synchronously BEFORE returning
+		// This ensures Create cannot see s.vm != nil after Delete returns
+		s.vmMu.Lock()
+		s.vm = nil
+		s.vmMu.Unlock()
+		log.G(ctx).Info("VM state cleared, scheduling shim exit")
+
+		// Schedule async exit (non-blocking, allows Delete to return)
 		go s.requestShutdownAndExit(ctx, "container deleted")
 	}
 
@@ -1005,7 +1036,6 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("resize pty")
 
-
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
@@ -1022,7 +1052,6 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 // State returns runtime state information for a process
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("state: called")
-
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1049,7 +1078,6 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("pause")
 
-
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
@@ -1066,7 +1094,6 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 // Resume the container
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("resume")
-
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1085,7 +1112,6 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("kill")
 
-
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
@@ -1103,7 +1129,6 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("all pids")
 
-
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
@@ -1120,7 +1145,6 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 // CloseIO of a process
 func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Info("close io")
-
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1145,7 +1169,6 @@ func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskReque
 func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("update")
 
-
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
@@ -1162,7 +1185,6 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 // Wait for a process to exit
 func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("wait")
-
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1238,7 +1260,6 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 
 func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("stats")
-
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
