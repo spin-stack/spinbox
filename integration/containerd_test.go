@@ -80,7 +80,8 @@ func TestContainerdRunQemubox(t *testing.T) {
 	// Main task IO (container logs)
 	var taskIOCreator cio.Creator
 	if testing.Verbose() {
-		taskIOCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(os.Stdin, os.Stdout, os.Stderr))
+		// Keep stdin closed to avoid early EOF triggering VM shutdown.
+		taskIOCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(nil, os.Stdout, os.Stderr))
 	} else {
 		logPath := filepath.Join(os.TempDir(), containerName+"-log.txt")
 		logFile, err := os.Create(logPath)
