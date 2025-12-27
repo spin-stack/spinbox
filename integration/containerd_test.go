@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -55,6 +56,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 			oci.WithPrivileged,
 			oci.WithAllDevicesAllowed,
 			oci.WithHostDevices,
+			oci.WithTTY,
 		),
 		containerd.WithRuntime(runtime, nil),
 	)
@@ -67,7 +69,23 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	}()
 
-	task, err := container.NewTask(ctx, cio.NullIO)
+	var ioCreator cio.Creator
+	if testing.Verbose() {
+		// In verbose mode, output to stdout/stderr
+		ioCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(os.Stdin, os.Stdout, os.Stderr))
+	} else {
+		// Otherwise, write to a log file
+		logPath := filepath.Join(os.TempDir(), containerName+"-log.txt")
+		logFile, err := os.Create(logPath)
+		if err != nil {
+			t.Fatalf("create log file: %v", err)
+		}
+		defer logFile.Close()
+		ioCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(nil, logFile, logFile))
+		t.Logf("Container logs written to: %s", logPath)
+	}
+
+	task, err := container.NewTask(ctx, ioCreator)
 	if err != nil {
 		if existing, loadErr := container.Task(ctx, nil); loadErr == nil {
 			_ = existing.Kill(ctx, syscall.SIGKILL)
