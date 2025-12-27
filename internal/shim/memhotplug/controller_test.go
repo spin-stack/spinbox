@@ -152,21 +152,63 @@ func TestNewController(t *testing.T) {
 		config,
 	)
 
-	if controller == nil {
-		t.Fatal("NewController returned nil")
+	// NewController now returns interface (never nil with Null Object Pattern)
+	// Type assert to access internal fields for testing
+	ctrl, ok := controller.(*Controller)
+	if !ok {
+		t.Fatal("NewController returned non-Controller implementation (unexpected for maxMemory > bootMemory)")
 	}
 
-	if controller.containerID != "test-container" {
-		t.Errorf("expected containerID=test-container, got %s", controller.containerID)
+	if ctrl.containerID != "test-container" {
+		t.Errorf("expected containerID=test-container, got %s", ctrl.containerID)
 	}
 
-	if controller.bootMemory != 512*1024*1024 {
-		t.Errorf("expected bootMemory=512MB, got %d", controller.bootMemory)
+	if ctrl.bootMemory != 512*1024*1024 {
+		t.Errorf("expected bootMemory=512MB, got %d", ctrl.bootMemory)
 	}
 
-	if controller.maxMemory != 1024*1024*1024 {
-		t.Errorf("expected maxMemory=1GB, got %d", controller.maxMemory)
+	if ctrl.maxMemory != 1024*1024*1024 {
+		t.Errorf("expected maxMemory=1GB, got %d", ctrl.maxMemory)
 	}
+}
+
+func TestNewControllerNoopWhenNoHotplug(t *testing.T) {
+	mockQMP := &mockQMPClient{
+		baseMemory: 512 * 1024 * 1024,
+	}
+	mockStats := &mockStatsProvider{}
+	mockMem := &mockMemoryManager{}
+
+	config := DefaultConfig()
+
+	// Create controller with maxMemory == bootMemory (no room for hotplug)
+	controller := NewController(
+		"test-container",
+		mockQMP,
+		mockStats.getStats,
+		mockMem.offline,
+		mockMem.online,
+		512*1024*1024, // boot memory
+		512*1024*1024, // max memory (same as boot)
+		config,
+	)
+
+	// Should return no-op implementation (Null Object Pattern)
+	_, ok := controller.(*Controller)
+	if ok {
+		t.Error("expected no-op controller when maxMemory <= bootMemory, got *Controller")
+	}
+
+	// Verify it's the no-op implementation
+	_, isNoop := controller.(*noopMemoryController)
+	if !isNoop {
+		t.Error("expected *noopMemoryController, got different type")
+	}
+
+	// Should be safe to call Start/Stop on no-op (does nothing)
+	ctx := context.Background()
+	controller.Start(ctx) // Should not panic or do anything
+	controller.Stop()     // Should not panic or do anything
 }
 
 func TestControllerScaleUp(t *testing.T) {
@@ -286,8 +328,14 @@ func TestControllerScaleDown(t *testing.T) {
 		768*1024*1024, // max memory
 		config,
 	)
-	controller.currentMemory = 640 * 1024 * 1024 // Set current memory to include plugged
-	controller.usedSlots[0] = true               // Mark slot 0 as used
+
+	// Type assert to access internal fields for testing
+	ctrl, ok := controller.(*Controller)
+	if !ok {
+		t.Fatal("NewController returned non-Controller implementation")
+	}
+	ctrl.currentMemory = 640 * 1024 * 1024 // Set current memory to include plugged
+	ctrl.usedSlots[0] = true               // Mark slot 0 as used
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

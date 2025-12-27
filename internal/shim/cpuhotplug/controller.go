@@ -56,6 +56,12 @@ type CPUOffliner func(ctx context.Context, cpuID int) error
 // CPUOnliner onlines a CPU in the guest after hotplug.
 type CPUOnliner func(ctx context.Context, cpuID int) error
 
+// CPUHotplugController defines the interface for CPU hotplug management.
+type CPUHotplugController interface {
+	Start(ctx context.Context)
+	Stop()
+}
+
 // Config holds configuration for the CPU hotplug controller
 type Config struct {
 	// Monitoring interval
@@ -93,12 +99,19 @@ func DefaultConfig() Config {
 	}
 }
 
+// noopCPUController is a no-op implementation of CPUHotplugController.
+// Used when CPU hotplug is not needed (maxCPUs <= bootCPUs).
+type noopCPUController struct{}
+
+func (n *noopCPUController) Start(ctx context.Context) {}
+func (n *noopCPUController) Stop()                     {}
+
 // NewController creates a new CPU hotplug controller.
-// Returns nil if hotplug is not needed (maxCPUs <= bootCPUs).
-func NewController(containerID string, qmpClient *qemu.QMPClient, stats StatsProvider, offliner CPUOffliner, onliner CPUOnliner, bootCPUs, maxCPUs int, config Config) *Controller {
-	// Only create controller if hotplug is actually needed
+// Returns a no-op controller if hotplug is not needed (maxCPUs <= bootCPUs).
+func NewController(containerID string, qmpClient *qemu.QMPClient, stats StatsProvider, offliner CPUOffliner, onliner CPUOnliner, bootCPUs, maxCPUs int, config Config) CPUHotplugController {
+	// Return no-op controller if hotplug is not needed
 	if maxCPUs <= bootCPUs {
-		return nil
+		return &noopCPUController{}
 	}
 
 	return &Controller{

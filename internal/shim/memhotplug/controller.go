@@ -64,6 +64,12 @@ type MemoryOffliner func(ctx context.Context, memoryID int) error
 // MemoryOnliner onlines a memory block in the guest after hotplug
 type MemoryOnliner func(ctx context.Context, memoryID int) error
 
+// MemoryHotplugController defines the interface for memory hotplug management.
+type MemoryHotplugController interface {
+	Start(ctx context.Context)
+	Stop()
+}
+
 // Config holds configuration for the memory hotplug controller
 type Config struct {
 	// Monitoring interval
@@ -107,8 +113,15 @@ func DefaultConfig() Config {
 	}
 }
 
+// noopMemoryController is a no-op implementation of MemoryHotplugController.
+// Used when memory hotplug is not needed (maxMemory <= bootMemory).
+type noopMemoryController struct{}
+
+func (n *noopMemoryController) Start(ctx context.Context) {}
+func (n *noopMemoryController) Stop()                     {}
+
 // NewController creates a new memory hotplug controller.
-// Returns nil if hotplug is not needed (maxMemory <= bootMemory).
+// Returns a no-op controller if hotplug is not needed (maxMemory <= bootMemory).
 // In production, qmpClient should be a *qemu.QMPClient.
 func NewController(
 	containerID string,
@@ -118,11 +131,10 @@ func NewController(
 	onliner MemoryOnliner,
 	bootMemory, maxMemory int64,
 	config Config,
-) *Controller {
-	// Only create controller if hotplug is actually needed
-	// This prevents channel leaks when maxMemory == bootMemory
+) MemoryHotplugController {
+	// Return no-op controller if hotplug is not needed
 	if maxMemory <= bootMemory {
-		return nil
+		return &noopMemoryController{}
 	}
 
 	// Create channels only when controller will actually run

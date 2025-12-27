@@ -67,8 +67,8 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 
 	s := &service{
 		events:                   make(chan any, eventChannelBuffer),
-		cpuHotplugControllers:    make(map[string]*cpuhotplug.Controller),
-		memoryHotplugControllers: make(map[string]*memhotplug.Controller),
+		cpuHotplugControllers:    make(map[string]cpuhotplug.CPUHotplugController),
+		memoryHotplugControllers: make(map[string]memhotplug.MemoryHotplugController),
 		networkManager:           nm,
 		initiateShutdown:         sd.Shutdown,
 		shutdownSvc:              sd,
@@ -125,8 +125,8 @@ type service struct {
 
 	// Per-container hotplug controllers (QEMU only)
 	// Using maps prevents race conditions when multiple VMs are created concurrently
-	cpuHotplugControllers    map[string]*cpuhotplug.Controller  // key: containerID
-	memoryHotplugControllers map[string]*memhotplug.Controller // key: containerID
+	cpuHotplugControllers    map[string]cpuhotplug.CPUHotplugController       // key: containerID
+	memoryHotplugControllers map[string]memhotplug.MemoryHotplugController    // key: containerID
 
 	events chan any
 
@@ -842,8 +842,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	// Delete succeeded - clean up resources
 	// Extract cleanup targets while holding appropriate locks
 	var ioShutdowns []func(context.Context) error
-	var cpuController *cpuhotplug.Controller
-	var memController *memhotplug.Controller
+	var cpuController cpuhotplug.CPUHotplugController
+	var memController memhotplug.MemoryHotplugController
 	var needNetworkClean, needVMShutdown bool
 
 	s.containerMu.Lock()
@@ -1508,16 +1508,8 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		cpuConfig,
 	)
 
-	// NewController returns nil if hotplug not needed (maxCPUs <= bootCPUs)
-	if controller == nil {
-		log.G(ctx).WithFields(log.Fields{
-			"boot_cpus": resourceCfg.BootCPUs,
-			"max_cpus":  resourceCfg.MaxCPUs,
-		}).Debug("cpu-hotplug: not enabled (MaxCPUs <= BootCPUs, no room for scaling)")
-		return
-	}
-
 	// Store controller in service by container ID (prevents race condition)
+	// Controller may be a no-op if hotplug not needed (maxCPUs <= bootCPUs)
 	s.controllerMu.Lock()
 	s.cpuHotplugControllers[containerID] = controller
 	s.controllerMu.Unlock()
@@ -1611,16 +1603,8 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 		memConfig,
 	)
 
-	// NewController returns nil if hotplug not needed (maxMemory <= bootMemory)
-	if controller == nil {
-		log.G(ctx).WithFields(log.Fields{
-			"boot_memory_mb": resourceCfg.MemorySize / (1024 * 1024),
-			"max_memory_mb":  resourceCfg.MemoryHotplugSize / (1024 * 1024),
-		}).Debug("memory-hotplug: not enabled (MaxMemory <= BootMemory, no room for scaling)")
-		return
-	}
-
 	// Store controller in service by container ID (prevents race condition)
+	// Controller may be a no-op if hotplug not needed (maxMemory <= bootMemory)
 	s.controllerMu.Lock()
 	s.memoryHotplugControllers[containerID] = controller
 	s.controllerMu.Unlock()
