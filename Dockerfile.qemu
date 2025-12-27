@@ -74,15 +74,17 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     tar -xf "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" -C /build && \
     mv /build/qemu-${QEMU_VERSION} /build/qemu-src
 
-RUN mkdir -p /build/qemu-build
-WORKDIR /build/qemu-build
+WORKDIR /build
 
 # Configure QEMU for minimal build with libc compatibility
 # Focused on VMs use case with virtio devices
 # Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
 # Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
 # Split into separate RUN commands for better layer caching
-RUN ../qemu-src/configure \
+# Use cache mount for build directory to persist Makefile and build artifacts
+RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
+    cd qemu-build && \
+    ../qemu-src/configure \
     --prefix=/opt/qemu \
     --target-list=x86_64-softmmu \
     --enable-tools \
@@ -119,16 +121,16 @@ RUN ../qemu-src/configure \
 
 # Build QEMU (cached independently from configure)
 RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
-    make -j${JOBS}
+    cd qemu-build && make -j${JOBS}
 
 # Install QEMU binaries
 RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
-    make install
+    cd qemu-build && make install
 
 # Copy BIOS/firmware files and verify
-RUN cp -a ../qemu-src/pc-bios/* /opt/qemu/share/qemu/ && \
+RUN cp -a qemu-src/pc-bios/* /opt/qemu/share/qemu/ && \
     if [ ! -f /opt/qemu/share/qemu/bios-256k.bin ]; then \
-        install -m 0644 ../qemu-src/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
+        install -m 0644 qemu-src/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
     fi && \
     test -f /opt/qemu/share/qemu/bios-256k.bin && \
     ls -la /opt/qemu/share/qemu
