@@ -76,9 +76,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 	}()
 
 	// Use null IO to avoid stream setup that can close the VM before Start.
-	taskIOCreator := cio.NewCreator(cio.WithNullIO)
-
-	task, err := container.NewTask(ctx, taskIOCreator)
+	task, err := container.NewTask(ctx, cio.NullIO)
 	if err != nil {
 		if existing, loadErr := container.Task(ctx, nil); loadErr == nil {
 			_ = existing.Kill(ctx, syscall.SIGKILL)
