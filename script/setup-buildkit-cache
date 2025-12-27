@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Setup BuildKit cache directory for qemubox builds
+# This script ensures the cache directory exists with proper permissions
+
+set -euo pipefail
+
+CACHE_DIR="${BUILDKIT_CACHE_DIR:-/var/lib/qemubox-buildkit-cache}"
+
+echo "Setting up BuildKit cache directory: ${CACHE_DIR}"
+
+# Check if directory exists
+if [ -d "${CACHE_DIR}" ]; then
+    echo "✓ Cache directory already exists"
+else
+    echo "→ Creating cache directory..."
+    if [ -w /var/lib ]; then
+        mkdir -p "${CACHE_DIR}"
+    else
+        sudo mkdir -p "${CACHE_DIR}"
+        sudo chown "$(id -u):$(id -g)" "${CACHE_DIR}"
+    fi
+    echo "✓ Cache directory created"
+fi
+
+# Verify permissions
+if [ -w "${CACHE_DIR}" ]; then
+    echo "✓ Cache directory is writable"
+else
+    echo "⚠ Warning: Cache directory is not writable by current user"
+    echo "  Run: sudo chown $(id -u):$(id -g) ${CACHE_DIR}"
+    exit 1
+fi
+
+# Show disk usage
+CACHE_SIZE=$(du -sh "${CACHE_DIR}" 2>/dev/null | cut -f1 || echo "0")
+echo "✓ Current cache size: ${CACHE_SIZE}"
+
+echo ""
+echo "BuildKit cache is ready at: ${CACHE_DIR}"
+echo "To clean the cache, run: rm -rf ${CACHE_DIR}/*"

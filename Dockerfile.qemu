@@ -10,6 +10,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# Configure apt to keep downloaded packages for cache mounts
+RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
 # Install build dependencies
 RUN --mount=type=cache,sharing=locked,id=qemu-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=qemu-aptcache,target=/var/cache/apt \
@@ -77,8 +81,8 @@ WORKDIR /build/qemu-build
 # Focused on VMs use case with virtio devices
 # Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
 # Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
-RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
-    ../qemu-src/configure \
+# Split into separate RUN commands for better layer caching
+RUN ../qemu-src/configure \
     --prefix=/opt/qemu \
     --target-list=x86_64-softmmu \
     --enable-tools \
@@ -111,10 +115,18 @@ RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/buil
     --enable-cap-ng \
     --enable-seccomp \
     --disable-slirp \
-    --disable-gio && \
-    make -j${JOBS} && \
-    make install && \
-    cp -a ../qemu-src/pc-bios/* /opt/qemu/share/qemu/ && \
+    --disable-gio
+
+# Build QEMU (cached independently from configure)
+RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
+    make -j${JOBS}
+
+# Install QEMU binaries
+RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
+    make install
+
+# Copy BIOS/firmware files and verify
+RUN cp -a ../qemu-src/pc-bios/* /opt/qemu/share/qemu/ && \
     if [ ! -f /opt/qemu/share/qemu/bios-256k.bin ]; then \
         install -m 0644 ../qemu-src/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
     fi && \
@@ -132,6 +144,10 @@ RUN file /opt/qemu/bin/qemu-system-x86_64 && \
 FROM ubuntu:25.10 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
+
+# Configure apt to keep downloaded packages for cache mounts
+RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 
 # Install only runtime libraries required by QEMU
 RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt \

@@ -405,6 +405,13 @@ tasks:
         set -eou pipefail
         {{.SCRIPTS_DIR}}/setup
 
+  setup:cache:
+    desc: Setup BuildKit cache directory with proper permissions
+    cmds:
+      - |
+        set -eou pipefail
+        {{.SCRIPTS_DIR}}/setup-buildkit-cache
+
   # ==========================================================================
   # Protobuf Tasks (optional)
   # ==========================================================================
