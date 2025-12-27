@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -63,9 +62,8 @@ func TestContainerdRunQemubox(t *testing.T) {
 			oci.WithProcessArgs("/sbin/init"),
 			oci.WithPrivileged,
 			oci.WithAllDevicesAllowed,
-			oci.WithHostDevices,
-			oci.WithTTY,
-		),
+		oci.WithHostDevices,
+	),
 		containerd.WithRuntime(runtime, nil),
 	)
 	if err != nil {
@@ -77,21 +75,8 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	}()
 
-	// Main task IO (container logs)
-	var taskIOCreator cio.Creator
-	if testing.Verbose() {
-		// Keep stdin closed to avoid early EOF triggering VM shutdown.
-		taskIOCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(nil, os.Stdout, os.Stderr))
-	} else {
-		logPath := filepath.Join(os.TempDir(), containerName+"-log.txt")
-		logFile, err := os.Create(logPath)
-		if err != nil {
-			t.Fatalf("create log file: %v", err)
-		}
-		defer logFile.Close()
-		taskIOCreator = cio.NewCreator(cio.WithTerminal, cio.WithStreams(nil, logFile, logFile))
-		t.Logf("Container logs written to: %s", logPath)
-	}
+	// Use null IO to avoid stream setup that can close the VM before Start.
+	taskIOCreator := cio.NewCreator(cio.WithNullIO)
 
 	task, err := container.NewTask(ctx, taskIOCreator)
 	if err != nil {
