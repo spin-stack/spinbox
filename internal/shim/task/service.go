@@ -66,7 +66,6 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 	}
 
 	s := &service{
-		context:          ctx,
 		events:           make(chan any, eventChannelBuffer),
 		containers:       make(map[string]*container),
 		networkManager:   nm,
@@ -95,7 +94,10 @@ type container struct {
 
 // service is the shim implementation of a remote shim over GRPC
 type service struct {
-	mu sync.Mutex
+	// Separate mutexes for different concerns to avoid contention
+	containersMu  sync.Mutex // Protects containers map
+	controllerMu  sync.Mutex // Protects hotplug controllers
+	vmMu          sync.Mutex // Protects VM instance
 
 	// vm is the VM instance used to run the container
 	vm vm.Instance
@@ -109,10 +111,7 @@ type service struct {
 	// memoryHotplugController manages dynamic memory allocation (QEMU only)
 	memoryHotplugController *memhotplug.Controller
 
-	// Service lifetime context - valid exception to "no context in struct" rule
-	// because it represents the entire service lifecycle and is managed by the service itself.
-	context context.Context //nolint:containedctx // Manages service lifetime
-	events  chan any
+	events chan any
 
 	containers map[string]*container
 
@@ -131,6 +130,142 @@ type deleteCleanupPlan struct {
 	cpuController    *cpuhotplug.Controller
 	memController    *memhotplug.Controller
 	needNetworkClean bool
+}
+
+// vmClient encapsulates VM communication for controller callbacks.
+// This eliminates closures that capture the entire service, making dependencies explicit.
+type vmClient struct {
+	dialClient func(context.Context) (*ttrpc.Client, error)
+}
+
+// getCPUStats retrieves CPU usage statistics from the container via TTRPC.
+func (v *vmClient) getCPUStats(ctx context.Context, containerID string) (uint64, uint64, error) {
+	vmc, err := v.dialClient(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in CPU stats")
+		}
+	}()
+	tc := taskAPI.NewTTRPCTaskClient(vmc)
+	resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
+	if err != nil {
+		return 0, 0, err
+	}
+	if resp.GetStats() == nil {
+		return 0, 0, fmt.Errorf("missing stats payload")
+	}
+
+	var metrics cgroup2stats.Metrics
+	if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
+		return 0, 0, err
+	}
+
+	cpu := metrics.GetCPU()
+	if cpu == nil {
+		return 0, 0, fmt.Errorf("missing CPU stats")
+	}
+
+	return cpu.GetUsageUsec(), cpu.GetThrottledUsec(), nil
+}
+
+// offlineCPU takes a CPU offline in the guest VM.
+func (v *vmClient) offlineCPU(ctx context.Context, cpuID int) error {
+	vmc, err := v.dialClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in CPU offline")
+		}
+	}()
+	client := systemAPI.NewTTRPCSystemClient(vmc)
+	_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
+	return err
+}
+
+// onlineCPU brings a CPU online in the guest VM.
+func (v *vmClient) onlineCPU(ctx context.Context, cpuID int) error {
+	vmc, err := v.dialClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in CPU online")
+		}
+	}()
+	client := systemAPI.NewTTRPCSystemClient(vmc)
+	_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
+	return err
+}
+
+// getMemoryStats retrieves memory usage statistics from the container via TTRPC.
+func (v *vmClient) getMemoryStats(ctx context.Context, containerID string) (int64, error) {
+	vmc, err := v.dialClient(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in memory stats")
+		}
+	}()
+	tc := taskAPI.NewTTRPCTaskClient(vmc)
+	resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
+	if err != nil {
+		return 0, err
+	}
+	if resp.GetStats() == nil {
+		return 0, fmt.Errorf("missing stats payload")
+	}
+
+	var metrics cgroup2stats.Metrics
+	if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
+		return 0, err
+	}
+
+	mem := metrics.GetMemory()
+	if mem == nil {
+		return 0, fmt.Errorf("missing memory stats")
+	}
+
+	return int64(mem.GetUsage()), nil
+}
+
+// offlineMemory takes memory offline in the guest VM.
+func (v *vmClient) offlineMemory(ctx context.Context, memoryID int) error {
+	vmc, err := v.dialClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in memory offline")
+		}
+	}()
+	client := systemAPI.NewTTRPCSystemClient(vmc)
+	_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
+	return err
+}
+
+// onlineMemory brings memory online in the guest VM.
+func (v *vmClient) onlineMemory(ctx context.Context, memoryID int) error {
+	vmc, err := v.dialClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in memory online")
+		}
+	}()
+	client := systemAPI.NewTTRPCSystemClient(vmc)
+	_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
+	return err
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -173,8 +308,12 @@ func checkKVM() error {
 }
 
 func (s *service) shutdown(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Lock all mutexes in consistent order to prevent deadlocks
+	s.containersMu.Lock()
+	defer s.containersMu.Unlock()
+	s.vmMu.Lock()
+	defer s.vmMu.Unlock()
+
 	var errs []error
 
 	// Release network resources first
@@ -485,9 +624,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
-	// Start forwarding events using service lifetime context (not request-scoped)
-	//nolint:contextcheck // intentionally using service context, not request context
-	if err := s.startEventForwarder(s.context, vmc); err != nil {
+	// Start forwarding events using a detached context (not request-scoped)
+	// Event forwarding must continue for the service lifetime, not tied to this RPC.
+	// Cleanup happens in shutdown() callback, not via context cancellation.
+	ns, _ := namespaces.Namespace(ctx)
+	eventCtx := namespaces.WithNamespace(context.Background(), ns)
+	if err := s.startEventForwarder(eventCtx, vmc); err != nil {
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -574,9 +716,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	}).Info("task successfully created")
 
 	c.pid = resp.Pid
-	s.mu.Lock()
+	s.containersMu.Lock()
 	s.containers[r.ID] = c
-	s.mu.Unlock()
+	s.containersMu.Unlock()
 
 	// Start CPU hotplug controller if conditions are met
 	s.startCPUHotplugController(ctx, r.ID, vmi, resourceCfg)
@@ -618,8 +760,13 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanupPlan {
 	var plan deleteCleanupPlan
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Lock mutexes in consistent order: containers -> controllers -> vm
+	s.containersMu.Lock()
+	defer s.containersMu.Unlock()
+	s.controllerMu.Lock()
+	defer s.controllerMu.Unlock()
+	s.vmMu.Lock()
+	defer s.vmMu.Unlock()
 
 	if c, ok := s.containers[r.ID]; ok {
 		if r.ExecID != "" {
@@ -787,7 +934,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	s.mu.Lock()
+	s.containersMu.Lock()
 	if c, ok := s.containers[r.ID]; ok {
 		c.execShutdowns[r.ExecID] = ioShutdown
 	} else {
@@ -796,10 +943,10 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 				log.G(ctx).WithError(err).Error("failed to shutdown exec io after container not found")
 			}
 		}
-		s.mu.Unlock()
+		s.containersMu.Unlock()
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "container %q not found", r.ID)
 	}
-	s.mu.Unlock()
+	s.containersMu.Unlock()
 
 	vr := &taskAPI.ExecProcessRequest{
 		ID:       r.ID,
@@ -814,7 +961,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 	resp, err := taskAPI.NewTTRPCTaskClient(vmc).Exec(ctx, vr)
 
 	if err != nil {
-		s.mu.Lock()
+		s.containersMu.Lock()
 		if c, ok := s.containers[r.ID]; ok {
 			if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
 				if err := ioShutdown(ctx); err != nil {
@@ -823,7 +970,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 				delete(c.execShutdowns, r.ExecID)
 			}
 		}
-		s.mu.Unlock()
+		s.containersMu.Unlock()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -1009,9 +1156,9 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 // Connect returns shim information such as the shim's pid
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("connect")
-	s.mu.Lock()
+	s.containersMu.Lock()
 	c, ok := s.containers[r.ID]
-	s.mu.Unlock()
+	s.containersMu.Unlock()
 	if ok && c.pid != 0 {
 		return &taskAPI.ConnectResponse{
 			ShimPid: uint32(os.Getpid()),
@@ -1045,9 +1192,6 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("shutdown")
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Mark as intentional shutdown
 	s.intentionalShutdown.Store(true)
@@ -1321,88 +1465,31 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		}
 	}
 
-	// Create and start the controller
-		statsProvider := func(ctx context.Context) (uint64, uint64, error) {
-			vmc, err := s.dialClient(ctx)
-			if err != nil {
-				return 0, 0, err
-			}
-			defer func() {
-				if err := vmc.Close(); err != nil {
-					log.G(ctx).WithError(err).Warn("failed to close client in CPU stats provider")
-				}
-			}()
-			tc := taskAPI.NewTTRPCTaskClient(vmc)
-			resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
-			if err != nil {
-				return 0, 0, err
-			}
-		if resp.GetStats() == nil {
-			return 0, 0, fmt.Errorf("missing stats payload")
-		}
-
-		var metrics cgroup2stats.Metrics
-		if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
-			return 0, 0, err
-		}
-
-		cpu := metrics.GetCPU()
-		if cpu == nil {
-			return 0, 0, fmt.Errorf("missing CPU stats")
-		}
-
-		return cpu.GetUsageUsec(), cpu.GetThrottledUsec(), nil
-	}
-
-		offlineCPU := func(ctx context.Context, cpuID int) error {
-			vmc, err := s.dialClient(ctx)
-			if err != nil {
-				return err
-			}
-			defer func() {
-				if err := vmc.Close(); err != nil {
-					log.G(ctx).WithError(err).Warn("failed to close client in CPU offline")
-				}
-			}()
-			client := systemAPI.NewTTRPCSystemClient(vmc)
-			_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
-			return err
-		}
-
-		onlineCPU := func(ctx context.Context, cpuID int) error {
-			vmc, err := s.dialClient(ctx)
-			if err != nil {
-				return err
-			}
-			defer func() {
-				if err := vmc.Close(); err != nil {
-					log.G(ctx).WithError(err).Warn("failed to close client in CPU online")
-				}
-			}()
-			client := systemAPI.NewTTRPCSystemClient(vmc)
-			_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
-			return err
-		}
+	// Create vmClient with explicit dependencies (no closure capturing entire service)
+	vmc := &vmClient{dialClient: s.dialClient}
 
 	controller := cpuhotplug.NewController(
 		containerID,
 		qmpClient,
-		statsProvider,
-		offlineCPU,
-		onlineCPU,
+		func(ctx context.Context) (uint64, uint64, error) {
+			return vmc.getCPUStats(ctx, containerID)
+		},
+		vmc.offlineCPU,
+		vmc.onlineCPU,
 		resourceCfg.BootCPUs,
 		resourceCfg.MaxCPUs,
 		cpuConfig,
 	)
 
 	// Store controller in service
-	s.mu.Lock()
+	s.controllerMu.Lock()
 	s.cpuHotplugController = controller
-	s.mu.Unlock()
+	s.controllerMu.Unlock()
 
-	// Start monitoring loop with service context (not request context)
-	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC
-	controller.Start(s.context)
+	// Start monitoring loop with detached context (not request context)
+	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC.
+	// Cleanup happens via controller.Stop() in shutdown/delete, not via context cancellation.
+	controller.Start(context.Background())
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": containerID,
@@ -1483,89 +1570,31 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 		log.G(ctx).Warn("memory-hotplug: scale-down enabled (EXPERIMENTAL)")
 	}
 
-	// Create stats provider (reads cgroup v2 memory.current)
-		statsProvider := func(ctx context.Context) (int64, error) {
-			vmc, err := s.dialClient(ctx)
-			if err != nil {
-				return 0, err
-			}
-			defer func() {
-				if err := vmc.Close(); err != nil {
-					log.G(ctx).WithError(err).Warn("failed to close client in memory stats provider")
-				}
-			}()
-			tc := taskAPI.NewTTRPCTaskClient(vmc)
-			resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
-			if err != nil {
-				return 0, err
-			}
-		if resp.GetStats() == nil {
-			return 0, fmt.Errorf("missing stats payload")
-		}
-
-		var metrics cgroup2stats.Metrics
-		if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
-			return 0, err
-		}
-
-		mem := metrics.GetMemory()
-		if mem == nil {
-			return 0, fmt.Errorf("missing memory stats")
-		}
-
-		// Return current memory usage in bytes
-		return int64(mem.GetUsage()), nil
-	}
-
-		offlineMemory := func(ctx context.Context, memoryID int) error {
-			vmc, err := s.dialClient(ctx)
-			if err != nil {
-				return err
-			}
-			defer func() {
-				if err := vmc.Close(); err != nil {
-					log.G(ctx).WithError(err).Warn("failed to close client in memory offline")
-				}
-			}()
-			client := systemAPI.NewTTRPCSystemClient(vmc)
-			_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
-			return err
-		}
-
-		onlineMemory := func(ctx context.Context, memoryID int) error {
-			vmc, err := s.dialClient(ctx)
-			if err != nil {
-				return err
-			}
-			defer func() {
-				if err := vmc.Close(); err != nil {
-					log.G(ctx).WithError(err).Warn("failed to close client in memory online")
-				}
-			}()
-			client := systemAPI.NewTTRPCSystemClient(vmc)
-			_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
-			return err
-		}
+	// Create vmClient with explicit dependencies (no closure capturing entire service)
+	vmc := &vmClient{dialClient: s.dialClient}
 
 	controller := memhotplug.NewController(
 		containerID,
 		qmpClient,
-		statsProvider,
-		offlineMemory,
-		onlineMemory,
+		func(ctx context.Context) (int64, error) {
+			return vmc.getMemoryStats(ctx, containerID)
+		},
+		vmc.offlineMemory,
+		vmc.onlineMemory,
 		resourceCfg.MemorySize,
 		resourceCfg.MemoryHotplugSize,
 		memConfig,
 	)
 
 	// Store controller in service
-	s.mu.Lock()
+	s.controllerMu.Lock()
 	s.memoryHotplugController = controller
-	s.mu.Unlock()
+	s.controllerMu.Unlock()
 
-	// Start monitoring loop with service context (not request context)
-	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC
-	controller.Start(s.context)
+	// Start monitoring loop with detached context (not request context)
+	// The controller needs to run for the lifetime of the container, not just the CreateTask RPC.
+	// Cleanup happens via controller.Stop() in shutdown/delete, not via context cancellation.
+	controller.Start(context.Background())
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id":   containerID,
