@@ -99,7 +99,7 @@ func TestStreamConcurrent(t *testing.T) {
 		}, numStreams)
 
 		// Create multiple streams concurrently
-		for i := 0; i < numStreams; i++ {
+		for i := range numStreams {
 			sid, conn, err := instance.StartStream(ctx)
 			if err != nil {
 				if errors.Is(err, errdefs.ErrNotImplemented) {

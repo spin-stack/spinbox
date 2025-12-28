@@ -233,7 +233,7 @@ func TestContainerdRunMultipleContainers(t *testing.T) {
 	ensureImagePulled(t, client, cfg)
 
 	// Run multiple containers to verify resource cleanup
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		containerName := fmt.Sprintf("qbx-multi-%d-%s", i,
 			strings.ReplaceAll(time.Now().Format("150405.000"), ".", ""))
 
