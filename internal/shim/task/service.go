@@ -646,7 +646,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	resourceCfg, resourceInfo := computeResourceConfig(ctx, &b.Spec)
+	resourceCfg, _ := computeResourceConfig(ctx, &b.Spec)
 
 	log.G(ctx).WithFields(log.Fields{
 		"boot_cpus":  resourceCfg.BootCPUs,
