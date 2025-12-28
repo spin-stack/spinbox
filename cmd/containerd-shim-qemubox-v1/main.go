@@ -6,11 +6,11 @@ import (
 	"os"
 
 	"github.com/containerd/containerd/v2/pkg/shim"
-	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/internal/config"
-	_ "github.com/aledbf/qemubox/containerd/internal/shim"
 	"github.com/aledbf/qemubox/containerd/internal/shim/manager"
+
+	_ "github.com/aledbf/qemubox/containerd/internal/shim"
 )
 
 func main() {
