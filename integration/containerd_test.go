@@ -294,7 +294,7 @@ func TestContainerdResourceConstraints(t *testing.T) {
 
 	// Resource limits enforced by crun inside the VM
 	memLimit := int64(128 * 1024 * 1024) // 128 MiB
-	cpuQuota := int64(50000)              // CFS quota: 50000/100000 = 0.5 CPU
+	cpuQuota := int64(50000)             // CFS quota: 50000/100000 = 0.5 CPU
 	cpuPeriod := uint64(100000)
 
 	container, err := client.NewContainer(ctx, containerName,
