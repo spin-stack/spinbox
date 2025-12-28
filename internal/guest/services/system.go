@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	cplugins "github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/log"
@@ -21,8 +22,19 @@ import (
 )
 
 const (
-	// TTRPCPlugin implements a ttrpc service
-	TTRPCPlugin plugin.Type = "io.containerd.ttrpc.v1"
+	// Sysfs file values
+	sysfsOnline  = "1"
+	sysfsOffline = "0"
+
+	// Retry configuration for sysfs operations
+	sysfsRetryMax        = 10
+	sysfsRetryBaseDelay  = 10 * time.Millisecond
+	autoOnlineCheckDelay = 100 * time.Millisecond
+
+	// File permissions
+	sysfsFilePerms    = 0600
+	featuresDirPerms  = 0750
+	featuresFilePerms = 0600
 )
 
 type systemService struct{}
@@ -31,7 +43,7 @@ var _ api.TTRPCSystemService = &systemService{}
 
 func init() {
 	registry.Register(&plugin.Registration{
-		Type:   TTRPCPlugin,
+		Type:   cplugins.TTRPCPlugin,
 		ID:     "system",
 		InitFn: initFunc,
 	})
@@ -52,6 +64,51 @@ func (s *systemService) RegisterTTRPC(server *ttrpc.Server) error {
 	return nil
 }
 
+// readSysfsValue reads and trims a value from a sysfs file.
+func readSysfsValue(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// writeSysfsValue writes a value to a sysfs file.
+func writeSysfsValue(path, value string) error {
+	return os.WriteFile(path, []byte(value), sysfsFilePerms)
+}
+
+// retrySysfsOperation retries a sysfs operation with exponential backoff.
+// It calls checkFn repeatedly until it returns nil or a non-retryable error.
+// The checkFn should return os.ErrNotExist if the file doesn't exist yet (will retry).
+func retrySysfsOperation(ctx context.Context, name string, checkFn func() error) error {
+	var lastErr error
+	for retry := range sysfsRetryMax {
+		if retry > 0 {
+			delay := sysfsRetryBaseDelay * time.Duration(1<<uint(retry-1))
+			time.Sleep(delay)
+		}
+
+		err := checkFn()
+		if err == nil {
+			if retry > 0 {
+				log.G(ctx).WithField("retry", retry).Debugf("%s succeeded after retry", name)
+			}
+			return nil
+		}
+
+		if os.IsNotExist(err) {
+			lastErr = err
+			continue // Retry on not exist
+		}
+
+		// Non-retryable error
+		return err
+	}
+
+	return fmt.Errorf("%s failed after %d retries: %w", name, sysfsRetryMax, lastErr)
+}
+
 func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoResponse, error) {
 	v, err := os.ReadFile("/proc/version")
 	if err != nil && !os.IsNotExist(err) {
@@ -66,7 +123,8 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPURequest) (*emptypb.Empty, error) {
 	cpuID := req.GetCpuID()
 	if cpuID == 0 {
-		return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument, "cpu 0 cannot be offlined")
+		return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument,
+			"cpu %d cannot be offlined (boot processor)", cpuID)
 	}
 
 	path := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/online", cpuID)
@@ -77,18 +135,21 @@ func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPUReque
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	data, err := os.ReadFile(path)
+	// Check if already offline
+	value, err := readSysfsValue(path)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	if strings.TrimSpace(string(data)) == "0" {
+	if value == sysfsOffline {
 		return &emptypb.Empty{}, nil
 	}
 
-	if err := os.WriteFile(path, []byte("0"), 0600); err != nil {
+	// Offline the CPU
+	if err := writeSysfsValue(path, sysfsOffline); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 
+	log.G(ctx).WithField("cpu_id", cpuID).Debug("CPU offlined successfully")
 	return &emptypb.Empty{}, nil
 }
 
@@ -101,64 +162,39 @@ func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest
 
 	path := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/online", cpuID)
 
-	// Retry logic: kernel may need time to create sysfs files after hotplug
-	// Wait up to 1 second with exponential backoff
-	maxRetries := 10
-	var lastErr error
-	for retry := range maxRetries {
-		if retry > 0 {
-			// Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms, 320ms (total ~1s)
-			delay := time.Duration(10<<uint(retry-1)) * time.Millisecond
-			time.Sleep(delay)
-		}
-
+	// Retry with exponential backoff - kernel may need time to create sysfs files after hotplug
+	err := retrySysfsOperation(ctx, fmt.Sprintf("online CPU %d", cpuID), func() error {
+		// Check if file exists
 		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				lastErr = err
-				continue // Retry
-			}
-			return nil, errgrpc.ToGRPC(err)
+			return err // Returns os.ErrNotExist if not ready yet
 		}
 
 		// Check if already online
-		data, err := os.ReadFile(path)
+		value, err := readSysfsValue(path)
 		if err != nil {
-			return nil, errgrpc.ToGRPC(err)
+			return err
 		}
-		if strings.TrimSpace(string(data)) == "1" {
-			if retry > 0 {
-				log.G(ctx).WithFields(log.Fields{
-					"cpu_id": cpuID,
-					"retry":  retry,
-				}).Debug("CPU already online (auto-onlined)")
-			}
-			return &emptypb.Empty{}, nil
+		if value == sysfsOnline {
+			return nil // Already online
 		}
 
 		// Write "1" to online the CPU
-		if err := os.WriteFile(path, []byte("1"), 0600); err != nil {
-			return nil, errgrpc.ToGRPC(err)
-		}
+		return writeSysfsValue(path, sysfsOnline)
+	})
 
-		log.G(ctx).WithFields(log.Fields{
-			"cpu_id": cpuID,
-			"retry":  retry,
-		}).Debug("CPU onlined successfully")
-
-		return &emptypb.Empty{}, nil
+	if err != nil {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cpu %d: %v", cpuID, err)
 	}
 
-	// All retries exhausted
-	return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cpu %d not present after %d retries: %v", cpuID, maxRetries, lastErr)
+	log.G(ctx).WithField("cpu_id", cpuID).Debug("CPU onlined successfully")
+	return &emptypb.Empty{}, nil
 }
 
 func (s *systemService) OfflineMemory(ctx context.Context, req *api.OfflineMemoryRequest) (*emptypb.Empty, error) {
 	memoryID := req.GetMemoryID()
 
 	// Check if auto_online is enabled (if so, can't offline)
-	autoOnlineData, err := os.ReadFile("/sys/devices/system/memory/auto_online_blocks")
-	if err == nil {
-		autoOnline := strings.TrimSpace(string(autoOnlineData))
+	if autoOnline, err := readSysfsValue("/sys/devices/system/memory/auto_online_blocks"); err == nil {
 		if autoOnline == "online" {
 			log.G(ctx).WithField("memory_id", memoryID).
 				Debug("memory auto-online enabled, cannot offline blocks")
@@ -175,18 +211,18 @@ func (s *systemService) OfflineMemory(ctx context.Context, req *api.OfflineMemor
 	}
 
 	// Check if already offline
-	data, err := os.ReadFile(path)
+	value, err := readSysfsValue(path)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	if strings.TrimSpace(string(data)) == "0" {
+	if value == sysfsOffline {
 		return &emptypb.Empty{}, nil
 	}
 
 	// Check if block is removable
 	removablePath := fmt.Sprintf("/sys/devices/system/memory/memory%d/removable", memoryID)
-	if removableData, err := os.ReadFile(removablePath); err == nil {
-		if strings.TrimSpace(string(removableData)) == "0" {
+	if removable, err := readSysfsValue(removablePath); err == nil {
+		if removable == sysfsOffline {
 			log.G(ctx).WithField("memory_id", memoryID).
 				Warn("memory block is not removable (kernel in use)")
 			return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition,
@@ -195,12 +231,11 @@ func (s *systemService) OfflineMemory(ctx context.Context, req *api.OfflineMemor
 	}
 
 	// Offline the block
-	if err := os.WriteFile(path, []byte("0"), 0600); err != nil {
+	if err := writeSysfsValue(path, sysfsOffline); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 
 	log.G(ctx).WithField("memory_id", memoryID).Debug("memory block offlined successfully")
-
 	return &emptypb.Empty{}, nil
 }
 
@@ -208,75 +243,46 @@ func (s *systemService) OnlineMemory(ctx context.Context, req *api.OnlineMemoryR
 	memoryID := req.GetMemoryID()
 
 	// Check auto_online setting
-	autoOnlineData, err := os.ReadFile("/sys/devices/system/memory/auto_online_blocks")
-	if err == nil {
-		autoOnline := strings.TrimSpace(string(autoOnlineData))
+	if autoOnline, err := readSysfsValue("/sys/devices/system/memory/auto_online_blocks"); err == nil {
 		if autoOnline == "online" {
-			// Memory will auto-online, just verify it happened
-			time.Sleep(100 * time.Millisecond)
+			// Memory will auto-online, verify it happened using retry logic
 			path := fmt.Sprintf("/sys/devices/system/memory/memory%d/online", memoryID)
-			if data, err := os.ReadFile(path); err == nil {
-				if strings.TrimSpace(string(data)) == "1" {
-					log.G(ctx).WithField("memory_id", memoryID).Debug("memory auto-onlined")
-					return &emptypb.Empty{}, nil
-				}
+			time.Sleep(autoOnlineCheckDelay)
+			if value, err := readSysfsValue(path); err == nil && value == sysfsOnline {
+				log.G(ctx).WithField("memory_id", memoryID).Debug("memory auto-onlined")
+				return &emptypb.Empty{}, nil
 			}
 		}
 	}
 
-	// Explicit online (similar to OnlineCPU with retry logic)
+	// Explicit online with retry logic - kernel may need time to create sysfs files after hotplug
 	path := fmt.Sprintf("/sys/devices/system/memory/memory%d/online", memoryID)
 
-	// Retry logic: kernel may need time to create sysfs files after hotplug
-	// Wait up to 1 second with exponential backoff
-	maxRetries := 10
-	var lastErr error
-	for retry := range maxRetries {
-		if retry > 0 {
-			// Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms, 320ms (total ~1s)
-			delay := time.Duration(10<<uint(retry-1)) * time.Millisecond
-			time.Sleep(delay)
-		}
-
+	err := retrySysfsOperation(ctx, fmt.Sprintf("online memory %d", memoryID), func() error {
+		// Check if file exists
 		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				lastErr = err
-				continue // Retry
-			}
-			return nil, errgrpc.ToGRPC(err)
+			return err // Returns os.ErrNotExist if not ready yet
 		}
 
 		// Check if already online
-		data, err := os.ReadFile(path)
+		value, err := readSysfsValue(path)
 		if err != nil {
-			return nil, errgrpc.ToGRPC(err)
+			return err
 		}
-		if strings.TrimSpace(string(data)) == "1" {
-			if retry > 0 {
-				log.G(ctx).WithFields(log.Fields{
-					"memory_id": memoryID,
-					"retry":     retry,
-				}).Debug("memory already online (auto-onlined)")
-			}
-			return &emptypb.Empty{}, nil
+		if value == sysfsOnline {
+			return nil // Already online
 		}
 
 		// Write "1" to online the memory
-		if err := os.WriteFile(path, []byte("1"), 0600); err != nil {
-			return nil, errgrpc.ToGRPC(err)
-		}
+		return writeSysfsValue(path, sysfsOnline)
+	})
 
-		log.G(ctx).WithFields(log.Fields{
-			"memory_id": memoryID,
-			"retry":     retry,
-		}).Debug("memory onlined successfully")
-
-		return &emptypb.Empty{}, nil
+	if err != nil {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "memory block %d: %v", memoryID, err)
 	}
 
-	// All retries exhausted
-	return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound,
-		"memory block %d not present after %d retries: %v", memoryID, maxRetries, lastErr)
+	log.G(ctx).WithField("memory_id", memoryID).Debug("memory onlined successfully")
+	return &emptypb.Empty{}, nil
 }
 
 // writeRuntimeFeatures writes the runtime features to a well-known location
@@ -289,7 +295,7 @@ func (s *systemService) writeRuntimeFeatures() error {
 	}
 
 	featuresDir := "/run/vminitd"
-	if err := os.MkdirAll(featuresDir, 0750); err != nil {
+	if err := os.MkdirAll(featuresDir, featuresDirPerms); err != nil {
 		return err
 	}
 
@@ -299,5 +305,5 @@ func (s *systemService) writeRuntimeFeatures() error {
 	}
 
 	featuresFile := filepath.Join(featuresDir, "features.json")
-	return os.WriteFile(featuresFile, data, 0600)
+	return os.WriteFile(featuresFile, data, featuresFilePerms)
 }
