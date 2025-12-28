@@ -28,11 +28,6 @@ type testConfig struct {
 
 // loadTestConfig loads test configuration from environment variables.
 func loadTestConfig() testConfig {
-	containerName := os.Getenv("QEMUBOX_TEST_ID")
-	if containerName == "" {
-		containerName = "qbx-ci-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
-	}
-
 	return testConfig{
 		Socket:      getenvDefault("QEMUBOX_CONTAINERD_SOCKET", "/var/run/qemubox/containerd.sock"),
 		Image:       getenvDefault("QEMUBOX_IMAGE", "docker.io/aledbf/beacon-workspace:test"),
