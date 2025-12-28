@@ -11,7 +11,6 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/containerd/containerd/v2/cmd/ctr/commands/tasks"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -85,29 +84,28 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	}()
 
-	// Create log file for capturing output
+	// Create separate log files for stdout and stderr
+	// The qemubox shim requires separate file descriptors for each stream
 	logDir := t.TempDir()
-	logFile := filepath.Join(logDir, "output.log")
-	logURI := "file://" + logFile
+	stdoutFile := filepath.Join(logDir, "stdout.log")
+	stderrFile := filepath.Join(logDir, "stderr.log")
 
-	// Create task using the same helper function as the working CLI
-	// This handles all the I/O setup complexity correctly
-	ioOpts := []cio.Opt{cio.WithFIFODir(logDir)}
+	// Open separate file handles for stdout and stderr
+	stdout, err := os.Create(stdoutFile)
+	if err != nil {
+		t.Fatalf("create stdout file: %v", err)
+	}
+	defer stdout.Close()
 
-	// Task options - empty slice since we don't need any special options
-	taskOpts := []containerd.NewTaskOpts{}
+	stderr, err := os.Create(stderrFile)
+	if err != nil {
+		t.Fatalf("create stderr file: %v", err)
+	}
+	defer stderr.Close()
 
-	task, err := tasks.NewTask(
-		ctx,
-		client,
-		container,
-		"",          // checkpoint
-		nil,         // con (console)
-		false,       // nullIO
-		logURI,      // logURI
-		ioOpts,      // ioOpts
-		taskOpts..., // task options (required parameter)
-	)
+	// Create task with separate file descriptors for stdout/stderr
+	creator := cio.NewCreator(cio.WithStreams(nil, stdout, stderr))
+	task, err := container.NewTask(ctx, creator)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
@@ -140,16 +138,21 @@ func TestContainerdRunQemubox(t *testing.T) {
 		t.Fatalf("task result: %v", err)
 	}
 
+	// Close files to flush output
+	stdout.Close()
+	stderr.Close()
+
 	if code != 0 {
-		// Try to read log file for error details
-		logData, _ := os.ReadFile(logFile)
-		t.Fatalf("task exited with code %d, output: %s", code, string(logData))
+		// Try to read log files for error details
+		stdoutData, _ := os.ReadFile(stdoutFile)
+		stderrData, _ := os.ReadFile(stderrFile)
+		t.Fatalf("task exited with code %d\nstdout: %s\nstderr: %s", code, string(stdoutData), string(stderrData))
 	}
 
-	// Read and check output from log file
-	output, err := os.ReadFile(logFile)
+	// Read and check output from stdout file
+	output, err := os.ReadFile(stdoutFile)
 	if err != nil {
-		t.Fatalf("read log file: %v", err)
+		t.Fatalf("read stdout file: %v", err)
 	}
 
 	if !strings.Contains(string(output), "OK_FROM_QEMUBOX") {
