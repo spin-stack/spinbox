@@ -120,9 +120,9 @@ func runContainer(t *testing.T, client *containerd.Client, cfg testConfig, conta
 
 	// Create container spec
 	container, err := client.NewContainer(ctx, containerName,
+		containerd.WithSnapshotter(cfg.Snapshotter),
 		containerd.WithImage(image),
 		containerd.WithNewSnapshot(containerName+"-snapshot", image),
-		containerd.WithSnapshotter(cfg.Snapshotter),
 		containerd.WithRuntime(cfg.Runtime, nil),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(image),
@@ -294,9 +294,9 @@ func TestContainerdResourceConstraints(t *testing.T) {
 	cpuPeriod := uint64(100000)
 
 	container, err := client.NewContainer(ctx, containerName,
+		containerd.WithSnapshotter(cfg.Snapshotter),
 		containerd.WithImage(image),
 		containerd.WithNewSnapshot(containerName+"-snapshot", image),
-		containerd.WithSnapshotter(cfg.Snapshotter),
 		containerd.WithRuntime(cfg.Runtime, nil),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(image),
