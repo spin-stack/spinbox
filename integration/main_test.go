@@ -20,11 +20,6 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	if !haveBuildDir() {
-		log.Print("skipping integration tests: ../build directory not found")
-		os.Exit(0)
-	}
-
 	os.Exit(m.Run())
 }
 
@@ -34,28 +29,18 @@ func haveKVM() bool {
 	return err == nil
 }
 
-// haveBuildDir checks if the build directory exists.
-func haveBuildDir() bool {
-	buildPath, err := filepath.Abs("../build")
-	if err != nil {
-		return false
-	}
-	info, err := os.Stat(buildPath)
-	return err == nil && info.IsDir()
-}
-
-// setupTestPath adds the build directory to PATH for the test.
+// setupTestPath adds the output directory to PATH for the test.
 // This must be called by each test that needs the qemubox binaries.
 func setupTestPath(t *testing.T) {
 	t.Helper()
 
-	buildPath, err := filepath.Abs("../build")
+	outputPath, err := filepath.Abs("../_output")
 	if err != nil {
-		t.Fatalf("resolve build path: %v", err)
+		t.Fatalf("resolve output path: %v", err)
 	}
 
 	currentPath := os.Getenv("PATH")
-	t.Setenv("PATH", buildPath+":"+currentPath)
+	t.Setenv("PATH", outputPath+":"+currentPath)
 }
 
 // vmTestConfig holds configuration for VM-based tests.
