@@ -601,7 +601,7 @@ func TestStateTransitionStatusCheck(t *testing.T) {
 
 	// Status should be callable concurrently
 	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			status, err := proc.initState.Status(context.Background())
 			if err != nil {
@@ -615,7 +615,7 @@ func TestStateTransitionStatusCheck(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 }

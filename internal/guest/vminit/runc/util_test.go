@@ -11,6 +11,8 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+const resolvConfPath = "/etc/resolv.conf"
+
 func TestReadSpec(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -268,13 +270,13 @@ func TestInjectResolvConf(t *testing.T) {
 		// Find resolv.conf mount
 		var found bool
 		for _, m := range updatedSpec.Mounts {
-			if m.Destination == "/etc/resolv.conf" {
+			if m.Destination == resolvConfPath {
 				found = true
 				if m.Type != "bind" {
 					t.Errorf("resolv.conf mount type = %q, want %q", m.Type, "bind")
 				}
-				if m.Source != "/etc/resolv.conf" {
-					t.Errorf("resolv.conf source = %q, want %q", m.Source, "/etc/resolv.conf")
+				if m.Source != resolvConfPath {
+					t.Errorf("resolv.conf source = %q, want %q", m.Source, resolvConfPath)
 				}
 				// Verify options
 				hasRbind := false
@@ -308,7 +310,7 @@ func TestInjectResolvConf(t *testing.T) {
 			Version: "1.0.0",
 			Mounts: []specs.Mount{
 				{
-					Destination: "/etc/resolv.conf",
+					Destination: resolvConfPath,
 					Type:        "bind",
 					Source:      "/custom/resolv.conf",
 					Options:     []string{"rbind", "rw"},
