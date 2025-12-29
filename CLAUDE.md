@@ -2,9 +2,8 @@
 
 **Technology**: Go 1.25+, containerd shim API, QEMU, KVM
 **Entry Points**:
-- `containerd/cmd/containerd-shim-qemubox-v1/main.go` (shim)
-- `containerd/cmd/vminitd/main.go` (VM init daemon)
-**Parent Context**: This extends [../CLAUDE.md](../CLAUDE.md)
+- `cmd/containerd-shim-qemubox-v1/main.go` (shim)
+- `cmd/vminitd/main.go` (VM init daemon)
 
 ⚠️ **SECURITY-CRITICAL**: This module manages VM isolation boundaries. Changes have security implications.
 
@@ -140,7 +139,6 @@ task build:qemu
 /check-vm
 
 # Integration tests (requires KVM)
-cd containerd
 go test -v -timeout 10m ./integration/...
 ```
 
@@ -229,7 +227,7 @@ ps aux | grep qemu-system-x86_64
 
 ## Key Files to Study
 
-1. `pkg/config/config.go` - Centralized configuration management
+1. `internal/config/config.go` - Centralized configuration management
 2. `internal/shim/task/service.go` - Shim service implementation
 3. `internal/guest/vminit/task/service.go` - VM init service
 4. `internal/host/vm/qemu/instance.go` - QEMU integration
@@ -251,7 +249,7 @@ ps aux | grep qemu-system-x86_64
 
 ### Making Changes
 
-1. **Read architecture docs**: `containerd/README.md`
+1. **Read architecture docs**: `README.md`
 2. **Understand security model**: Review isolation layers
 3. **Make changes**: Edit Go code
 4. **Build**: `task build:shim` or `task build:vminitd`
@@ -496,7 +494,7 @@ go build -o /opt/cni/bin/tc-redirect-tap
 }
 ```
 
-See `examples/cni/` for more configuration examples.
+See `assets/examples/cni/` for more configuration examples.
 
 ### IP Allocation and State
 
@@ -572,7 +570,7 @@ task build:initrd
 go test ./internal/shim/... ./internal/guest/... ./internal/host/...
 
 # Run integration tests (if KVM available)
-cd containerd && go test -v ./integration/...
+go test -v ./integration/...
 
 # Lint
 golangci-lint run
@@ -596,7 +594,7 @@ If YES to any: **Get security review before merging**
 
 ## Additional Resources
 
-- **Architecture**: `containerd/README.md` (comprehensive)
+- **Architecture**: `README.md` (comprehensive)
 - **QEMU docs**: https://www.qemu.org/documentation/
 - **containerd shim API**: https://github.com/containerd/containerd/tree/main/runtime/v2
 - **cgroups v2**: https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html

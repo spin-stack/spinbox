@@ -75,9 +75,10 @@ Legend:
 - `internal/host/`: host-side VM, network, storage, and mount plumbing
 - `internal/shim/`: containerd shim implementation and task service
 - `internal/guest/`: vminitd logic, guest services, and stream handling
+- `internal/config/`: configuration management
+- `internal/paths/`: path resolution helpers
 - `api/`: protobuf/TTRPC definitions and generated stubs
-- `pkg/`: small shared utilities (`iobuf`, `paths`)
-- `assets/`: kernel config and other build-time inputs
+- `assets/`: kernel config, example configs, and other build-time inputs
 
 ## Quick Start
 
@@ -286,8 +287,8 @@ journalctl -u containerd -f
 ## Documentation
 
 - **Architecture details**: See `CLAUDE.md`
-- **CNI setup guide**: See `docs/CNI_SETUP.md`
-- **Example configs**: See `examples/cni/`
+- **Configuration reference**: See `docs/CONFIGURATION.md`
+- **Example configs**: See `assets/examples/cni/`
 
 ## License
 
