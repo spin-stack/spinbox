@@ -1,7 +1,7 @@
 //go:build darwin
 
-// Package network provides CNI-based network management for qemubox VMs.
-// On Darwin, all network operations return errors as networking is not supported.
+// Package network provides stub implementations for Darwin.
+// Networking is only supported on Linux.
 package network
 
 import (
@@ -10,20 +10,15 @@ import (
 	"net"
 )
 
-// NetworkConfig defines network configuration
+// NetworkConfig defines network configuration (Darwin stub)
 type NetworkConfig struct {
-	// CNI fields (not used on Darwin)
 	CNIConfDir string
 	CNIBinDir  string
 }
 
-// LoadNetworkConfig loads network configuration.
-// On Darwin, returns stub config (networking is not supported).
+// LoadNetworkConfig returns stub config.
 func LoadNetworkConfig() NetworkConfig {
-	return NetworkConfig{
-		CNIConfDir: "/etc/cni/net.d",
-		CNIBinDir:  "/opt/cni/bin",
-	}
+	return NetworkConfig{}
 }
 
 // NetworkInfo holds internal network configuration
@@ -48,31 +43,7 @@ type NetworkManager interface {
 	ReleaseNetworkResources(ctx context.Context, env *Environment) error
 }
 
-// darwinNetworkManager stub for Darwin
-type darwinNetworkManager struct{}
-
-// NewNetworkManager creates a stub network manager (Darwin only)
-func NewNetworkManager(
-	ctx context.Context,
-	config NetworkConfig,
-) (NetworkManager, error) {
-	// Reference unused parameter to avoid compiler errors
-	_ = ctx
-	_ = config
+// NewNetworkManager returns an error on Darwin (not supported)
+func NewNetworkManager(ctx context.Context, config NetworkConfig) (NetworkManager, error) {
 	return nil, fmt.Errorf("network manager not supported on darwin")
-}
-
-// Close is a stub for Darwin
-func (nm *darwinNetworkManager) Close() error {
-	return fmt.Errorf("not supported on darwin")
-}
-
-// EnsureNetworkResources is a stub for Darwin
-func (nm *darwinNetworkManager) EnsureNetworkResources(ctx context.Context, env *Environment) error {
-	return fmt.Errorf("not supported on darwin")
-}
-
-// ReleaseNetworkResources is a stub for Darwin
-func (nm *darwinNetworkManager) ReleaseNetworkResources(ctx context.Context, env *Environment) error {
-	return fmt.Errorf("not supported on darwin")
 }
