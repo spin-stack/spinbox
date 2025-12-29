@@ -1,3 +1,5 @@
+//go:build linux
+
 package qemu
 
 import (
@@ -11,11 +13,13 @@ import (
 	"time"
 
 	"github.com/containerd/log"
+
+	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
 
-// QMPClient implements QEMU Machine Protocol (QMP) client.
+// qmpClient implements QEMU Machine Protocol (QMP) client.
 // QMP is a JSON-RPC protocol for controlling QEMU via a Unix socket.
-type QMPClient struct {
+type qmpClient struct {
 	conn    net.Conn
 	scanner *bufio.Scanner
 	encoder *json.Encoder
@@ -55,18 +59,18 @@ type qmpStatus struct {
 
 // SetCommandTimeout sets the timeout for QMP commands
 // If not set or set to 0, defaults to 5 seconds
-func (q *QMPClient) SetCommandTimeout(timeout time.Duration) {
+func (q *qmpClient) SetCommandTimeout(timeout time.Duration) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.commandTimeout = timeout
 }
 
-// NewQMPClient creates a QMP client and performs initial handshake.
+// newQMPClient creates a QMP client and performs initial handshake.
 // The QMP protocol requires:
 // 1. Read greeting message from server
 // 2. Send qmp_capabilities command to enter command mode
 // 3. Start event loop for asynchronous events
-func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
+func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 	// Wait for socket to appear
 	if err := waitForSocket(ctx, socketPath, vmStartTimeout); err != nil {
 		return nil, fmt.Errorf("QMP socket not available: %w", err)
@@ -78,15 +82,15 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 		return nil, fmt.Errorf("failed to connect to QMP socket: %w", err)
 	}
 
-	qmp := &QMPClient{
+	qmp := &qmpClient{
 		conn:           conn,
 		scanner:        bufio.NewScanner(conn),
 		encoder:        json.NewEncoder(conn),
 		pending:        make(map[uint64]chan *qmpResponse),
-		commandTimeout: 5 * time.Second, // Default timeout
+		commandTimeout: qmpDefaultTimeout,
 	}
 	// QMP can emit large JSON objects; ensure we don't drop events due to scanner limits.
-	qmp.scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	qmp.scanner.Buffer(make([]byte, 0, qmpBufferInitial), qmpBufferMax)
 
 	// Read QMP greeting
 	if !qmp.scanner.Scan() {
@@ -131,12 +135,12 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 }
 
 // execute sends a QMP command and waits for response
-func (q *QMPClient) execute(ctx context.Context, command string, args map[string]interface{}) error {
+func (q *qmpClient) execute(ctx context.Context, command string, args map[string]interface{}) error {
 	_, err := q.sendCommand(ctx, command, args)
 	return err
 }
 
-func (q *QMPClient) sendCommand(ctx context.Context, command string, args map[string]interface{}) (*qmpResponse, error) {
+func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[string]interface{}) (*qmpResponse, error) {
 	if q.closed.Load() {
 		return nil, fmt.Errorf("QMP client closed")
 	}
@@ -165,10 +169,10 @@ func (q *QMPClient) sendCommand(ctx context.Context, command string, args map[st
 		return nil, fmt.Errorf("failed to send QMP command %s: %w", command, err)
 	}
 
-	// Use configured timeout (default: 5 seconds)
+	// Use configured timeout
 	timeout := q.commandTimeout
 	if timeout == 0 {
-		timeout = 5 * time.Second
+		timeout = qmpDefaultTimeout
 	}
 
 	// Wait for response with timeout
@@ -249,7 +253,7 @@ func qmpStringField(data map[string]interface{}, key string) string {
 }
 
 // handleEvent processes QMP asynchronous events with structured logging
-func (q *QMPClient) handleEvent(ctx context.Context, resp *qmpResponse) {
+func (q *qmpClient) handleEvent(ctx context.Context, resp *qmpResponse) {
 	logger := log.G(ctx).WithFields(log.Fields{
 		"event": resp.Event,
 		"data":  resp.Data,
@@ -264,7 +268,7 @@ func (q *QMPClient) handleEvent(ctx context.Context, resp *qmpResponse) {
 }
 
 // eventLoop processes QMP messages (responses and events)
-func (q *QMPClient) eventLoop(ctx context.Context) {
+func (q *qmpClient) eventLoop(ctx context.Context) {
 	for q.scanner.Scan() {
 		if q.closed.Load() {
 			return
@@ -312,7 +316,7 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 
 // SendCtrlAltDelete sends CTRL+ALT+DELETE key sequence to the VM
 // This is more reliable than ACPI powerdown for some Linux distributions
-func (q *QMPClient) SendCtrlAltDelete(ctx context.Context) error {
+func (q *qmpClient) SendCtrlAltDelete(ctx context.Context) error {
 	// Send CTRL+ALT+DELETE key sequence via QMP
 	keys := []interface{}{
 		map[string]interface{}{"type": "qcode", "data": "ctrl"},
@@ -325,17 +329,17 @@ func (q *QMPClient) SendCtrlAltDelete(ctx context.Context) error {
 }
 
 // Shutdown gracefully shuts down the VM using ACPI powerdown
-func (q *QMPClient) Shutdown(ctx context.Context) error {
+func (q *qmpClient) Shutdown(ctx context.Context) error {
 	return q.execute(ctx, "system_powerdown", nil)
 }
 
 // Quit instructs QEMU to exit immediately
-func (q *QMPClient) Quit(ctx context.Context) error {
+func (q *qmpClient) Quit(ctx context.Context) error {
 	return q.execute(ctx, "quit", nil)
 }
 
 // QueryStatus returns the current VM status (running, paused, shutdown, etc).
-func (q *QMPClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
+func (q *qmpClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
 	if q.closed.Load() {
 		return nil, fmt.Errorf("QMP client closed")
 	}
@@ -378,7 +382,7 @@ func (q *QMPClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
 		delete(q.pending, id)
 		q.mu.Unlock()
 		return nil, ctx.Err()
-	case <-time.After(5 * time.Second):
+	case <-time.After(qmpDefaultTimeout):
 		q.mu.Lock()
 		delete(q.pending, id)
 		q.mu.Unlock()
@@ -387,7 +391,7 @@ func (q *QMPClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
 }
 
 // DeviceAdd hotplugs a device
-func (q *QMPClient) DeviceAdd(ctx context.Context, driver string, args map[string]interface{}) error {
+func (q *qmpClient) DeviceAdd(ctx context.Context, driver string, args map[string]interface{}) error {
 	if args == nil {
 		args = make(map[string]interface{})
 	}
@@ -396,18 +400,10 @@ func (q *QMPClient) DeviceAdd(ctx context.Context, driver string, args map[strin
 }
 
 // DeviceDelete removes a device
-func (q *QMPClient) DeviceDelete(ctx context.Context, deviceID string) error {
+func (q *qmpClient) DeviceDelete(ctx context.Context, deviceID string) error {
 	return q.execute(ctx, "device_del", map[string]interface{}{
 		"id": deviceID,
 	})
-}
-
-// CPUInfo represents information about a single vCPU
-type CPUInfo struct {
-	CPUIndex int    `json:"cpu-index"`
-	QOMPath  string `json:"qom-path"`
-	Thread   int    `json:"thread-id"`
-	Target   string `json:"target"`
 }
 
 // HotpluggableCPU describes an available CPU hotplug slot.
@@ -420,14 +416,14 @@ type HotpluggableCPU struct {
 
 // QueryCPUs returns information about all vCPUs in the VM
 // Uses query-cpus-fast which is more efficient than query-cpus
-func (q *QMPClient) QueryCPUs(ctx context.Context) ([]CPUInfo, error) {
+func (q *qmpClient) QueryCPUs(ctx context.Context) ([]vm.CPUInfo, error) {
 	resp, err := q.sendCommand(ctx, "query-cpus-fast", nil)
 	if err != nil {
 		return nil, err
 	}
 
 	// Parse the return value as array of CPUInfo
-	var cpus []CPUInfo
+	var cpus []vm.CPUInfo
 	returnBytes, err := json.Marshal(resp.Return)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal CPU info: %w", err)
@@ -441,7 +437,7 @@ func (q *QMPClient) QueryCPUs(ctx context.Context) ([]CPUInfo, error) {
 }
 
 // QueryHotpluggableCPUs returns available CPU hotplug slots.
-func (q *QMPClient) QueryHotpluggableCPUs(ctx context.Context) ([]HotpluggableCPU, error) {
+func (q *qmpClient) QueryHotpluggableCPUs(ctx context.Context) ([]HotpluggableCPU, error) {
 	resp, err := q.sendCommand(ctx, "query-hotpluggable-cpus", nil)
 	if err != nil {
 		return nil, err
@@ -462,7 +458,7 @@ func (q *QMPClient) QueryHotpluggableCPUs(ctx context.Context) ([]HotpluggableCP
 
 // HotplugCPU adds a new vCPU to the running VM
 // cpuID should be the next available CPU index (e.g., if you have CPUs 0-1, use cpuID=2)
-func (q *QMPClient) HotplugCPU(ctx context.Context, cpuID int) error {
+func (q *qmpClient) HotplugCPU(ctx context.Context, cpuID int) error {
 	beforeCount := -1
 	if cpus, err := q.QueryCPUs(ctx); err == nil {
 		beforeCount = len(cpus)
@@ -580,7 +576,7 @@ func intFromProp(value interface{}) (int, bool) {
 // UnplugCPU removes a vCPU from the running VM
 // Note: CPU hot-unplug requires guest kernel support (CONFIG_HOTPLUG_CPU=y)
 // and the CPU must be offline in the guest before removal
-func (q *QMPClient) UnplugCPU(ctx context.Context, cpuID int) error {
+func (q *qmpClient) UnplugCPU(ctx context.Context, cpuID int) error {
 	deviceID := fmt.Sprintf("cpu%d", cpuID)
 
 	log.G(ctx).WithFields(log.Fields{
@@ -604,7 +600,7 @@ type MemorySizeSummary struct {
 }
 
 // QueryMemoryDevices returns all hotplugged memory devices
-func (q *QMPClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo, error) {
+func (q *qmpClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo, error) {
 	if q.closed.Load() {
 		return nil, fmt.Errorf("QMP client closed")
 	}
@@ -656,7 +652,7 @@ func (q *QMPClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo,
 		q.mu.Unlock()
 		return nil, ctx.Err()
 
-	case <-time.After(5 * time.Second):
+	case <-time.After(qmpDefaultTimeout):
 		q.mu.Lock()
 		delete(q.pending, id)
 		q.mu.Unlock()
@@ -665,7 +661,7 @@ func (q *QMPClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo,
 }
 
 // QueryMemorySizeSummary returns memory usage summary
-func (q *QMPClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSummary, error) {
+func (q *qmpClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSummary, error) {
 	if q.closed.Load() {
 		return nil, fmt.Errorf("QMP client closed")
 	}
@@ -717,7 +713,7 @@ func (q *QMPClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSumm
 		q.mu.Unlock()
 		return nil, ctx.Err()
 
-	case <-time.After(5 * time.Second):
+	case <-time.After(qmpDefaultTimeout):
 		q.mu.Lock()
 		delete(q.pending, id)
 		q.mu.Unlock()
@@ -726,7 +722,7 @@ func (q *QMPClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSumm
 }
 
 // ObjectAdd adds a QEMU object (e.g., memory backend)
-func (q *QMPClient) ObjectAdd(ctx context.Context, qomType, objID string, args map[string]interface{}) error {
+func (q *qmpClient) ObjectAdd(ctx context.Context, qomType, objID string, args map[string]interface{}) error {
 	arguments := map[string]interface{}{
 		"qom-type": qomType,
 		"id":       objID,
@@ -739,7 +735,7 @@ func (q *QMPClient) ObjectAdd(ctx context.Context, qomType, objID string, args m
 }
 
 // ObjectDel removes a QEMU object
-func (q *QMPClient) ObjectDel(ctx context.Context, objID string) error {
+func (q *qmpClient) ObjectDel(ctx context.Context, objID string) error {
 	return q.execute(ctx, "object-del", map[string]interface{}{
 		"id": objID,
 	})
@@ -748,7 +744,7 @@ func (q *QMPClient) ObjectDel(ctx context.Context, objID string) error {
 // HotplugMemory adds memory to the VM using pc-dimm
 // slotID: memory slot index (0-7 based on -m slots=8)
 // sizeBytes: memory size in bytes (must be 128MB aligned)
-func (q *QMPClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error {
+func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error {
 	// Validate 128MB alignment
 	const alignmentMB = 128
 	const alignmentBytes = alignmentMB * 1024 * 1024
@@ -829,7 +825,7 @@ func (q *QMPClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 // slotID: memory slot to remove
 // Note: Memory hot-unplug requires guest kernel support (CONFIG_MEMORY_HOTREMOVE=y)
 // and the memory must be offline in the guest before removal
-func (q *QMPClient) UnplugMemory(ctx context.Context, slotID int) error {
+func (q *qmpClient) UnplugMemory(ctx context.Context, slotID int) error {
 	dimmID := fmt.Sprintf("dimm%d", slotID)
 	backendID := fmt.Sprintf("mem%d", slotID)
 
@@ -855,7 +851,7 @@ func (q *QMPClient) UnplugMemory(ctx context.Context, slotID int) error {
 }
 
 // Close closes the QMP connection
-func (q *QMPClient) Close() error {
+func (q *qmpClient) Close() error {
 	if !q.closed.CompareAndSwap(false, true) {
 		return nil // Already closed
 	}

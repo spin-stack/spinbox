@@ -68,6 +68,10 @@ func (m *mockVMInstance) VMInfo() vm.VMInfo {
 	return vm.VMInfo{}
 }
 
+func (m *mockVMInstance) CPUHotplugger() vm.CPUHotplugger {
+	return nil
+}
+
 // mockConn implements net.Conn for testing
 type mockConn struct {
 	closed bool

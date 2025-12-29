@@ -104,7 +104,7 @@ func StartCPUHotplug(
 
 	controller := cpuhotplug.NewController(
 		containerID,
-		qmpClient,
+		vmi.CPUHotplugger(),
 		func(ctx context.Context) (uint64, uint64, error) {
 			return callbacks.GetCPUStats(ctx, containerID)
 		},

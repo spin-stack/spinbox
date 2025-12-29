@@ -9,16 +9,16 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
+	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
 
 // Controller manages dynamic vCPU allocation for a VM based on CPU usage
 type Controller struct {
-	containerID string
-	qmpClient   *qemu.QMPClient
-	stats       StatsProvider
-	offlineCPU  CPUOffliner
-	onlineCPU   CPUOnliner
+	containerID   string
+	cpuHotplugger vm.CPUHotplugger
+	stats         StatsProvider
+	offlineCPU    CPUOffliner
+	onlineCPU     CPUOnliner
 
 	// Resource limits
 	bootCPUs int // Minimum vCPUs (never go below this)
@@ -108,22 +108,22 @@ func (n *noopCPUController) Stop()                     {}
 
 // NewController creates a new CPU hotplug controller.
 // Returns a no-op controller if hotplug is not needed (maxCPUs <= bootCPUs).
-func NewController(containerID string, qmpClient *qemu.QMPClient, stats StatsProvider, offliner CPUOffliner, onliner CPUOnliner, bootCPUs, maxCPUs int, config Config) CPUHotplugController {
+func NewController(containerID string, cpuHotplugger vm.CPUHotplugger, stats StatsProvider, offliner CPUOffliner, onliner CPUOnliner, bootCPUs, maxCPUs int, config Config) CPUHotplugController {
 	// Return no-op controller if hotplug is not needed
 	if maxCPUs <= bootCPUs {
 		return &noopCPUController{}
 	}
 
 	return &Controller{
-		containerID: containerID,
-		qmpClient:   qmpClient,
-		stats:       stats,
-		offlineCPU:  offliner,
-		onlineCPU:   onliner,
-		bootCPUs:    bootCPUs,
-		maxCPUs:     maxCPUs,
-		currentCPUs: bootCPUs, // Start with boot CPUs
-		config:      config,
+		containerID:   containerID,
+		cpuHotplugger: cpuHotplugger,
+		stats:         stats,
+		offlineCPU:    offliner,
+		onlineCPU:     onliner,
+		bootCPUs:      bootCPUs,
+		maxCPUs:       maxCPUs,
+		currentCPUs:   bootCPUs, // Start with boot CPUs
+		config:        config,
 	}
 }
 
@@ -193,7 +193,7 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 	defer c.mu.Unlock()
 
 	// Query current vCPU count from QEMU
-	cpus, err := c.qmpClient.QueryCPUs(ctx)
+	cpus, err := c.cpuHotplugger.QueryCPUs(ctx)
 	if err != nil {
 		return fmt.Errorf("query vCPUs: %w", err)
 	}
@@ -405,7 +405,7 @@ func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
 
 	// Add CPUs one at a time to target
 	for i := c.currentCPUs; i < targetCPUs; i++ {
-		if err := c.qmpClient.HotplugCPU(ctx, i); err != nil {
+		if err := c.cpuHotplugger.HotplugCPU(ctx, i); err != nil {
 			log.G(ctx).WithError(err).WithFields(log.Fields{
 				"container_id": c.containerID,
 				"cpu_id":       i,
@@ -463,7 +463,7 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 			}
 		}
 
-		if err := c.qmpClient.UnplugCPU(ctx, i); err != nil {
+		if err := c.cpuHotplugger.UnplugCPU(ctx, i); err != nil {
 			log.G(ctx).WithError(err).WithFields(log.Fields{
 				"container_id": c.containerID,
 				"cpu_id":       i,

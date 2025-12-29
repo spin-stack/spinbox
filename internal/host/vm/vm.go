@@ -102,8 +102,25 @@ type VMInfo struct {
 	SupportsVSOCK bool
 }
 
+// CPUHotplugger provides CPU hotplug operations.
+type CPUHotplugger interface {
+	QueryCPUs(ctx context.Context) ([]CPUInfo, error)
+	HotplugCPU(ctx context.Context, cpuID int) error
+	UnplugCPU(ctx context.Context, cpuID int) error
+}
+
+// CPUInfo represents information about a single vCPU.
+type CPUInfo struct {
+	CPUIndex int    `json:"cpu-index"`
+	QOMPath  string `json:"qom-path"`
+	Thread   int    `json:"thread-id"`
+	Target   string `json:"target"`
+}
+
 // Instance represents a VM instance that can run containers.
 // This interface abstracts the VMM backend (QEMU)
+//
+//nolint:interfacebloat // VM interface naturally has many methods for different operations
 type Instance interface {
 	// Device configuration (called before Start)
 	AddDisk(ctx context.Context, blockID, mountPath string, opts ...MountOpt) error
@@ -121,6 +138,9 @@ type Instance interface {
 	// Callers must close the returned client when done.
 	DialClient(ctx context.Context) (*ttrpc.Client, error)
 	StartStream(ctx context.Context) (uint32, net.Conn, error)
+
+	// Resource management
+	CPUHotplugger() CPUHotplugger
 
 	// Metadata
 	VMInfo() VMInfo

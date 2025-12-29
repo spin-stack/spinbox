@@ -21,7 +21,7 @@ func TestQMPMemoryHotplug(t *testing.T) {
 	ctx := context.Background()
 
 	// Connect to QMP (socket path from running VM)
-	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
+	qmp, err := newQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestQueryMemorySizeSummary(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
+	qmp, err := newQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestQueryMemoryDevices(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
+	qmp, err := newQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestMemoryHotplugAlignment(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
+	qmp, err := newQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestObjectAddDel(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
+	qmp, err := newQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}

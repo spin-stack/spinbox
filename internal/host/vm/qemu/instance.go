@@ -1,7 +1,10 @@
+//go:build linux
+
 package qemu
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -27,6 +30,47 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/paths"
 )
+
+// findQemu returns the path to the qemu-system-x86_64 binary
+func findQemu() (string, error) {
+	path := paths.QemuPath()
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("qemu-system-x86_64 binary not found at %s", path)
+}
+
+// findKernel returns the path to the kernel binary for QEMU
+func findKernel() (string, error) {
+	path := paths.KernelPath()
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("kernel not found at %s (use QEMUBOX_SHARE_DIR to override)", path)
+}
+
+// findInitrd returns the path to the initrd for QEMU
+func findInitrd() (string, error) {
+	path := paths.InitrdPath()
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("initrd not found at %s (use QEMUBOX_SHARE_DIR to override)", path)
+}
+
+// NewInstance creates a new QEMU VM instance.
+func NewInstance(ctx context.Context, containerID, stateDir string, cfg *vm.VMResourceConfig) (vm.Instance, error) {
+	binaryPath, err := findQemu()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		return nil, fmt.Errorf("failed to create state directory: %w", err)
+	}
+
+	return newInstance(ctx, containerID, binaryPath, stateDir, cfg)
+}
 
 // newInstance creates a new QEMU microvm instance
 func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, resourceCfg *vm.VMResourceConfig) (*Instance, error) {
@@ -75,12 +119,11 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 
 	// Unix domain sockets have a 108-character path limit on Linux (including null terminator)
 	// Validate socket paths to prevent runtime errors
-	const maxSocketPathLen = 107
-	if len(qmpSocketPath) > maxSocketPathLen {
-		return nil, fmt.Errorf("QMP socket path too long (%d > %d): %s", len(qmpSocketPath), maxSocketPathLen, qmpSocketPath)
+	if len(qmpSocketPath) > maxUnixSocketPath {
+		return nil, fmt.Errorf("QMP socket path too long (%d > %d): %s", len(qmpSocketPath), maxUnixSocketPath, qmpSocketPath)
 	}
-	if len(vsockPath) > maxSocketPathLen {
-		return nil, fmt.Errorf("vsock socket path too long (%d > %d): %s", len(vsockPath), maxSocketPathLen, vsockPath)
+	if len(vsockPath) > maxUnixSocketPath {
+		return nil, fmt.Errorf("vsock socket path too long (%d > %d): %s", len(vsockPath), maxUnixSocketPath, vsockPath)
 	}
 
 	inst := &Instance{
@@ -121,7 +164,7 @@ func (q *Instance) AddFS(ctx context.Context, tag, mountPath string, opts ...vm.
 	return fmt.Errorf("AddFS not implemented for QEMU: use EROFS or block devices")
 }
 
-// generateStableDiskID generates a stable device ID based on file metadata
+// generateStableDiskID generates a stable device ID based on file metadata.
 // This ensures consistent device naming across VM reboots and reduces issues
 // with device enumeration order. Uses inode and device number as stable identifiers.
 func generateStableDiskID(path string) (string, error) {
@@ -132,8 +175,10 @@ func generateStableDiskID(path string) (string, error) {
 
 	stat, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		// Fallback to simple hash if syscall.Stat_t not available
-		return fmt.Sprintf("disk-%x", hash(path)), nil
+		// Fallback: use base64-encoded path (stable, no hash collisions)
+		// Using RawURLEncoding makes it filesystem-safe (no padding '=' characters)
+		encoded := base64.RawURLEncoding.EncodeToString([]byte(path))
+		return "disk-" + encoded, nil
 	}
 
 	// Generate stable ID from device and inode numbers
@@ -141,18 +186,9 @@ func generateStableDiskID(path string) (string, error) {
 	return fmt.Sprintf("disk-%x-%x", stat.Dev, stat.Ino), nil
 }
 
-// hash generates a simple hash of a string for fallback ID generation
-func hash(s string) uint32 {
-	h := uint32(0)
-	for i := range s {
-		h = h*31 + uint32(s[i])
-	}
-	return h
-}
-
 // AddDisk schedules a disk to be attached to the VM
 func (q *Instance) AddDisk(ctx context.Context, blockID, mountPath string, opts ...vm.MountOpt) error {
-	if vmState(q.vmState.Load()) != vmStateNew {
+	if q.getState() != vmStateNew {
 		return errors.New("cannot add disk after VM started")
 	}
 
@@ -195,7 +231,7 @@ func (q *Instance) AddNIC(ctx context.Context, endpoint string, mac net.Hardware
 
 // AddTAPNIC schedules a TAP network interface to be attached to the VM
 func (q *Instance) AddTAPNIC(ctx context.Context, tapName string, mac net.HardwareAddr) error {
-	if vmState(q.vmState.Load()) != vmStateNew {
+	if q.getState() != vmStateNew {
 		return errors.New("cannot add NIC after VM started")
 	}
 
@@ -257,6 +293,10 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 
 	// Start background goroutine to stream FIFO → log file
 	// This prevents QEMU from blocking on slow disk I/O
+	//
+	// Goroutine lifecycle: This goroutine exits when QEMU closes the FIFO writer (on VM shutdown).
+	// FIFOs don't support read deadlines, so we can't use context for early cancellation.
+	// In practice, the goroutine lifetime matches the VM lifetime, which is acceptable.
 	go func() {
 		defer func() {
 			_ = consoleFile.Close()
@@ -275,7 +315,7 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 
 		// Continuously stream: FIFO (fast, kernel-buffered) → log file (persistent, may be slow)
 		// This decouples QEMU's write speed from disk I/O performance
-		buf := make([]byte, 8192)
+		buf := make([]byte, consoleBufferSize)
 		for {
 			n, err := fifo.Read(buf)
 			if n > 0 {
@@ -436,7 +476,7 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 }
 
 func (q *Instance) connectQMP(ctx context.Context) error {
-	qmpClient, err := NewQMPClient(ctx, q.qmpSocketPath)
+	qmpClient, err := newQMPClient(ctx, q.qmpSocketPath)
 	if err != nil {
 		// Check if QEMU process is still running
 		if q.cmd.Process != nil {
@@ -481,7 +521,7 @@ func (q *Instance) rollbackStart(success *bool) {
 	if success != nil && *success {
 		return
 	}
-	q.vmState.Store(uint32(vmStateNew))
+	q.setState(vmStateNew)
 
 	// Close vsock connection FIRST (before killing QEMU)
 	if q.vsockConn != nil {
@@ -523,20 +563,20 @@ func (q *Instance) rollbackStart(success *bool) {
 // Start starts the QEMU VM
 func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Check and update state atomically
-	if !q.vmState.CompareAndSwap(uint32(vmStateNew), uint32(vmStateStarting)) {
-		currentState := vmState(q.vmState.Load())
+	if !q.compareAndSwapState(vmStateNew, vmStateStarting) {
+		currentState := q.getState()
 		return fmt.Errorf("cannot start VM in state %d", currentState)
 	}
 
 	// Validate configuration before starting
 	if err := q.validateConfiguration(); err != nil {
-		q.vmState.Store(uint32(vmStateNew))
+		q.setState(vmStateNew)
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 
 	// Setup console FIFO for real-time streaming
 	if err := q.setupConsoleFIFO(ctx); err != nil {
-		q.vmState.Store(uint32(vmStateNew))
+		q.setState(vmStateNew)
 		return fmt.Errorf("failed to setup console FIFO: %w", err)
 	}
 
@@ -614,7 +654,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	// Mark as successfully started
 	success = true
-	q.vmState.Store(uint32(vmStateRunning))
+	q.setState(vmStateRunning)
 
 	log.G(ctx).Info("qemu: VM fully initialized")
 
@@ -772,7 +812,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 // This is used for the event stream and should not be shared for concurrent RPCs.
 func (q *Instance) Client() *ttrpc.Client {
 	// Return nil if VM is shutdown
-	if vmState(q.vmState.Load()) != vmStateRunning {
+	if q.getState() != vmStateRunning {
 		return nil
 	}
 
@@ -784,7 +824,7 @@ func (q *Instance) Client() *ttrpc.Client {
 // DialClient creates a short-lived TTRPC client for one-off RPCs.
 // The caller must close the returned client.
 func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
-	if vmState(q.vmState.Load()) != vmStateRunning {
+	if q.getState() != vmStateRunning {
 		return nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
 	}
 
@@ -819,9 +859,21 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 }
 
 // QMPClient returns the QMP client for controlling the VM
-func (q *Instance) QMPClient() *QMPClient {
+func (q *Instance) QMPClient() *qmpClient {
 	// Return nil if VM is shutdown
-	if vmState(q.vmState.Load()) == vmStateShutdown {
+	if q.getState() == vmStateShutdown {
+		return nil
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.qmpClient
+}
+
+// CPUHotplugger returns an interface for CPU hotplug operations
+func (q *Instance) CPUHotplugger() vm.CPUHotplugger {
+	// Return nil if VM is shutdown
+	if q.getState() == vmStateShutdown {
 		return nil
 	}
 
@@ -975,8 +1027,8 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 	logger.Info("qemu: Shutdown() called, initiating VM shutdown")
 
 	// Mark VM as shutting down (atomic flag prevents re-entry)
-	if !q.vmState.CompareAndSwap(uint32(vmStateRunning), uint32(vmStateShutdown)) {
-		currentState := vmState(q.vmState.Load())
+	if !q.compareAndSwapState(vmStateRunning, vmStateShutdown) {
+		currentState := q.getState()
 		logger.WithField("state", currentState).Debug("qemu: VM not in running state, shutdown may already be in progress")
 		// Not an error - idempotent shutdown
 		return nil
@@ -1022,7 +1074,7 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 
 // StartStream creates a new stream connection to the VM for I/O operations.
 func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
-	if vmState(q.vmState.Load()) != vmStateRunning {
+	if q.getState() != vmStateRunning {
 		return 0, nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
 	}
 	const timeIncrement = 10 * time.Millisecond
@@ -1147,7 +1199,7 @@ func (q *Instance) monitorGuestRPC(ctx context.Context) {
 
 	failures := 0
 	for {
-		if vmState(q.vmState.Load()) == vmStateShutdown {
+		if q.getState() == vmStateShutdown {
 			return
 		}
 

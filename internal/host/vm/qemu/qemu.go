@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package qemu implements the QEMU-based VM backend.
 package qemu
 
@@ -15,7 +17,7 @@ import (
 )
 
 // vmState represents the lifecycle state of a VM instance.
-type vmState uint32
+type vmState int32
 
 const (
 	vmStateNew      vmState = iota // Instance created, not started
@@ -23,6 +25,23 @@ const (
 	vmStateRunning                 // VM is running
 	vmStateShutdown                // Shutdown() called
 )
+
+// State management helper methods
+
+// getState returns the current VM state
+func (q *Instance) getState() vmState {
+	return vmState(q.vmState.Load())
+}
+
+// setState atomically sets the VM state
+func (q *Instance) setState(state vmState) {
+	q.vmState.Store(uint32(state))
+}
+
+// compareAndSwapState atomically compares and swaps the VM state
+func (q *Instance) compareAndSwapState(old, new vmState) bool {
+	return q.vmState.CompareAndSwap(uint32(old), uint32(new))
+}
 
 const (
 	vsockCID            = 3                  // Guest context ID for vsock
@@ -34,6 +53,13 @@ const (
 	defaultMemoryMax    = 1024 * 1024 * 1024 // 1 GiB (reduced from 2 GiB for leaner defaults)
 	vmStartTimeout      = 10 * time.Second
 	connectRetryTimeout = 10 * time.Second
+
+	// Unix socket and buffer size limits
+	maxUnixSocketPath = 107             // UNIX_PATH_MAX on Linux
+	consoleBufferSize = 8 * 1024        // Console FIFO read buffer
+	qmpBufferInitial  = 64 * 1024       // QMP scanner initial buffer
+	qmpBufferMax      = 1024 * 1024     // QMP scanner max buffer
+	qmpDefaultTimeout = 5 * time.Second // Default QMP command timeout
 )
 
 // Instance represents a QEMU microvm instance.
@@ -64,7 +90,7 @@ type Instance struct {
 	// Runtime state
 	cmd       *exec.Cmd
 	waitCh    chan error
-	qmpClient *QMPClient
+	qmpClient *qmpClient
 	client    *ttrpc.Client
 	vsockConn net.Conn
 

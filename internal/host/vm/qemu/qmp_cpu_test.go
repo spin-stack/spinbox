@@ -20,7 +20,7 @@ func TestQMPCPUHotplug(t *testing.T) {
 
 	// Connect to QMP (socket path from running VM)
 	qmpSocketPath := "/tmp/test-qemu-qmp.sock"
-	qmp, err := NewQMPClient(ctx, qmpSocketPath)
+	qmp, err := newQMPClient(ctx, qmpSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestQueryCPUs(t *testing.T) {
 	ctx := context.Background()
 
 	qmpSocketPath := "/tmp/test-qemu-qmp.sock"
-	qmp, err := NewQMPClient(ctx, qmpSocketPath)
+	qmp, err := newQMPClient(ctx, qmpSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
