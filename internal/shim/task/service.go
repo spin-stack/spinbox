@@ -435,7 +435,6 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 		return err
 	}
 	go func() {
-	recvLoop:
 		for {
 			ev, err := sc.Recv()
 			if err != nil {
@@ -446,33 +445,16 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 
 				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
 					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, attempting reconnect")
-					reconnectDeadline := time.Now().Add(2 * time.Second)
-					for time.Now().Before(reconnectDeadline) {
-						if s.intentionalShutdown.Load() {
-							log.G(ctx).Info("vm event stream closed (intentional shutdown)")
-							return
-						}
-						newClient, dialErr := s.vmLifecycle.DialClientWithRetry(ctx, 2*time.Second)
-						if dialErr != nil {
-							log.G(ctx).WithError(dialErr).Debug("event stream reconnect: dial failed")
-							time.Sleep(200 * time.Millisecond)
-							continue
-						}
-						newStream, streamErr := vmevents.NewTTRPCEventsClient(newClient).Stream(ctx, &ptypes.Empty{})
-						if streamErr != nil {
-							_ = newClient.Close()
-							log.G(ctx).WithError(streamErr).Debug("event stream reconnect: stream failed")
-							time.Sleep(200 * time.Millisecond)
-							continue
-						}
-						if currentClient != nil {
-							_ = currentClient.Close()
-						}
+
+					// Try to reconnect
+					newClient, newStream, reconnected := s.reconnectEventStream(ctx, currentClient)
+					if reconnected {
 						currentClient = newClient
 						sc = newStream
 						log.G(ctx).Info("vm event stream reconnected")
-						continue recvLoop
+						continue // Restart the receive loop with new stream
 					}
+
 					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, initiating shim shutdown")
 				} else {
 					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
@@ -489,6 +471,42 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 	}()
 
 	return nil
+}
+
+// reconnectEventStream attempts to reconnect the event stream within a deadline.
+// Returns the new client, stream, and whether reconnection succeeded.
+func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEvents_StreamClient, bool) {
+	reconnectDeadline := time.Now().Add(2 * time.Second)
+
+	for time.Now().Before(reconnectDeadline) {
+		if s.intentionalShutdown.Load() {
+			log.G(ctx).Info("vm event stream reconnect aborted (intentional shutdown)")
+			return nil, nil, false
+		}
+
+		newClient, dialErr := s.vmLifecycle.DialClientWithRetry(ctx, 2*time.Second)
+		if dialErr != nil {
+			log.G(ctx).WithError(dialErr).Debug("event stream reconnect: dial failed")
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		newStream, streamErr := vmevents.NewTTRPCEventsClient(newClient).Stream(ctx, &ptypes.Empty{})
+		if streamErr != nil {
+			_ = newClient.Close()
+			log.G(ctx).WithError(streamErr).Debug("event stream reconnect: stream failed")
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		// Success! Close old client and return new connection
+		if oldClient != nil {
+			_ = oldClient.Close()
+		}
+		return newClient, newStream, true
+	}
+
+	return nil, nil, false
 }
 
 // Start a process.
