@@ -11,6 +11,7 @@ import (
 )
 
 type execState interface {
+	state() State
 	Resize(ws console.WinSize) error
 	Start(ctx context.Context) error
 	Delete(ctx context.Context) error
@@ -21,6 +22,10 @@ type execState interface {
 
 type execCreatedState struct {
 	p *execProcess
+}
+
+func (s *execCreatedState) state() State {
+	return StateCreated
 }
 
 func (s *execCreatedState) transition(name string) error {
@@ -76,6 +81,10 @@ type execRunningState struct {
 	p *execProcess
 }
 
+func (s *execRunningState) state() State {
+	return StateRunning
+}
+
 func (s *execRunningState) transition(name string) error {
 	switch name {
 	case stateStopped:
@@ -116,6 +125,10 @@ func (s *execRunningState) Status(ctx context.Context) (string, error) {
 
 type execStoppedState struct {
 	p *execProcess
+}
+
+func (s *execStoppedState) state() State {
+	return StateStopped
 }
 
 func (s *execStoppedState) transition(name string) error {

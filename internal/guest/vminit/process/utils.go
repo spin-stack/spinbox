@@ -159,22 +159,41 @@ func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration)
 	}
 }
 
-func stateName(v interface{}) string {
-	switch v.(type) {
-	case *runningState, *execRunningState:
-		return stateRunning
-	case *createdState, *execCreatedState, *createdCheckpointState:
-		return stateCreated
-	case *pausedState:
-		return statePaused
-	case *deletedState:
-		return stateDeleted
-	case *stoppedState:
-		return stateStopped
+// State represents a process state using a typed enum for compile-time safety
+type State uint8
+
+const (
+	// StateCreated indicates the process has been created but not started
+	StateCreated State = iota
+	// StateRunning indicates the process is currently running
+	StateRunning
+	// StatePaused indicates the process is paused (init processes only)
+	StatePaused
+	// StateStopped indicates the process has exited
+	StateStopped
+	// StateDeleted indicates the process has been deleted
+	StateDeleted
+)
+
+// String implements fmt.Stringer for State
+func (s State) String() string {
+	switch s {
+	case StateCreated:
+		return "created"
+	case StateRunning:
+		return "running"
+	case StatePaused:
+		return "paused"
+	case StateStopped:
+		return "stopped"
+	case StateDeleted:
+		return "deleted"
+	default:
+		return fmt.Sprintf("unknown(%d)", s)
 	}
-	panic(fmt.Errorf("invalid state %v", v))
 }
 
+// String constants for backward compatibility with existing code
 const (
 	stateRunning = "running"
 	stateCreated = "created"
@@ -182,6 +201,14 @@ const (
 	stateDeleted = "deleted"
 	stateStopped = "stopped"
 )
+
+func stateName(v interface{}) string {
+	// Try to use the state() method if available
+	if s, ok := v.(interface{ state() State }); ok {
+		return s.state().String()
+	}
+	panic(fmt.Errorf("invalid state %v", v))
+}
 
 func getStreams(stdio stdio.Stdio, sm stream.Manager) ([3]io.ReadWriteCloser, error) {
 	var streams [3]io.ReadWriteCloser

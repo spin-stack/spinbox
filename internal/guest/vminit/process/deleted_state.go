@@ -15,6 +15,10 @@ import (
 type deletedState struct {
 }
 
+func (s *deletedState) state() State {
+	return StateDeleted
+}
+
 func (s *deletedState) Pause(ctx context.Context) error {
 	return errors.New("cannot pause a deleted process")
 }

@@ -13,7 +13,9 @@ import (
 	"github.com/containerd/log"
 )
 
+//nolint:interfacebloat // State pattern requires comprehensive interface
 type initState interface {
+	state() State
 	Start(ctx context.Context) error
 	Delete(ctx context.Context) error
 	Pause(ctx context.Context) error
@@ -28,6 +30,10 @@ type initState interface {
 
 type createdState struct {
 	p *Init
+}
+
+func (s *createdState) state() State {
+	return StateCreated
 }
 
 func (s *createdState) transition(name string) error {
@@ -97,6 +103,10 @@ func (s *createdState) Status(ctx context.Context) (string, error) {
 type createdCheckpointState struct {
 	p    *Init
 	opts *runc.RestoreOpts
+}
+
+func (s *createdCheckpointState) state() State {
+	return StateCreated
 }
 
 func (s *createdCheckpointState) transition(name string) error {
@@ -213,6 +223,10 @@ type runningState struct {
 	p *Init
 }
 
+func (s *runningState) state() State {
+	return StateRunning
+}
+
 func (s *runningState) transition(name string) error {
 	switch name {
 	case stateStopped:
@@ -284,6 +298,10 @@ type pausedState struct {
 	p *Init
 }
 
+func (s *pausedState) state() State {
+	return StatePaused
+}
+
 func (s *pausedState) transition(name string) error {
 	switch name {
 	case stateRunning:
@@ -350,6 +368,10 @@ func (s *pausedState) Status(ctx context.Context) (string, error) {
 
 type stoppedState struct {
 	p *Init
+}
+
+func (s *stoppedState) state() State {
+	return StateStopped
 }
 
 func (s *stoppedState) transition(name string) error {
