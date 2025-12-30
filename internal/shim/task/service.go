@@ -314,7 +314,7 @@ func (s *service) dialTaskClient(ctx context.Context) (*ttrpc.Client, func(), er
 }
 
 // Create a new initial process and container with the underlying OCI runtime.
-func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
+func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, retErr error) {
 	log.G(ctx).WithFields(log.Fields{
 		"id":     r.ID,
 		"bundle": r.Bundle,
@@ -385,21 +385,13 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Cleanup helper for network resources on failure
-	var networkCleanupDone bool
-	cleanupNetwork := func() {
-		if networkCleanupDone {
-			return
-		}
-		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
-		}
-		networkCleanupDone = true
-	}
+	// Cleanup network resources on any error
 	defer func() {
-		if !networkCleanupDone {
-			cleanupNetwork()
+		if retErr != nil {
+			env := &network.Environment{ID: r.ID}
+			if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
+				log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
+			}
 		}
 	}()
 
@@ -410,7 +402,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		vm.WithNetworkNamespace(netnsPath),
 	}
 	if err := vmi.Start(ctx, startOpts...); err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 	bootTime := time.Since(prestart)
@@ -420,7 +411,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Get VM client
 	vmc, err := s.vmLifecycle.Client()
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -428,14 +418,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	ns, _ := namespaces.Namespace(ctx)
 	eventCtx := namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 	if err := s.startEventForwarder(eventCtx, vmc); err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
 	// Dial TTRPC client
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
@@ -447,7 +435,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Create bundle in VM
 	bundleFiles, err := b.Files()
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -457,7 +444,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		Files: bundleFiles,
 	})
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -471,7 +457,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 
 	cio, ioShutdown, err := s.forwardIO(ctx, vmi, rio)
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -503,7 +488,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 				log.G(ctx).WithError(err).Error("failed to shutdown io after create failure")
 			}
 		}
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -531,9 +515,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		s.memoryHotplugControllers[r.ID] = memCtrl
 		s.controllerMu.Unlock()
 	}
-
-	// Mark network cleanup as done since we succeeded
-	networkCleanupDone = true
 
 	return &taskAPI.CreateTaskResponse{
 		Pid: resp.Pid,
