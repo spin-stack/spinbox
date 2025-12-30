@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,13 +54,13 @@ func TestLoadFrom_MissingFile(t *testing.T) {
 		t.Fatal("expected error for missing file, got nil")
 	}
 
-	if !os.IsNotExist(err) {
-		// Check that error message is helpful
-		errMsg := err.Error()
-		if errMsg == "" {
-			t.Error("expected helpful error message")
-		}
-		t.Logf("Error message: %s", errMsg)
+	// Check that error message mentions the file path
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "/nonexistent/path/config.json") {
+		t.Errorf("error should mention config file path, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "config file not found") {
+		t.Errorf("error should mention 'config file not found', got: %s", errMsg)
 	}
 }
 
