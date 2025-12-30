@@ -32,7 +32,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Check Task installation
+        id: check-task
+        run: |
+          if command -v task &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Task already installed: $(task --version)"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Task not found"
+          fi
+
       - name: Set up Task
+        if: steps.check-task.outputs.exists != 'true'
         uses: go-task/setup-task@v1
 
       - name: Setup BuildKit cache
@@ -80,7 +92,19 @@ jobs:
       - name: Build vminitd
         run: task build:vminitd
 
+      - name: Check golangci-lint installation
+        id: check-golangci-lint
+        run: |
+          if command -v golangci-lint &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "golangci-lint already installed: $(golangci-lint --version)"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "golangci-lint not found"
+          fi
+
       - name: Install golangci-lint
+        if: steps.check-golangci-lint.outputs.exists != 'true'
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -124,7 +148,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Check Task installation
+        id: check-task
+        run: |
+          if command -v task &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Task already installed: $(task --version)"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Task not found"
+          fi
+
       - name: Set up Task
+        if: steps.check-task.outputs.exists != 'true'
         uses: go-task/setup-task@v1
 
       - name: Setup BuildKit cache

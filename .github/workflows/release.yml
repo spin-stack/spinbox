@@ -40,7 +40,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Check Task installation
+        id: check-task
+        run: |
+          if command -v task &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Task already installed: $(task --version)"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Task not found"
+          fi
+
       - name: Set up Task
+        if: steps.check-task.outputs.exists != 'true'
         uses: go-task/setup-task@v1
 
       - name: Setup BuildKit cache
