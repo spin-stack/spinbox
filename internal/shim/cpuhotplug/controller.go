@@ -340,6 +340,10 @@ func (c *Controller) sampleCPU(ctx context.Context) (float64, float64, bool, err
 
 	elapsed := now.Sub(c.lastSampleTime)
 	if elapsed <= 0 {
+		log.G(ctx).WithFields(log.Fields{
+			"container_id": c.containerID,
+			"elapsed":      elapsed,
+		}).Warn("cpu-hotplug: time went backward, resetting CPU stats baseline")
 		c.lastSampleTime = now
 		c.lastUsageUsec = usageUsec
 		c.lastThrottledUsec = throttledUsec
@@ -347,6 +351,13 @@ func (c *Controller) sampleCPU(ctx context.Context) (float64, float64, bool, err
 	}
 
 	if usageUsec < c.lastUsageUsec || throttledUsec < c.lastThrottledUsec {
+		log.G(ctx).WithFields(log.Fields{
+			"container_id":         c.containerID,
+			"usage_usec":           usageUsec,
+			"last_usage_usec":      c.lastUsageUsec,
+			"throttled_usec":       throttledUsec,
+			"last_throttled_usec":  c.lastThrottledUsec,
+		}).Warn("cpu-hotplug: CPU usage counters decreased (possible counter overflow or stats bug), resetting baseline")
 		c.lastSampleTime = now
 		c.lastUsageUsec = usageUsec
 		c.lastThrottledUsec = throttledUsec
