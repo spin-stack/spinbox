@@ -98,12 +98,27 @@ func New(id string, runtime *runc.Runc, stdio stdio.Stdio, sm stream.Manager) *I
 // Create the process with the provided config
 func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 	var (
-		err     error
-		socket  *runc.Socket
-		pio     *processIO
-		pidFile = newPidFile(p.Bundle)
-		retErr  error
+		err              error
+		socket           *runc.Socket
+		pio              *processIO
+		pidFile          = newPidFile(p.Bundle)
+		retErr           error
+		containerCreated bool
 	)
+
+	// Clean up container if it was created but later steps fail
+	defer func() {
+		if retErr != nil && containerCreated {
+			// Container was created via runtime.Create() but something else failed.
+			// We need to delete the container to avoid leaking resources.
+			if err := p.runtime.Delete(context.Background(), r.ID, &runc.DeleteOpts{
+				Force: true,
+			}); err != nil {
+				log.G(ctx).WithError(err).WithField("container_id", r.ID).
+					Warn("failed to delete container during cleanup after partial create")
+			}
+		}
+	}()
 
 	if r.Terminal {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
@@ -143,6 +158,8 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		retErr = p.runtimeError(err, "OCI runtime create failed")
 		return retErr
 	}
+	// Mark container as created so defer cleanup can delete it if later steps fail
+	containerCreated = true
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
