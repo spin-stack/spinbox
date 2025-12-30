@@ -235,11 +235,10 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 	if err != nil {
 		return params, err
 	}
-	defer func() {
-		if err := origNS.Close(); err != nil {
-			log.L.WithError(err).Warn("failed to close original mount namespace handle")
-		}
-	}()
+	// Register close first - it will execute last (LIFO)
+	defer origNS.Close()
+
+	// Restore namespace before closing (executes first due to LIFO)
 	defer func() {
 		if restoreErr := unix.Setns(int(origNS.Fd()), unix.CLONE_NEWNS); restoreErr != nil && retErr == nil {
 			retErr = restoreErr
