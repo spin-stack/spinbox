@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/containerd/log"
+
 	"github.com/aledbf/qemubox/containerd/internal/config"
 )
 
@@ -14,7 +16,7 @@ func GetShareDir() string {
 	cfg, err := config.Get()
 	if err != nil {
 		// This should never happen as config is loaded at startup
-		// Return default as fallback
+		log.L.WithError(err).Error("Failed to get config for share_dir, using default /usr/share/qemubox")
 		return "/usr/share/qemubox"
 	}
 	return cfg.Paths.ShareDir
@@ -24,6 +26,7 @@ func GetShareDir() string {
 func GetStateDir() string {
 	cfg, err := config.Get()
 	if err != nil {
+		log.L.WithError(err).Error("Failed to get config for state_dir, using default /var/lib/qemubox")
 		return "/var/lib/qemubox"
 	}
 	return cfg.Paths.StateDir
@@ -33,6 +36,7 @@ func GetStateDir() string {
 func GetLogDir() string {
 	cfg, err := config.Get()
 	if err != nil {
+		log.L.WithError(err).Error("Failed to get config for log_dir, using default /var/log/qemubox")
 		return "/var/log/qemubox"
 	}
 	return cfg.Paths.LogDir
@@ -52,6 +56,7 @@ func InitrdPath() string {
 func QemuPath() string {
 	cfg, err := config.Get()
 	if err != nil {
+		log.L.WithError(err).Error("Failed to get config for qemu_path, using default /usr/bin/qemu-system-x86_64")
 		return "/usr/bin/qemu-system-x86_64"
 	}
 
@@ -68,6 +73,7 @@ func QemuPath() string {
 func QemuSharePath() string {
 	cfg, err := config.Get()
 	if err != nil {
+		log.L.WithError(err).Error("Failed to get config for qemu_share_path, using default /usr/share/qemu")
 		return "/usr/share/qemu"
 	}
 
