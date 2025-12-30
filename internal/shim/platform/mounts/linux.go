@@ -170,12 +170,10 @@ func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, 
 		mergedfsPath := filepath.Dir(mnt.Source) + "/merged_fs.vmdk"
 		if _, err := os.Stat(mergedfsPath); err != nil {
 			if !os.IsNotExist(err) {
-				log.G(ctx).WithError(err).Warnf("failed to stat %v", mergedfsPath)
-				return nil, nil, errdefs.ErrNotImplemented
+				return nil, nil, fmt.Errorf("failed to stat merged EROFS descriptor %s: %w", mergedfsPath, err)
 			}
 			if err := erofs.DumpVMDKDescriptorToFile(mergedfsPath, 0xfffffffe, devices); err != nil {
-				log.G(ctx).WithError(err).Warnf("failed to generate %v", mergedfsPath)
-				return nil, nil, errdefs.ErrNotImplemented
+				return nil, nil, fmt.Errorf("failed to generate merged EROFS descriptor %s: %w", mergedfsPath, err)
 			}
 		}
 		addDisks[0].source = mergedfsPath
