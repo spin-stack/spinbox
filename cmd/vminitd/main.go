@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -37,7 +38,7 @@ import (
 
 // loadConfig loads configuration from a JSON file and merges it with the provided config.
 // Command-line flags take precedence over file configuration.
-func loadConfig(path string, config *ServiceConfig) error {
+func loadConfig(path string, config *ServiceConfig, setFlags map[string]bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %w", err)
@@ -53,18 +54,18 @@ func loadConfig(path string, config *ServiceConfig) error {
 		return fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Restore flag values if they were set (non-zero/non-default)
+	// Restore flag values that were explicitly set by the user
 	// This ensures flags override config file
-	if flagDebug {
+	if setFlags["debug"] {
 		config.Debug = flagDebug
 	}
-	if flagRPCPort != 0 && flagRPCPort != 1025 {
+	if setFlags["vsock-rpc-port"] {
 		config.RPCPort = flagRPCPort
 	}
-	if flagStreamPort != 0 && flagStreamPort != 1026 {
+	if setFlags["vsock-stream-port"] {
 		config.StreamPort = flagStreamPort
 	}
-	if flagVSockContextID != 0 && flagVSockContextID != 3 {
+	if setFlags["vsock-cid"] {
 		config.VSockContextID = flagVSockContextID
 	}
 
@@ -72,8 +73,14 @@ func loadConfig(path string, config *ServiceConfig) error {
 }
 
 // applyPluginConfig applies configuration map to a plugin config struct.
-// This is a simple implementation that marshals the map to JSON and then
-// unmarshals it into the config struct, which handles type conversions.
+//
+// This uses JSON marshal/unmarshal as a type-safe conversion mechanism:
+// - Handles type conversions (string to int, etc.) via JSON codec
+// - Validates field types and values during unmarshal
+// - Works with any plugin config struct without reflection complexity
+// - Respects JSON tags for field mapping
+//
+// Trade-off: Slightly slower than direct assignment, but safer and more maintainable.
 func applyPluginConfig(pluginConfig any, configMap map[string]any) error {
 	if pluginConfig == nil {
 		return fmt.Errorf("plugin config is nil")
@@ -109,9 +116,15 @@ func main() {
 		log.L.WithError(err).Fatal("failed to parse flags")
 	}
 
+	// Track which flags were explicitly set by the user
+	setFlags := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		setFlags[f.Name] = true
+	})
+
 	// Load configuration file if provided
 	if configFile != "" {
-		if err := loadConfig(configFile, &config); err != nil {
+		if err := loadConfig(configFile, &config, setFlags); err != nil {
 			log.L.WithError(err).Fatalf("failed to load config from %s", configFile)
 		}
 	}
@@ -133,7 +146,9 @@ func main() {
 
 	defer func() {
 		if p := recover(); p != nil {
-			log.G(ctx).WithField("panic", p).Error("recovered from panic")
+			// For PID 1, we recover from panics to ensure clean VM shutdown
+			// Include stack trace for debugging
+			log.G(ctx).WithField("panic", p).WithField("stack", string(debug.Stack())).Error("recovered from panic")
 		}
 
 		// Trigger VM shutdown via reboot syscall
@@ -154,7 +169,7 @@ func run(ctx context.Context, config ServiceConfig) error {
 
 	ctx, config.Shutdown = shutdown.WithShutdown(ctx)
 
-	if err := systemInit(ctx, config); err != nil {
+	if err := systemInit(ctx); err != nil {
 		return err
 	}
 
@@ -169,10 +184,11 @@ func run(ctx context.Context, config ServiceConfig) error {
 
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
-	// Limit GOMAXPROCS to 2 for VM environment
-	// QEMU VMs typically have configurable vCPUs allocated
-	// This prevents scheduler overhead and improves cache locality
-	runtime.GOMAXPROCS(2)
+	// Limit GOMAXPROCS for VM environment to prevent scheduler overhead
+	// Cap at 2 to improve cache locality, but respect available CPUs
+	maxProcs := min(runtime.NumCPU(), 2)
+	runtime.GOMAXPROCS(maxProcs)
+	log.G(ctx).WithField("GOMAXPROCS", maxProcs).Debug("configured Go runtime")
 
 	serviceErr := make(chan error, 1)
 	go func() {
@@ -180,7 +196,7 @@ func run(ctx context.Context, config ServiceConfig) error {
 	}()
 
 	s := make(chan os.Signal, 1)
-	signal.Notify(s, unix.SIGKILL, unix.SIGINT, unix.SIGTERM, unix.SIGHUP, unix.SIGQUIT, unix.SIGCHLD)
+	signal.Notify(s, unix.SIGINT, unix.SIGTERM, unix.SIGHUP, unix.SIGQUIT, unix.SIGCHLD)
 	for {
 		select {
 		case <-config.Shutdown.Done():
@@ -206,7 +222,7 @@ func run(ctx context.Context, config ServiceConfig) error {
 				} else {
 					log.G(ctx).Debug("reaped child process")
 				}
-			case unix.SIGKILL, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT:
+			case unix.SIGINT, unix.SIGTERM, unix.SIGQUIT:
 				log.G(ctx).WithField("signal", sig).Info("received shutdown signal, triggering shutdown")
 				config.Shutdown.Shutdown()
 			default:
@@ -217,7 +233,7 @@ func run(ctx context.Context, config ServiceConfig) error {
 }
 
 // systemInit initializes the system
-func systemInit(ctx context.Context, _ ServiceConfig) error {
+func systemInit(ctx context.Context) error {
 	if err := systemMounts(); err != nil {
 		return err
 	}
@@ -244,6 +260,44 @@ func systemInit(ctx context.Context, _ ServiceConfig) error {
 	return nil
 }
 
+// findVirtioBlockDevices finds virtio block devices in /sys/block
+func findVirtioBlockDevices() ([]string, error) {
+	entries, err := os.ReadDir("/sys/block")
+	if err != nil {
+		return nil, err
+	}
+
+	var devices []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "vd") {
+			devices = append(devices, entry.Name())
+		}
+	}
+	return devices, nil
+}
+
+// waitForDevNodes polls for device nodes to appear in /dev
+// Returns true if all device nodes are ready, false otherwise
+func waitForDevNodes(ctx context.Context, devices []string) bool {
+	for range 10 {
+		var devNodes []string
+		for _, dev := range devices {
+			devPath := "/dev/" + dev
+			if _, err := os.Stat(devPath); err == nil {
+				devNodes = append(devNodes, devPath)
+			}
+		}
+
+		if len(devNodes) == len(devices) {
+			log.G(ctx).WithField("dev_nodes", devNodes).Info("virtio block device nodes ready")
+			return true
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
 // waitForBlockDevices waits for virtio block devices to appear in /dev
 // The kernel needs time to probe PCI devices and create device nodes
 // This is a best-effort operation - if devices don't appear, we continue anyway
@@ -261,34 +315,14 @@ func waitForBlockDevices(ctx context.Context) {
 
 	for {
 		// Check /sys/block for all block devices
-		entries, err := os.ReadDir("/sys/block")
-		if err == nil {
-			var vdDevices []string
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), "vd") {
-					vdDevices = append(vdDevices, entry.Name())
-				}
-			}
+		vdDevices, err := findVirtioBlockDevices()
+		if err == nil && len(vdDevices) > 0 {
+			log.G(ctx).WithField("devices", vdDevices).Info("found virtio block devices in /sys/block")
 
-			if len(vdDevices) > 0 {
-				log.G(ctx).WithField("devices", vdDevices).Info("found virtio block devices in /sys/block")
-
-				// Wait for /dev nodes to appear
-				time.Sleep(100 * time.Millisecond)
-
-				// Verify /dev nodes exist
-				var devNodes []string
-				for _, dev := range vdDevices {
-					devPath := "/dev/" + dev
-					if _, err := os.Stat(devPath); err == nil {
-						devNodes = append(devNodes, devPath)
-					}
-				}
-
-				if len(devNodes) > 0 {
-					log.G(ctx).WithField("dev_nodes", devNodes).Info("virtio block device nodes ready")
-					return
-				}
+			// Poll for /dev nodes to appear
+			// udev may need time to create device nodes after kernel detection
+			if waitForDevNodes(ctx, vdDevices) {
+				return
 			}
 		}
 
@@ -369,8 +403,7 @@ func configureDNS(ctx context.Context) error {
 	// Parse ip= parameter
 	var nameservers []string
 	for _, param := range strings.Fields(cmdline) {
-		if strings.HasPrefix(param, "ip=") {
-			ipParam := strings.TrimPrefix(param, "ip=")
+		if ipParam, ok := strings.CutPrefix(param, "ip="); ok {
 			// Split by colons: client-ip:server-ip:gw-ip:netmask:hostname:device:autoconf:dns0-ip:dns1-ip
 			parts := strings.Split(ipParam, ":")
 
@@ -490,10 +523,7 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 				// Attempt to merge plugin config
 				// This uses reflection to set fields, assuming Config is a pointer to struct
 				if err := applyPluginConfig(reg.Config, pluginCfg); err != nil {
-					log.G(ctx).WithFields(log.Fields{
-						"plugin_id": id,
-						"error":     err,
-					}).Warn("failed to apply plugin configuration")
+					return nil, fmt.Errorf("failed to apply plugin configuration for %s: %w", id, err)
 				}
 			}
 
