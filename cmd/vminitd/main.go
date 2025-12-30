@@ -238,6 +238,15 @@ func systemInit(ctx context.Context) error {
 		return err
 	}
 
+	// Configure CTRL+ALT+DELETE to send SIGINT to init instead of immediately rebooting
+	// This allows vminitd to catch the signal and perform a clean shutdown
+	// Default behavior (1) causes immediate kernel reboot without notifying init
+	if err := os.WriteFile("/proc/sys/kernel/ctrl-alt-del", []byte("0"), 0644); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to configure ctrl-alt-del behavior")
+	} else {
+		log.G(ctx).Debug("configured kernel to send SIGINT on CTRL+ALT+DELETE")
+	}
+
 	// Wait for virtio block devices to appear
 	// This is necessary because the kernel may not have probed all virtio devices yet
 	// Not fatal if devices don't appear - they might appear later or not be needed
@@ -402,7 +411,7 @@ func configureDNS(ctx context.Context) error {
 
 	// Parse ip= parameter
 	var nameservers []string
-	for _, param := range strings.Fields(cmdline) {
+	for param := range strings.FieldsSeq(cmdline) {
 		if ipParam, ok := strings.CutPrefix(param, "ip="); ok {
 			// Split by colons: client-ip:server-ip:gw-ip:netmask:hostname:device:autoconf:dns0-ip:dns1-ip
 			parts := strings.Split(ipParam, ":")
