@@ -22,7 +22,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check Go installation
+        id: check-go
+        run: |
+          if command -v go &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Go already installed: $(go version)"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Go not found"
+          fi
+
       - name: Set up Go
+        if: steps.check-go.outputs.exists != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -34,7 +46,19 @@ jobs:
       - name: Setup BuildKit cache
         run: task setup:cache
 
+      - name: Check Docker Buildx
+        id: check-buildx
+        run: |
+          if command -v docker &> /dev/null && docker buildx version &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Docker Buildx already available: $(docker buildx version)"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Docker Buildx not found"
+          fi
+
       - name: Set up Docker Buildx
+        if: steps.check-buildx.outputs.exists != 'true'
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
