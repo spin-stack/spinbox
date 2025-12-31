@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/containerd/log"
 
@@ -128,11 +129,13 @@ func (nm *cniNetworkManager) performCNISetup(ctx context.Context, containerID st
 			log.G(ctx).WithError(err).WithField("containerID", containerID).
 				Warn("CNI setup failed due to veth conflict, attempting cleanup")
 
-			// Try to clean up orphaned resources
-			cleanupNetns, cleanupErr := cni.CreateNetNS(containerID)
+			// Try to clean up orphaned resources using a unique temp netns name
+			// to avoid racing with other processes that might be using the same containerID.
+			cleanupID := fmt.Sprintf("%s-cleanup-%d", containerID, time.Now().UnixNano())
+			cleanupNetns, cleanupErr := cni.CreateNetNS(cleanupID)
 			if cleanupErr == nil {
 				_ = nm.cniManager.Teardown(ctx, containerID, cleanupNetns)
-				_ = cni.DeleteNetNS(containerID)
+				_ = cni.DeleteNetNS(cleanupID)
 			}
 
 			return nil, fmt.Errorf("setup CNI network (veth conflict - orphaned resources from previous run?): %w", err)
