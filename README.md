@@ -171,6 +171,102 @@ graph LR
 5. **crun** starts the container process with resource limits
 6. Container I/O flows through vsock to containerd
 
+### Container Lifecycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    %% Group host-side actors in a blue box
+    box Host (Linux)
+        participant C as containerd
+        participant S as containerd-shim
+        participant N as CNI Plugins
+        participant Q as QEMU/KVM
+    end
+
+    %% Group VM-side actors in a green box
+    box VM (Guest Linux)
+        participant V as vminitd (PID 1)
+        participant R as crun
+    end
+
+    %% --- Create Phase ---
+    rect rgb(220,240,255)
+    note over C,R: Create Phase
+    activate C
+    C->>+S: CreateTask(bundle, rootfs)
+    activate S
+    S->>S: Check KVM<br/>Load OCI spec<br/>Prepare VM
+    S->>S: Setup EROFS mounts
+    S->>N: Setup network (CNI)
+    N-->>S: Return TAP device + IP config
+    S->>Q: Start VM<br/>(kernel, initrd, virtio-devs)
+    deactivate S
+    activate Q
+    Q-->>V: Boot kernel<br/>start vminitd (PID 1)
+    deactivate Q
+    activate V
+    V-->>S: Connect via vsock
+    S->>V: Send bundle (OCI, rootfs)
+    S->>V: CreateTask
+    V->>R: OCI create container
+    activate R
+    R-->>V: Container created
+    deactivate R
+    V-->>S: Return PID
+    S-->>C: Return PID
+    deactivate C
+    deactivate S
+    deactivate V
+    end
+    
+    %% --- Start Phase ---
+    rect rgb(224,255,224)
+    note over C,R: Start Phase
+    activate C
+    C->>S: Start
+    activate S
+    S->>V: Start
+    activate V
+    V->>R: Start container
+    activate R
+    R-->>V: Running
+    deactivate R
+    V-->>S: PID
+    S-->>C: PID
+    deactivate C
+    deactivate S
+    deactivate V
+    end
+
+    %% --- Delete Phase ---
+    rect rgb(255,228,216)
+    note over C,R: Delete Phase
+    activate C
+    C->>S: Delete
+    activate S
+    S->>V: Delete
+    activate V
+    V->>R: Delete container
+    activate R
+    R-->>V: Deleted
+    deactivate R
+    V-->>S: Exit status
+    deactivate V
+    S->>S: Stop hotplug controllers
+    S->>Q: Shutdown VM
+    activate Q
+    Q-->>S: VM exited
+    deactivate Q
+    S->>N: Release network
+    N-->>S: Network cleaned
+    S-->>C: Exit status
+    deactivate C
+    deactivate S
+    end
+```
+
 ## Security
 
 Multiple isolation layers:
