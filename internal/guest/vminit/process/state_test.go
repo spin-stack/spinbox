@@ -556,22 +556,28 @@ func TestStateTransitionStatusCheck(t *testing.T) {
 	proc.initState = &runningState{p: proc}
 
 	// Status should be callable concurrently
-	done := make(chan bool, 10)
+	// Collect errors instead of calling t.Errorf from goroutines (not goroutine-safe)
+	type result struct {
+		status string
+		err    error
+	}
+	results := make(chan result, 10)
+
 	for range 10 {
 		go func() {
 			status, err := proc.initState.Status(context.Background())
-			if err != nil {
-				t.Errorf("Status() error: %v", err)
-			}
-			if status != stateRunning {
-				t.Errorf("Expected running, got %s", status)
-			}
-			done <- true
+			results <- result{status: status, err: err}
 		}()
 	}
 
-	// Wait for all goroutines
+	// Wait for all goroutines and check results
 	for range 10 {
-		<-done
+		r := <-results
+		if r.err != nil {
+			t.Errorf("Status() error: %v", r.err)
+		}
+		if r.status != stateRunning {
+			t.Errorf("Expected running, got %s", r.status)
+		}
 	}
 }
