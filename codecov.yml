@@ -35,3 +35,7 @@ ignore:
   - "cmd/**/*"
   # Ignore integration tests
   - "integration/**/*"
+  # Ignore platform-specific stubs (darwin)
+  - "**/*_darwin.go"
+  # Ignore API service protobuf files
+  - "api/services/**/*"
