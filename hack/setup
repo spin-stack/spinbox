@@ -10,11 +10,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 echo "Installing development tools..."
 
 echo "  Installing Go protobuf tools..."
-bash "${ROOT_DIR}/script/install-proto-tools"
+bash "${ROOT_DIR}/hack/install-proto-tools"
 echo "    Go protobuf tools installed"
 
 echo "  Installing protoc compiler and includes..."
-bash "${ROOT_DIR}/script/install-protobuf"
+bash "${ROOT_DIR}/hack/install-protobuf"
 echo "    protoc compiler installed to bin/protoc"
 echo "    protobuf includes installed to bin/include"
 

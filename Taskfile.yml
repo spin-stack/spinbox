@@ -33,7 +33,7 @@ vars:
     sh: uname -s
   OUTPUT_DIR: _output
   BIN_DIR: bin
-  SCRIPTS_DIR: script
+  SCRIPTS_DIR: hack
   BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/qemubox-buildkit-cache"}}'
   BUILDKIT_CACHE_KERNEL: '{{.BUILDKIT_CACHE_DIR}}/kernel'
   BUILDKIT_CACHE_INITRD: '{{.BUILDKIT_CACHE_DIR}}/initrd'
@@ -229,7 +229,7 @@ tasks:
         echo ""
       - |
         {{.DOCKER}} run --rm -it \
-          -v ./kernel:/config \
+          -v ./build/kernel:/config \
           -w /usr/src/linux \
           -e KCONFIG_CONFIG=/config/config-${KERNEL_VERSION}-${KERNEL_ARCH} \
           -e TERM=${TERM:-xterm-256color} \
@@ -259,7 +259,7 @@ tasks:
     desc: Build release tarball and run containerd integration test
     vars:
       VERSION: '{{.VERSION | default "ci"}}'
-      INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "docker.io/aledbf/beacon-workspace:test"}}'
+      INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "ghcr.io/aledbf/qemubox/sandbox:latest"}}'
       INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.qemubox.v1"}}'
       INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "erofs"}}'
     cmds:
@@ -641,8 +641,9 @@ tasks:
         {{.DOCKER}} build --platform linux/amd64 \
           --label "org.opencontainers.image.version={{.VERSION}}" \
           --label "org.opencontainers.image.source=https://github.com/{{.GITHUB_REPOSITORY}}" \
+          --label "org.opencontainers.image.description=Sandbox image for qemubox" \
           -t {{.IMAGE}}:{{.VERSION}} \
-          assets/system-image
+          images/sandbox
       - |
         set -eou pipefail
         echo "Tagging {{.IMAGE}}:{{.VERSION}} as latest"

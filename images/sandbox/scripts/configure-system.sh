@@ -8,8 +8,6 @@ echo "Configuring system settings..."
 # -------------------------------------------------
 echo "Creating system directories..."
 mkdir -p \
-    /etc/beacon \
-    /workspace \
     /run/sshd \
     /root/.ssh
 
@@ -37,14 +35,6 @@ EOF
 # 5. Set root password
 # -------------------------------------------------
 echo "Setting root password..."
-echo 'root:beacon' | chpasswd
-
-# -------------------------------------------------
-# 6. Set workspace environment
-# -------------------------------------------------
-echo "Setting workspace environment variables..."
-cat <<'EOF' >> /etc/environment
-BEACON_WORKSPACE_DIR=/workspace
-EOF
+echo 'root:qemubox' | chpasswd
 
 echo "✅ System configuration complete"

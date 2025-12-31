@@ -165,14 +165,19 @@ internal/      - Implementation
   guest/       - vminitd and guest services
   config/      - Configuration management
 api/           - Protobuf/TTRPC definitions
-release/       - Installation scripts and configs
+build/         - Build inputs (kernel config)
+deploy/        - Installation scripts and configs
+examples/      - Example configurations
+hack/          - Development scripts
+images/        - Container/VM image builds
 ```
 
 ## Documentation
 
 - [`CLAUDE.md`](CLAUDE.md) - Architecture and development guide
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) - Configuration reference
-- [`release/config/`](release/config/) - Example configurations
+- [`deploy/config/`](deploy/config/) - Production configurations
+- [`examples/`](examples/) - Example configurations (config.json, CNI)
 
 ## Comparison
 

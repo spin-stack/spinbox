@@ -80,7 +80,7 @@ if [ "${missing_qemu_firmware}" -ne 0 ]; then
 fi
 
 echo "Copying configuration files..."
-cp -r release/config/* "${RELEASE_DIR}/usr/share/qemubox/config/"
+cp -r deploy/config/* "${RELEASE_DIR}/usr/share/qemubox/config/"
 echo "  ok: config files (containerd, cni)"
 
 echo "Copying qemubox config example..."
@@ -90,12 +90,12 @@ echo "  ok: qemubox config.json example"
 
 echo "Copying systemd services..."
 mkdir -p "${RELEASE_DIR}/usr/share/qemubox/systemd"
-cp release/systemd/*.service "${RELEASE_DIR}/usr/share/qemubox/systemd/"
+cp deploy/systemd/*.service "${RELEASE_DIR}/usr/share/qemubox/systemd/"
 echo "  ok: systemd services"
 
 echo "Copying install scripts..."
-cp release/install.sh "${RELEASE_DIR}/"
-cp release/uninstall.sh "${RELEASE_DIR}/"
+cp deploy/install.sh "${RELEASE_DIR}/"
+cp deploy/uninstall.sh "${RELEASE_DIR}/"
 chmod +x "${RELEASE_DIR}/install.sh"
 chmod +x "${RELEASE_DIR}/uninstall.sh"
 echo "  ok: install/uninstall scripts"

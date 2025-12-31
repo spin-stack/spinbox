@@ -90,7 +90,7 @@ type testConfig struct {
 func loadTestConfig() testConfig {
 	return testConfig{
 		Socket:      getenvDefault("QEMUBOX_CONTAINERD_SOCKET", "/var/run/qemubox/containerd.sock"),
-		Image:       getenvDefault("QEMUBOX_IMAGE", "docker.io/aledbf/beacon-workspace:test"),
+		Image:       getenvDefault("QEMUBOX_IMAGE", "ghcr.io/aledbf/qemubox/sandbox:latest"),
 		Runtime:     getenvDefault("QEMUBOX_RUNTIME", "io.containerd.qemubox.v1"),
 		Snapshotter: getenvDefault("QEMUBOX_SNAPSHOTTER", "erofs"),
 		Namespace:   getenvDefault("QEMUBOX_NAMESPACE", namespaces.Default),

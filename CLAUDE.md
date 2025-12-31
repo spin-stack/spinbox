@@ -494,7 +494,7 @@ go build -o /opt/cni/bin/tc-redirect-tap
 }
 ```
 
-See `assets/examples/cni/` for more configuration examples.
+See `examples/cni/` for more configuration examples.
 
 ### IP Allocation and State
 

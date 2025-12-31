@@ -60,7 +60,7 @@ RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/va
     mv linux-${KERNEL_VERSION} linux
 
 # Copy kernel config from repository
-COPY assets/kernel/config-6.18-x86_64 /usr/src/linux/.config
+COPY build/kernel/config-6.18-x86_64 /usr/src/linux/.config
 
 RUN <<EOT
     set -e
@@ -86,7 +86,7 @@ RUN <<EOT
     echo "Verifying kernel config for Docker support..."
     /usr/local/bin/check-docker-config.sh /usr/src/linux/.config || (echo "Kernel config verification failed!" ; exit 1)
 
-    echo "Using kernel config from assets/kernel/config-6.18-x86_64"
+    echo "Using kernel config from build/kernel/config-6.18-x86_64"
 EOT
 
 # Compile the kernel (separate from base to allow config construction from fragments in the future)
