@@ -4,6 +4,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -77,8 +78,12 @@ func (e *execProcess) SetExited(status int) {
 func (e *execProcess) setExited(status int) {
 	e.status = status
 	e.exited = time.Now()
-	_ = e.parent.Platform.ShutdownConsole(context.Background(), e.console)
-	close(e.waitBlock)
+	if e.parent != nil && e.parent.Platform != nil {
+		_ = e.parent.Platform.ShutdownConsole(context.Background(), e.console)
+	}
+	if e.waitBlock != nil {
+		close(e.waitBlock)
+	}
 }
 
 func (e *execProcess) Delete(ctx context.Context) error {
@@ -154,6 +159,10 @@ func (e *execProcess) Start(ctx context.Context) error {
 }
 
 func (e *execProcess) start(ctx context.Context) error {
+	if e.parent == nil || e.parent.runtime == nil {
+		return errors.New("parent process or runtime not initialized")
+	}
+
 	// The reaper may receive exit signal right after
 	// the container is started, before the e.pid is updated.
 	// In that case, we want to block the signal handler to

@@ -193,6 +193,15 @@ func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest
 func (s *systemService) OfflineMemory(ctx context.Context, req *api.OfflineMemoryRequest) (*emptypb.Empty, error) {
 	memoryID := req.GetMemoryID()
 
+	// First, verify the memory block exists
+	path := fmt.Sprintf("/sys/devices/system/memory/memory%d/online", memoryID)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "memory block %d not present", memoryID)
+		}
+		return nil, errgrpc.ToGRPC(err)
+	}
+
 	// Check if auto_online is enabled (if so, can't offline)
 	if autoOnline, err := readSysfsValue("/sys/devices/system/memory/auto_online_blocks"); err == nil {
 		if autoOnline == "online" {
@@ -200,14 +209,6 @@ func (s *systemService) OfflineMemory(ctx context.Context, req *api.OfflineMemor
 				Debug("memory auto-online enabled, cannot offline blocks")
 			return &emptypb.Empty{}, nil // Non-fatal
 		}
-	}
-
-	path := fmt.Sprintf("/sys/devices/system/memory/memory%d/online", memoryID)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "memory block %d not present", memoryID)
-		}
-		return nil, errgrpc.ToGRPC(err)
 	}
 
 	// Check if already offline
