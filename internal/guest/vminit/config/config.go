@@ -64,10 +64,18 @@ func LoadFromFile(path string, config *ServiceConfig, setFlags map[string]bool) 
 // ApplyPluginConfig applies configuration map to a plugin config struct.
 //
 // This uses JSON marshal/unmarshal as a type-safe conversion mechanism:
-// - Handles type conversions (string to int, etc.) via JSON codec
-// - Validates field types and values during unmarshal
-// - Works with any plugin config struct without reflection complexity
-// - Respects JSON tags for field mapping
+//   - Handles type conversions (string to int, etc.) via JSON codec
+//   - Validates field types and values during unmarshal
+//   - Works with any plugin config struct without reflection complexity
+//   - Respects JSON tags for field mapping
+//
+// Requirements:
+//   - pluginConfig must be a non-nil pointer to a struct
+//   - configMap keys should match JSON field names/tags in the struct
+//
+// Type mismatch behavior: If a configMap value cannot be converted to the
+// target field type (e.g., "abc" to int), unmarshal will return an error
+// with details about the failed field.
 //
 // Trade-off: Slightly slower than direct assignment, but safer and more maintainable.
 func ApplyPluginConfig(pluginConfig any, configMap map[string]any) error {
@@ -75,15 +83,21 @@ func ApplyPluginConfig(pluginConfig any, configMap map[string]any) error {
 		return fmt.Errorf("plugin config is nil")
 	}
 
+	// Empty config map is valid - just a no-op
+	if len(configMap) == 0 {
+		return nil
+	}
+
 	// Marshal the config map to JSON
 	data, err := json.Marshal(configMap)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config map: %w", err)
+		return fmt.Errorf("failed to marshal config map to JSON: %w", err)
 	}
 
 	// Unmarshal into the plugin config struct
+	// Note: json.Unmarshal returns a detailed error if types don't match
 	if err := json.Unmarshal(data, pluginConfig); err != nil {
-		return fmt.Errorf("failed to unmarshal into plugin config: %w", err)
+		return fmt.Errorf("failed to apply config to plugin (check field types): %w", err)
 	}
 
 	return nil
