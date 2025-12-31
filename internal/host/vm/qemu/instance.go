@@ -27,6 +27,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 
+	"github.com/aledbf/qemubox/containerd/internal/config"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/paths"
 )
@@ -40,7 +41,12 @@ const (
 
 // findQemu returns the path to the qemu-system-x86_64 binary
 func findQemu() (string, error) {
-	path := paths.QemuPath()
+	cfg, err := config.Get()
+	if err != nil {
+		return "", fmt.Errorf("failed to get config: %w", err)
+	}
+
+	path := paths.QemuPath(cfg.Paths)
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
@@ -49,7 +55,12 @@ func findQemu() (string, error) {
 
 // findKernel returns the path to the kernel binary for QEMU
 func findKernel() (string, error) {
-	path := paths.KernelPath()
+	cfg, err := config.Get()
+	if err != nil {
+		return "", fmt.Errorf("failed to get config: %w", err)
+	}
+
+	path := paths.KernelPath(cfg.Paths)
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
@@ -58,7 +69,12 @@ func findKernel() (string, error) {
 
 // findInitrd returns the path to the initrd for QEMU
 func findInitrd() (string, error) {
-	path := paths.InitrdPath()
+	cfg, err := config.Get()
+	if err != nil {
+		return "", fmt.Errorf("failed to get config: %w", err)
+	}
+
+	path := paths.InitrdPath(cfg.Paths)
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
@@ -730,6 +746,11 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 
 // buildQemuCommandLine constructs the QEMU command line arguments
 func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
+	cfg, err := config.Get()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get config: %w", err)
+	}
+
 	// Convert memory from bytes to MB
 	memoryMB := q.resourceCfg.MemorySize / (1024 * 1024)
 	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
@@ -742,7 +763,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 
 	args := []string{
 		// BIOS/firmware path
-		"-L", paths.QemuSharePath(),
+		"-L", paths.QemuSharePath(cfg.Paths),
 
 		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off,acpi=on", // Optimize: use kernel IRQ chip, disable HPET
 		"-cpu", "host,migratable=on",
