@@ -752,8 +752,8 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 	}
 
 	// Convert memory from bytes to MB
-	memoryMB := q.resourceCfg.MemorySize / (1024 * 1024)
-	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
+	memoryMB := int(q.resourceCfg.MemorySize / (1024 * 1024))
+	memoryMaxMB := int(q.resourceCfg.MemoryHotplugSize / (1024 * 1024))
 
 	// Calculate memory hotplug slots needed
 	memorySlots := defaultMemorySlots
@@ -761,62 +761,36 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 		memorySlots = 0 // No hotplug needed if max equals initial
 	}
 
-	args := []string{
-		// BIOS/firmware path
-		"-L", paths.QemuSharePath(cfg.Paths),
-
-		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off,acpi=on", // Optimize: use kernel IRQ chip, disable HPET
-		"-cpu", "host,migratable=on",
-
+	// Build QEMU command using fluent builder pattern
+	builder := newQemuCommandBuilder().
+		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
+		// Optimize: use kernel IRQ chip, disable HPET
+		setMachine("q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
+		setCPU("host", "migratable=on").
 		// CPU configuration for hotplug:
 		// Simple topology: just specify initial CPUs and max CPUs, let QEMU handle the rest
 		// This creates a single socket with enough capacity for maxcpus
-		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
-	}
-
-	// Memory configuration - optimize slots based on hotplug needs
-	if memorySlots > 0 {
-		args = append(args, "-m", fmt.Sprintf("%d,slots=%d,maxmem=%dM", memoryMB, memorySlots, memoryMaxMB))
-	} else {
-		args = append(args, "-m", fmt.Sprintf("%d", memoryMB))
-	}
-
-	args = append(args,
-		"-kernel", q.kernelPath,
-		"-initrd", q.initrdPath,
-		"-append", cmdlineArgs,
-		"-nographic",
+		setSMP(q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs).
+		// Memory configuration - optimize slots based on hotplug needs
+		setMemory(memoryMB, memorySlots, memoryMaxMB).
+		setKernel(q.kernelPath).
+		setInitrd(q.initrdPath).
+		setKernelArgs(cmdlineArgs).
+		setNoGraphic().
 		// Serial console → FIFO pipe (producer side)
 		// QEMU writes VM console output here; background goroutine reads and streams to log file
 		// See setupConsoleFIFO() for the producer-consumer pipeline details
-		"-serial", fmt.Sprintf("file:%s", q.consoleFifoPath),
-
+		setSerial(fmt.Sprintf("file:%s", q.consoleFifoPath)).
 		// Vsock for guest communication (using vhost-vsock kernel module)
-		"-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", vsockCID),
-
+		addVsockDevice(vsockCID).
 		// QMP for VM control
-		"-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", q.qmpSocketPath),
-
+		setQMPUnixSocket(q.qmpSocketPath).
 		// RNG device for entropy
-		"-device", "virtio-rng-pci",
-	)
+		addVirtioRNG()
 
 	// Add disks
 	for i, disk := range q.disks {
-		// Detect format based on file extension
-		format := "raw"
-		if strings.HasSuffix(disk.Path, ".vmdk") {
-			format = "vmdk"
-		} else if strings.HasSuffix(disk.Path, ".qcow2") {
-			format = "qcow2"
-		}
-
-		driveArgs := fmt.Sprintf("file=%s,if=none,id=blk%d,format=%s", disk.Path, i, format)
-		if disk.Readonly {
-			driveArgs += ",readonly=on"
-		}
-		args = append(args, "-drive", driveArgs)
-		args = append(args, "-device", fmt.Sprintf("virtio-blk-pci,drive=blk%d", i))
+		builder.addDisk(fmt.Sprintf("blk%d", i), disk)
 	}
 
 	// Add NICs
@@ -829,16 +803,13 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 			return nil, fmt.Errorf("internal error: NIC %s has no TAP file descriptor (openTapFiles not called?)", nic.TapName)
 		}
 		fd := 3 + i
-		// Note: script= and downscript= are invalid with fd=
-		// When using fd=, QEMU expects the TAP to be already configured
-		args = append(args,
-			"-netdev", fmt.Sprintf("tap,id=net%d,fd=%d", i, fd),
-			// Disable option ROM loading (e.g., efi-virtio.rom) to avoid firmware dependency.
-			"-device", fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s,romfile=", i, nic.MAC),
-		)
+		builder.addNIC(fmt.Sprintf("net%d", i), NICConfig{
+			TapFD: fd,
+			MAC:   nic.MAC,
+		})
 	}
 
-	return args, nil
+	return builder.build(), nil
 }
 
 // Client returns the long-lived TTRPC client for communicating with the guest.
