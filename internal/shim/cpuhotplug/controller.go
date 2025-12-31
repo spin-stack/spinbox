@@ -501,7 +501,7 @@ func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
 		added++
 	}
 
-	c.currentCPUs = c.currentCPUs + added
+	c.currentCPUs += added
 	c.lastScaleUp = time.Now()
 	c.consecutiveHighUsage = 0
 
@@ -571,7 +571,7 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) error {
 		removed++
 	}
 
-	c.currentCPUs = c.currentCPUs - removed
+	c.currentCPUs -= removed
 	c.lastScaleDown = time.Now()
 	c.consecutiveLowUsage = 0
 	return nil

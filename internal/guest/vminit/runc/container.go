@@ -28,7 +28,7 @@ const defaultRuntimePath = "/sbin/crun"
 
 // runtimePathOnce ensures getRuntimePath() only runs filesystem checks once.
 var (
-	runtimePathOnce   sync.Once
+	runtimePathOnce     sync.Once
 	resolvedRuntimePath string
 )
 

@@ -499,7 +499,7 @@ func TestBuilderChaining(t *testing.T) {
 
 	for key, value := range expectedPairs {
 		found := false
-		for i := 0; i < len(args)-1; i++ {
+		for i := range len(args) - 1 {
 			if args[i] == key && args[i+1] == value {
 				found = true
 				break
