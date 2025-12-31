@@ -92,11 +92,13 @@ func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 	spec.Linux.MaskedPaths = nil
 	spec.Linux.Seccomp = nil
 
-	// Replace /dev tmpfs with bind mount from VM's /dev
+	// Replace /dev with bind mount from VM's /dev
 	// This gives access to all devices (fuse, tun, etc.) automatically
+	// Also skip /dev/* mounts since they're included in the bind mount
 	var newMounts []specs.Mount
 	for _, m := range spec.Mounts {
-		if m.Destination == "/dev" {
+		switch m.Destination {
+		case "/dev":
 			// Replace tmpfs with bind mount
 			newMounts = append(newMounts, specs.Mount{
 				Destination: "/dev",
@@ -104,7 +106,9 @@ func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 				Source:      "/dev",
 				Options:     []string{"rbind", "rw"},
 			})
-		} else {
+		case "/dev/pts", "/dev/shm", "/dev/mqueue":
+			// Skip - already in VM's /dev via bind mount
+		default:
 			newMounts = append(newMounts, m)
 		}
 	}
