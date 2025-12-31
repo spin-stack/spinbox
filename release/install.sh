@@ -23,7 +23,7 @@ print_usage() {
     echo ""
     echo "Modes:"
     echo "  Full install (default):"
-    echo "    Installs everything: containerd, runc, nerdctl, buildkit, CNI plugins,"
+    echo "    Installs everything: containerd, runc, nerdctl, CNI plugins,"
     echo "    qemubox shim, kernel, QEMU, and systemd services."
     echo ""
     echo "  Shim-only install (--shim-only):"
@@ -509,9 +509,8 @@ if [ "$SHIM_ONLY" = false ]; then
 
     echo "  → Creating symlinks in /etc/systemd/system..."
     ln -sf /usr/share/qemubox/systemd/qemubox-containerd.service /etc/systemd/system/qemubox-containerd.service
-    ln -sf /usr/share/qemubox/systemd/qemubox-buildkit.service /etc/systemd/system/qemubox-buildkit.service
     systemctl daemon-reload
-    echo -e "    ${GREEN}✓${NC} Systemd services installed and linked"
+    echo -e "    ${GREEN}✓${NC} Systemd service installed and linked"
 else
     echo -e "  ${YELLOW}→${NC} Skipping systemd services (shim-only mode uses existing containerd)"
 fi
@@ -553,8 +552,6 @@ else
     check_file "/usr/share/qemubox/bin/ctr"
     check_file "/usr/share/qemubox/bin/runc"
     check_file "/usr/share/qemubox/bin/nerdctl"
-    check_file "/usr/share/qemubox/bin/buildkitd"
-    check_file "/usr/share/qemubox/bin/buildctl"
     check_file "/usr/share/qemubox/bin/qemu-system-x86_64"
     check_file "/usr/share/qemubox/qemu/bios-256k.bin"
     check_file "/usr/share/qemubox/qemu/kvmvapic.bin"
@@ -562,14 +559,11 @@ else
     check_file "/usr/share/qemubox/kernel/qemubox-kernel-x86_64"
     check_file "/usr/share/qemubox/kernel/qemubox-initrd"
     check_file "/usr/share/qemubox/config/containerd/config.toml"
-    check_file "/usr/share/qemubox/config/buildkit/config.toml"
     check_file "/usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
     check_file "/usr/share/qemubox/config/qemubox/config.json"
     check_file "/etc/qemubox/config.json"
     check_file "/usr/share/qemubox/systemd/qemubox-containerd.service"
-    check_file "/usr/share/qemubox/systemd/qemubox-buildkit.service"
     check_file "/etc/systemd/system/qemubox-containerd.service"
-    check_file "/etc/systemd/system/qemubox-buildkit.service"
 
     # Check CNI plugins (full install only)
     CNI_PLUGINS=(bridge host-local loopback)
@@ -621,15 +615,10 @@ if [ $ERRORS -eq 0 ]; then
         echo "     systemctl enable qemubox-containerd"
         echo "     systemctl start qemubox-containerd"
         echo ""
-        echo "  3. (Optional) Enable and start buildkit:"
-        echo "     systemctl enable qemubox-buildkit"
-        echo "     systemctl start qemubox-buildkit"
-        echo ""
-        echo "  4. Check service status:"
+        echo "  3. Check service status:"
         echo "     systemctl status qemubox-containerd"
-        echo "     systemctl status qemubox-buildkit"
         echo ""
-        echo "  5. Add /usr/share/qemubox/bin to PATH:"
+        echo "  4. Add /usr/share/qemubox/bin to PATH:"
         echo "     export PATH=/usr/share/qemubox/bin:\$PATH"
         echo ""
     fi

@@ -49,18 +49,6 @@ if systemctl is-enabled --quiet qemubox-containerd 2>/dev/null; then
     echo -e "    ${GREEN}✓${NC} qemubox-containerd disabled"
 fi
 
-if systemctl is-active --quiet qemubox-buildkit; then
-    echo "  → Stopping qemubox-buildkit service..."
-    systemctl stop qemubox-buildkit
-    echo -e "    ${GREEN}✓${NC} qemubox-buildkit stopped"
-fi
-
-if systemctl is-enabled --quiet qemubox-buildkit 2>/dev/null; then
-    echo "  → Disabling qemubox-buildkit service..."
-    systemctl disable qemubox-buildkit
-    echo -e "    ${GREEN}✓${NC} qemubox-buildkit disabled"
-fi
-
 echo ""
 echo "🗑️  Removing files..."
 
@@ -69,12 +57,6 @@ if [ -L /etc/systemd/system/qemubox-containerd.service ]; then
     echo "  → Removing qemubox-containerd.service symlink..."
     rm -f /etc/systemd/system/qemubox-containerd.service
     echo -e "    ${GREEN}✓${NC} qemubox-containerd.service symlink removed"
-fi
-
-if [ -L /etc/systemd/system/qemubox-buildkit.service ]; then
-    echo "  → Removing qemubox-buildkit.service symlink..."
-    rm -f /etc/systemd/system/qemubox-buildkit.service
-    echo -e "    ${GREEN}✓${NC} qemubox-buildkit.service symlink removed"
 fi
 
 systemctl daemon-reload

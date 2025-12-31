@@ -81,7 +81,7 @@ fi
 
 echo "Copying configuration files..."
 cp -r release/config/* "${RELEASE_DIR}/usr/share/qemubox/config/"
-echo "  ok: config files (buildkit, containerd)"
+echo "  ok: config files (containerd, cni)"
 
 echo "Copying qemubox config example..."
 mkdir -p "${RELEASE_DIR}/usr/share/qemubox/config/qemubox"
@@ -117,9 +117,6 @@ tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" \
   bin/ctr \
   bin/runc
 echo "  ok: containerd, runc, ctr, nerdctl"
-
-tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" bin/buildkitd bin/buildctl
-echo "  ok: buildkit"
 
 mkdir -p "${RELEASE_DIR}/usr/share/qemubox/libexec/cni"
 tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/libexec/cni" --strip-components=2 \
