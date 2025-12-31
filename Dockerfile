@@ -211,16 +211,4 @@ COPY --from=initrd-build /build/qemubox-initrd /qemubox-initrd
 FROM scratch AS shim
 COPY --from=shim-build /build/containerd-shim-qemubox-v1 /containerd-shim-qemubox-v1
 
-# ============================================================================
-# Development Environment
-# ============================================================================
-
-FROM ${GOLANG_IMAGE} AS dev
-
-ENV PATH=/go/src/github.com/aledbf/qemubox/containerd/_output:$PATH
-WORKDIR /go/src/github.com/containerd/qemubox
-
-RUN --mount=type=cache,sharing=locked,id=dev-aptlib,target=/var/lib/apt \
-    --mount=type=cache,sharing=locked,id=dev-aptcache,target=/var/cache/apt \
-        apt-get update && apt-get install -y erofs-utils git make
 
