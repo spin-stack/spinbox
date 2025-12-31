@@ -80,7 +80,11 @@ func TestExitTracker_InitExitDelayed(t *testing.T) {
 
 	// Verify exec counter incremented
 	tracker.mu.Lock()
-	execCount := tracker.runningExecs[container]
+	state := tracker.containers[container]
+	execCount := 0
+	if state != nil {
+		execCount = state.runningExecs
+	}
 	tracker.mu.Unlock()
 
 	if execCount != 1 {
@@ -169,7 +173,7 @@ func TestExitTracker_SubscriptionCancellation(t *testing.T) {
 
 	// Verify subscription was cleaned up
 	tracker.mu.Lock()
-	numSubs := len(tracker.activeSubscriptions)
+	numSubs := len(tracker.subscriptions)
 	tracker.mu.Unlock()
 
 	if numSubs != 0 {
@@ -193,7 +197,8 @@ func TestExitTracker_Cleanup(t *testing.T) {
 	// Verify state exists
 	tracker.mu.Lock()
 	_, hasRunning := tracker.running[1234]
-	_, hasInitExit := tracker.initExits[container]
+	containerState := tracker.containers[container]
+	hasInitExit := containerState != nil && containerState.initExit != nil
 	tracker.mu.Unlock()
 
 	if hasRunning {
@@ -209,12 +214,10 @@ func TestExitTracker_Cleanup(t *testing.T) {
 	// Verify all state cleaned up
 	tracker.mu.Lock()
 	_, hasRunningAfter := tracker.running[1234]
-	_, hasInitExitAfter := tracker.initExits[container]
-	_, hasExecCount := tracker.runningExecs[container]
-	_, hasWaiter := tracker.execWaiters[container]
+	_, hasContainerState := tracker.containers[container]
 	tracker.mu.Unlock()
 
-	if hasRunningAfter || hasInitExitAfter || hasExecCount || hasWaiter {
+	if hasRunningAfter || hasContainerState {
 		t.Error("Cleanup did not remove all container state")
 	}
 }
@@ -284,7 +287,11 @@ func TestExitTracker_DecrementExecCount(t *testing.T) {
 	sub.HandleStart(container, execProc, 1235)
 
 	tracker.mu.Lock()
-	count := tracker.runningExecs[container]
+	state := tracker.containers[container]
+	count := 0
+	if state != nil {
+		count = state.runningExecs
+	}
 	tracker.mu.Unlock()
 
 	if count != 1 {
@@ -295,7 +302,11 @@ func TestExitTracker_DecrementExecCount(t *testing.T) {
 	tracker.DecrementExecCount(container)
 
 	tracker.mu.Lock()
-	countAfter := tracker.runningExecs[container]
+	stateAfter := tracker.containers[container]
+	countAfter := 0
+	if stateAfter != nil {
+		countAfter = stateAfter.runningExecs
+	}
 	tracker.mu.Unlock()
 
 	if countAfter != 0 {

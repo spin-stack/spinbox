@@ -12,91 +12,119 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
 )
 
-// exitTracker manages the complex lifecycle coordination between process starts and exits.
+// exitTracker manages process lifecycle coordination, specifically handling the race
+// between process start and exit events.
 //
-// The Problem:
-// Process exit events can arrive before Start() completes. We need to:
-// 1. Ensure every exit is matched to the right process
-// 2. Handle "early exits" (exit before Start() returns)
-// 3. Ensure init process exits are published AFTER all exec process exits
+// # Problem Statement
 //
-// The Solution:
-// - Use a subscription pattern: each Start registers interest in exits
-// - When an exit arrives, notify ALL active subscriptions (they'll check if it's theirs)
-// - Track running execs per container to delay init exit publication
+// Process exit events can arrive before Start() completes. We must:
+//  1. Handle "early exits" - exits that occur before Start() returns
+//  2. Match each exit to the correct process (PID reuse makes this tricky)
+//  3. Ensure init process exits are published AFTER all exec process exits
+//
+// # Solution Overview
+//
+// The tracker uses two coordination mechanisms:
+//
+// 1. Subscription Pattern (for early exits):
+//
+//	preStart() ──► Subscribe() ──► [process starts] ──► HandleStart()
+//	                   │                                     │
+//	                   └─── collects exits during window ────┘
+//
+// 2. Exec Counter Pattern (for init exit ordering):
+//
+//	exec starts ──► runningExecs++ ──► ... ──► exec exits ──► runningExecs--
+//	                                                                │
+//	init exits ──► wait if runningExecs > 0 ◄──────────────────────┘
+//
+// # State Diagram
+//
+//	┌─────────────────────────────────────────────────────────────────┐
+//	│                         exitTracker                             │
+//	├─────────────────────────────────────────────────────────────────┤
+//	│ subscriptions: map[subID] → collected exits (early exit window) │
+//	│ running:       map[PID]   → container processes                 │
+//	│ containers:    map[*Container] → containerExitState             │
+//	└─────────────────────────────────────────────────────────────────┘
 type exitTracker struct {
 	mu sync.Mutex
 
-	// Monotonic counter for subscription IDs
+	// nextSubID is a monotonic counter for subscription IDs
 	nextSubID uint64
 
-	// Active subscriptions waiting for process start to complete
-	// subscription ID -> exits collected while subscribed
-	activeSubscriptions map[uint64]map[int][]runcC.Exit
+	// subscriptions tracks active subscriptions waiting for process start.
+	// Each subscription collects exits that occur during the start window.
+	// Key: subscription ID, Value: map of PID to exits for that PID
+	subscriptions map[uint64]map[int][]runcC.Exit
 
-	// Running processes by PID
-	// pid -> list of container processes (usually 1, but PID reuse can cause >1)
+	// running tracks currently running processes by PID.
+	// Multiple processes may share a PID due to PID reuse.
 	running map[int][]containerProcess
 
-	// Running exec process count per container
-	// Used to delay init exit until all execs have exited
-	runningExecs map[*runc.Container]int
+	// containers tracks per-container exit coordination state.
+	// This consolidates exec counting and init exit stashing.
+	containers map[*runc.Container]*containerExitState
+}
 
-	// Channels waiting for exec count to reach 0
-	// Only used during init exit handling
-	execWaiters map[*runc.Container]chan struct{}
+// containerExitState holds per-container exit coordination state.
+type containerExitState struct {
+	// runningExecs is the number of exec processes currently running.
+	// Init exit is delayed until this reaches zero.
+	runningExecs int
 
-	// Stashed init exits waiting for exec count to reach 0
-	initExits map[*runc.Container]runcC.Exit
+	// execWaiter is signaled (closed) when runningExecs reaches zero.
+	// Created on-demand when init exits while execs are running.
+	execWaiter chan struct{}
+
+	// initExit holds the stashed init exit event, if the init has exited.
+	// Nil means init has not exited yet.
+	initExit *runcC.Exit
 }
 
 func newExitTracker() *exitTracker {
 	return &exitTracker{
-		activeSubscriptions: make(map[uint64]map[int][]runcC.Exit),
-		running:             make(map[int][]containerProcess),
-		runningExecs:        make(map[*runc.Container]int),
-		execWaiters:         make(map[*runc.Container]chan struct{}),
-		initExits:           make(map[*runc.Container]runcC.Exit),
+		subscriptions: make(map[uint64]map[int][]runcC.Exit),
+		running:       make(map[int][]containerProcess),
+		containers:    make(map[*runc.Container]*containerExitState),
 	}
 }
 
-// subscription represents an active wait for a process to start
+// getOrCreateState returns the exit state for a container, creating it if needed.
+// Caller must hold t.mu.
+func (t *exitTracker) getOrCreateState(c *runc.Container) *containerExitState {
+	state := t.containers[c]
+	if state == nil {
+		state = &containerExitState{}
+		t.containers[c] = state
+	}
+	return state
+}
+
+// subscription represents an active wait for a process to start.
+// It collects any exit events that occur during the start window.
 type subscription struct {
 	id      uint64
 	tracker *exitTracker
-	exits   map[int][]runcC.Exit
+	exits   map[int][]runcC.Exit // PID -> exits collected during start window
 }
 
 // Subscribe registers interest in process exits that occur before Start completes.
-// Returns a subscription that must be handled via HandleStart or Cancel.
+// Returns a subscription that must be completed via HandleStart or cancelled via Cancel.
 //
-// If restarting an existing container (c != nil), removes the init process from
-// the running map so early exits are properly detected.
+// If restarting an existing container (c != nil), removes its init process from
+// the running map so early exits during restart are properly detected.
 func (t *exitTracker) Subscribe(c *runc.Container) *subscription {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Allocate unique subscription ID
 	subID := atomic.AddUint64(&t.nextSubID, 1)
-
 	exits := make(map[int][]runcC.Exit)
-	t.activeSubscriptions[subID] = exits
+	t.subscriptions[subID] = exits
 
-	// If restarting a container, remove its init process from running map
-	// so that if it exits before Start completes, we treat it as an early exit
+	// When restarting, remove the old init process from running map
 	if c != nil {
-		pid := c.Pid()
-		var newRunning []containerProcess
-		for _, cp := range t.running[pid] {
-			if cp.Container != c {
-				newRunning = append(newRunning, cp)
-			}
-		}
-		if len(newRunning) > 0 {
-			t.running[pid] = newRunning
-		} else {
-			delete(t.running, pid)
-		}
+		t.removeProcessFromRunning(c.Pid(), c)
 	}
 
 	return &subscription{
@@ -106,28 +134,51 @@ func (t *exitTracker) Subscribe(c *runc.Container) *subscription {
 	}
 }
 
-// HandleStart processes the start of a process, checking for early exits.
-// Returns exits that occurred before Start completed (early exits).
+// removeProcessFromRunning removes processes for a container from the running map.
+// Caller must hold t.mu.
+func (t *exitTracker) removeProcessFromRunning(pid int, c *runc.Container) {
+	cps := t.running[pid]
+	if len(cps) == 0 {
+		return
+	}
+
+	// Filter out processes belonging to this container
+	remaining := cps[:0]
+	for _, cp := range cps {
+		if cp.Container != c {
+			remaining = append(remaining, cp)
+		}
+	}
+
+	if len(remaining) > 0 {
+		t.running[pid] = remaining
+	} else {
+		delete(t.running, pid)
+	}
+}
+
+// HandleStart completes the subscription, checking for early exits.
+//
+// Returns exits that occurred before Start completed. If non-empty, the process
+// exited before we could register it as running.
 //
 // If pid == 0, the process failed to start - returns any collected exits.
-// Otherwise, registers the process as running.
+// Otherwise, registers the process as running and tracks exec count.
 func (s *subscription) HandleStart(c *runc.Container, p process.Process, pid int) []runcC.Exit {
 	t := s.tracker
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Unsubscribe - we're done collecting exits
-	delete(t.activeSubscriptions, s.id)
+	// Complete subscription
+	delete(t.subscriptions, s.id)
 
-	// Check if process exited before we could record it as started
+	// Check for early exits
 	earlyExits := s.exits[pid]
-
 	if pid == 0 || len(earlyExits) > 0 {
-		// Process failed to start or already exited
 		return earlyExits
 	}
 
-	// Process started successfully - record it as running
+	// Register process as running
 	t.running[pid] = append(t.running[pid], containerProcess{
 		Container: c,
 		Process:   p,
@@ -135,20 +186,21 @@ func (s *subscription) HandleStart(c *runc.Container, p process.Process, pid int
 
 	// Track exec processes for init exit ordering
 	if _, isInit := p.(*process.Init); !isInit {
-		t.runningExecs[c]++
+		state := t.getOrCreateState(c)
+		state.runningExecs++
 	}
 
 	return nil
 }
 
-// Cancel cancels the subscription without handling a start.
+// Cancel cancels the subscription without completing a start.
 // Must be called if HandleStart is not called, to prevent memory leaks.
 func (s *subscription) Cancel() {
 	t := s.tracker
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	delete(t.activeSubscriptions, s.id)
+	delete(t.subscriptions, s.id)
 }
 
 // NotifyExit handles a process exit event.
@@ -157,19 +209,20 @@ func (t *exitTracker) NotifyExit(e runcC.Exit) []containerProcess {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Notify all active subscriptions (for processes that haven't started yet)
-	for _, exits := range t.activeSubscriptions {
+	// Notify all active subscriptions (for early exit detection)
+	for _, exits := range t.subscriptions {
 		exits[e.Pid] = append(exits[e.Pid], e)
 	}
 
-	// Find running processes that exited
+	// Find and remove running processes with this PID
 	cps := t.running[e.Pid]
 	delete(t.running, e.Pid)
 
-	// Track init exits separately (need to wait for execs)
+	// Stash init exits for later (need to wait for execs to complete)
 	for _, cp := range cps {
 		if _, isInit := cp.Process.(*process.Init); isInit {
-			t.initExits[cp.Container] = e
+			state := t.getOrCreateState(cp.Container)
+			state.initExit = &e
 		}
 	}
 
@@ -180,23 +233,21 @@ func (t *exitTracker) NotifyExit(e runcC.Exit) []containerProcess {
 // until all exec processes exit.
 //
 // Returns:
-// - true + nil channel: delay needed, no execs running yet (safe to publish immediately)
-// - true + non-nil channel: delay needed, wait on channel for signal
-// - false + nil channel: no delay needed
+//   - (false, nil): No delay needed, safe to publish init exit immediately
+//   - (true, chan): Delay needed, wait on channel for signal when execs complete
 func (t *exitTracker) ShouldDelayInitExit(c *runc.Container) (bool, <-chan struct{}) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	numExecs := t.runningExecs[c]
-	if numExecs == 0 {
+	state := t.containers[c]
+	if state == nil || state.runningExecs == 0 {
 		// No execs running, safe to publish immediately
-		delete(t.runningExecs, c)
 		return false, nil
 	}
 
-	// Execs still running - need to wait
+	// Execs still running - create waiter channel
 	waitChan := make(chan struct{})
-	t.execWaiters[c] = waitChan
+	state.execWaiter = waitChan
 
 	return true, waitChan
 }
@@ -207,29 +258,37 @@ func (t *exitTracker) NotifyExecExit(c *runc.Container) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.runningExecs[c]--
+	state := t.containers[c]
+	if state == nil {
+		return
+	}
 
-	if t.runningExecs[c] == 0 {
-		delete(t.runningExecs, c)
+	state.runningExecs--
+	if state.runningExecs > 0 {
+		return
+	}
 
-		// Signal init exit waiter if one exists
-		if waitChan, ok := t.execWaiters[c]; ok {
-			close(waitChan)
-			delete(t.execWaiters, c)
-		}
+	// All execs done - signal waiter if init is waiting
+	if state.execWaiter != nil {
+		close(state.execWaiter)
+		state.execWaiter = nil
 	}
 }
 
-// GetInitExit returns the stashed init exit for a container, if any.
+// GetInitExit returns and clears the stashed init exit for a container.
+// Returns (exit, true) if init has exited, (zero, false) otherwise.
 func (t *exitTracker) GetInitExit(c *runc.Container) (runcC.Exit, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	e, ok := t.initExits[c]
-	if ok {
-		delete(t.initExits, c)
+	state := t.containers[c]
+	if state == nil || state.initExit == nil {
+		return runcC.Exit{}, false
 	}
-	return e, ok
+
+	exit := *state.initExit
+	state.initExit = nil
+	return exit, true
 }
 
 // InitHasExited checks if the container's init process has exited.
@@ -237,8 +296,8 @@ func (t *exitTracker) InitHasExited(c *runc.Container) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	_, exited := t.initExits[c]
-	return exited
+	state := t.containers[c]
+	return state != nil && state.initExit != nil
 }
 
 // DecrementExecCount manually decrements the exec counter.
@@ -253,22 +312,33 @@ func (t *exitTracker) Cleanup(c *runc.Container) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	delete(t.initExits, c)
-	delete(t.runningExecs, c)
-	delete(t.execWaiters, c)
+	// Remove container state
+	delete(t.containers, c)
 
-	// Clean up any processes for this container from running map
-	for pid, cps := range t.running {
-		var remaining []containerProcess
-		for _, cp := range cps {
-			if cp.Container != c {
-				remaining = append(remaining, cp)
-			}
+	// Remove any running processes for this container
+	for pid := range t.running {
+		t.removeProcessFromRunningLocked(pid, c)
+	}
+}
+
+// removeProcessFromRunningLocked is like removeProcessFromRunning but assumes lock is held.
+// Caller must hold t.mu.
+func (t *exitTracker) removeProcessFromRunningLocked(pid int, c *runc.Container) {
+	cps := t.running[pid]
+	if len(cps) == 0 {
+		return
+	}
+
+	remaining := cps[:0]
+	for _, cp := range cps {
+		if cp.Container != c {
+			remaining = append(remaining, cp)
 		}
-		if len(remaining) > 0 {
-			t.running[pid] = remaining
-		} else {
-			delete(t.running, pid)
-		}
+	}
+
+	if len(remaining) > 0 {
+		t.running[pid] = remaining
+	} else {
+		delete(t.running, pid)
 	}
 }
