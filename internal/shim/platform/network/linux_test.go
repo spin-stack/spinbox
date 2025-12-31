@@ -27,11 +27,9 @@ func TestResolveHostDNSServers(t *testing.T) {
 
 	// Should return something (or nil if no valid DNS)
 	// We can't assert specific values since they depend on the host
-	if servers != nil {
-		for _, s := range servers {
-			// Each server should be a valid IPv4 address
-			assert.NotEmpty(t, s)
-		}
+	for _, s := range servers {
+		// Each server should be a valid IPv4 address
+		assert.NotEmpty(t, s)
 	}
 }
 
