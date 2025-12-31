@@ -96,6 +96,7 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 			MaxCPUs:           defaultMaxCPUs,
 			MemorySize:        defaultMemorySize,
 			MemoryHotplugSize: defaultMemoryMax,
+			MemorySlots:       defaultMemorySlots,
 		}
 	}
 
@@ -111,6 +112,9 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 	}
 	if resourceCfg.MemoryHotplugSize < resourceCfg.MemorySize {
 		resourceCfg.MemoryHotplugSize = resourceCfg.MemorySize
+	}
+	if resourceCfg.MemorySlots < 1 {
+		resourceCfg.MemorySlots = defaultMemorySlots
 	}
 
 	// Use dedicated log directory per container from config

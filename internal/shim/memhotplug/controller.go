@@ -13,10 +13,9 @@ import (
 )
 
 const (
-	// maxMemorySlots is the number of memory hotplug slots configured in QEMU.
-	// This must match the "-device pc-dimm,memdev=mem,id=dimm,slot=N" config
-	// and the vm.defaultMemorySlots value used when starting QEMU.
-	maxMemorySlots = 8
+	// defaultMemorySlots is the default number of memory hotplug slots.
+	// This should match the VMResourceConfig.MemorySlots value used when starting QEMU.
+	defaultMemorySlots = 8
 )
 
 // qmpMemoryClient defines the interface for QMP memory operations.
@@ -103,6 +102,11 @@ type Config struct {
 
 	// Enable/disable features
 	EnableScaleDown bool
+
+	// MaxSlots is the number of memory hotplug slots available.
+	// This must match the QEMU configuration (VMResourceConfig.MemorySlots).
+	// If zero, defaults to 8.
+	MaxSlots int
 }
 
 // DefaultConfig returns sensible defaults for memory hotplug
@@ -118,6 +122,7 @@ func DefaultConfig() Config {
 		ScaleUpStability:   3,                 // Need 3 consecutive high readings (30s)
 		ScaleDownStability: 6,                 // Need 6 consecutive low readings (60s)
 		EnableScaleDown:    false,             // Disabled by default (memory unplug is risky)
+		MaxSlots:           defaultMemorySlots,
 	}
 }
 
@@ -143,6 +148,11 @@ func NewController(
 	// Return no-op controller if hotplug is not needed
 	if maxMemory <= bootMemory {
 		return &noopMemoryController{}
+	}
+
+	// Apply default for MaxSlots if not set
+	if config.MaxSlots < 1 {
+		config.MaxSlots = defaultMemorySlots
 	}
 
 	// Create channels only when controller will actually run
@@ -465,9 +475,9 @@ func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
 	return nil
 }
 
-// findFreeSlot finds the first available memory slot (0-7)
+// findFreeSlot finds the first available memory slot
 func (c *Controller) findFreeSlot() int {
-	for i := range maxMemorySlots {
+	for i := range c.config.MaxSlots {
 		if !c.usedSlots[i] {
 			return i
 		}
@@ -477,7 +487,7 @@ func (c *Controller) findFreeSlot() int {
 
 // findUsedSlot finds a used memory slot (LIFO - last added first)
 func (c *Controller) findUsedSlot() int {
-	for i := maxMemorySlots - 1; i >= 0; i-- {
+	for i := c.config.MaxSlots - 1; i >= 0; i-- {
 		if c.usedSlots[i] {
 			return i
 		}

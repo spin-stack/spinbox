@@ -34,6 +34,7 @@ type VMResourceConfig struct {
 	MaxCPUs           int   // Max vCPUs for hotplug (default: 2)
 	MemorySize        int64 // Initial memory in bytes (default: 512 MiB)
 	MemoryHotplugSize int64 // Max memory for hotplug in bytes (default: 2 GiB)
+	MemorySlots       int   // Memory hotplug slots (default: 8, must match VMM config)
 }
 
 // StartOpts defines configuration options for starting a VM.
