@@ -40,7 +40,6 @@ package network
 
 import (
 	"context"
-	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -50,33 +49,30 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
 )
 
-// NetworkConfig describes the CNI configuration locations.
-type NetworkConfig struct {
-	// CNIConfDir is the directory containing CNI network configuration files.
-	// Default: /etc/cni/net.d
-	CNIConfDir string
-
-	// CNIBinDir is the directory containing CNI plugin binaries.
-	// Default: /opt/cni/bin
-	CNIBinDir string
-}
-
-// LoadNetworkConfig returns the standard CNI network configuration.
-//
-// Uses standard CNI paths:
-//   - CNI config directory: /etc/cni/net.d (configs loaded lexicographically)
-//   - CNI plugin binary directory: /opt/cni/bin
+// LoadNetworkConfig loads CNI network configuration using a three-tier fallback:
+//  1. Environment variables (QEMUBOX_CNI_CONF_DIR, QEMUBOX_CNI_BIN_DIR)
+//  2. Qemubox-bundled CNI config (if exists)
+//  3. Standard system CNI paths (/etc/cni/net.d, /opt/cni/bin)
 //
 // Network configuration is auto-discovered from the first .conflist file
 // in the CNI config directory (sorted alphabetically by filename).
 func LoadNetworkConfig() NetworkConfig {
-	if dir := os.Getenv("QEMUBOX_CNI_CONF_DIR"); dir != "" {
+	// Priority 1: Environment variable override (user-specified paths)
+	// Allows users to override CNI config location without changing code
+	if confDir := os.Getenv("QEMUBOX_CNI_CONF_DIR"); confDir != "" {
+		binDir := os.Getenv("QEMUBOX_CNI_BIN_DIR")
+		if binDir == "" {
+			// If only config dir is overridden, use standard bin dir
+			binDir = "/opt/cni/bin"
+		}
 		return NetworkConfig{
-			CNIConfDir: dir,
-			CNIBinDir:  os.Getenv("QEMUBOX_CNI_BIN_DIR"),
+			CNIConfDir: confDir,
+			CNIBinDir:  binDir,
 		}
 	}
 
+	// Priority 2: Qemubox-bundled CNI paths (if they exist)
+	// Used when qemubox is installed with its own CNI plugins
 	qemuboxConfDir := filepath.Join("/usr/share/qemubox", "config", "cni", "net.d")
 	qemuboxBinDir := filepath.Join("/usr/share/qemubox", "libexec", "cni")
 	if _, err := os.Stat(qemuboxConfDir); err == nil {
@@ -86,41 +82,12 @@ func LoadNetworkConfig() NetworkConfig {
 		}
 	}
 
+	// Priority 3: Standard system CNI paths (fallback)
+	// Used when neither env vars nor qemubox paths are available
 	return NetworkConfig{
 		CNIConfDir: "/etc/cni/net.d",
 		CNIBinDir:  "/opt/cni/bin",
 	}
-}
-
-// NetworkInfo holds internal network configuration
-type NetworkInfo struct {
-	TapName string `json:"tap_name"`
-	MAC     string `json:"mac"`
-	IP      net.IP `json:"ip"`
-	Netmask string `json:"netmask"`
-	Gateway net.IP `json:"gateway"`
-}
-
-// Environment represents a VM/container network environment
-type Environment struct {
-	// ID is the unique identifier (container ID or VM ID)
-	ID string
-
-	// NetworkInfo contains allocated network configuration
-	// Set after EnsureNetworkResources() succeeds
-	NetworkInfo *NetworkInfo
-}
-
-// NetworkManager defines the interface for network management operations
-type NetworkManager interface {
-	// Close stops the network manager and releases internal resources
-	Close() error
-
-	// EnsureNetworkResources allocates and configures network resources for an environment
-	EnsureNetworkResources(ctx context.Context, env *Environment) error
-
-	// ReleaseNetworkResources releases network resources for an environment
-	ReleaseNetworkResources(ctx context.Context, env *Environment) error
 }
 
 // setupInFlight tracks an in-progress CNI setup operation.

@@ -84,18 +84,52 @@ type Config struct {
 	EnableScaleDown bool // Allow removing CPUs (may fail on some kernels)
 }
 
+const (
+	// defaultMonitorInterval is how often to check CPU usage.
+	// 5 seconds provides responsive scaling without excessive polling.
+	defaultMonitorInterval = 5 * time.Second
+
+	// defaultScaleUpCooldown prevents thrashing by rate-limiting scale-up operations.
+	// 10 seconds allows new CPU to be utilized before considering another scale-up.
+	defaultScaleUpCooldown = 10 * time.Second
+
+	// defaultScaleDownCooldown is more conservative to avoid removing CPUs prematurely.
+	// 30 seconds ensures sustained low usage before removing resources.
+	defaultScaleDownCooldown = 30 * time.Second
+
+	// defaultScaleUpThreshold is the CPU usage percentage that triggers adding a vCPU.
+	// 80% provides headroom before hitting 100% utilization.
+	defaultScaleUpThreshold = 80.0
+
+	// defaultScaleDownThreshold is the projected CPU usage after removing one vCPU.
+	// 50% ensures removed vCPU was genuinely idle (not causing load redistribution issues).
+	defaultScaleDownThreshold = 50.0
+
+	// defaultThrottleLimit prevents scaling when already at CPU quota.
+	// If >5% of CPU time is throttled, adding vCPUs won't help (quota-limited, not CPU-limited).
+	defaultThrottleLimit = 5.0
+
+	// defaultScaleUpStability requires N consecutive high readings before scaling up.
+	// 2 readings = 10 seconds total (2 * 5s interval), filtering brief spikes.
+	defaultScaleUpStability = 2
+
+	// defaultScaleDownStability requires more sustained low usage before removing CPUs.
+	// 6 readings = 30 seconds total (6 * 5s interval), avoiding premature scale-down.
+	defaultScaleDownStability = 6
+)
+
 // DefaultConfig returns sensible defaults for CPU hotplug
 func DefaultConfig() Config {
 	return Config{
-		MonitorInterval:      5 * time.Second,
-		ScaleUpCooldown:      10 * time.Second,
-		ScaleDownCooldown:    30 * time.Second,
-		ScaleUpThreshold:     80.0,
-		ScaleDownThreshold:   50.0,
-		ScaleUpThrottleLimit: 5.0,  // Avoid scaling if throttling exceeds this %
-		ScaleUpStability:     2,    // Need 2 consecutive high readings (10s total)
-		ScaleDownStability:   6,    // Need 6 consecutive low readings (30s total)
-		EnableScaleDown:      true, // Disabled by default (many kernels don't support CPU unplug)
+		MonitorInterval:      defaultMonitorInterval,
+		ScaleUpCooldown:      defaultScaleUpCooldown,
+		ScaleDownCooldown:    defaultScaleDownCooldown,
+		ScaleUpThreshold:     defaultScaleUpThreshold,
+		ScaleDownThreshold:   defaultScaleDownThreshold,
+		ScaleUpThrottleLimit: defaultThrottleLimit,
+		ScaleUpStability:     defaultScaleUpStability,
+		ScaleDownStability:   defaultScaleDownStability,
+		EnableScaleDown:      true, // Enabled by default (some kernels may not support CPU unplug)
 	}
 }
 
@@ -130,13 +164,13 @@ func NewController(containerID string, cpuHotplugger vm.CPUHotplugger, stats Sta
 // Start begins the monitoring loop
 func (c *Controller) Start(ctx context.Context) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.stopCh != nil {
-		c.mu.Unlock()
 		return // Already started
 	}
 	c.stopCh = make(chan struct{})
 	c.stoppedCh = make(chan struct{})
-	c.mu.Unlock()
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id":       c.containerID,
@@ -208,10 +242,7 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 		c.currentCPUs = actualCPUs
 	}
 
-	// For now, use a simple heuristic based on CPU count vs max
-	// In the full implementation, this would read cgroup stats via TTRPC
-	// and calculate actual CPU usage percentage
-
+	// Calculate target vCPU count based on actual CPU usage from cgroup stats
 	targetCPUs := c.calculateTargetCPUs(ctx)
 
 	// Check if we should adjust
@@ -262,7 +293,9 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 			return nil
 		}
 
-		c.scaleDown(ctx, targetCPUs)
+		if err := c.scaleDown(ctx, targetCPUs); err != nil {
+			return fmt.Errorf("failed to scale down CPUs: %w", err)
+		}
 		return nil
 	}
 
@@ -341,6 +374,10 @@ func (c *Controller) sampleCPU(ctx context.Context) (float64, float64, bool, err
 
 	elapsed := now.Sub(c.lastSampleTime)
 	if elapsed <= 0 {
+		log.G(ctx).WithFields(log.Fields{
+			"container_id": c.containerID,
+			"elapsed":      elapsed,
+		}).Warn("cpu-hotplug: time went backward, resetting CPU stats baseline")
 		c.lastSampleTime = now
 		c.lastUsageUsec = usageUsec
 		c.lastThrottledUsec = throttledUsec
@@ -348,6 +385,13 @@ func (c *Controller) sampleCPU(ctx context.Context) (float64, float64, bool, err
 	}
 
 	if usageUsec < c.lastUsageUsec || throttledUsec < c.lastThrottledUsec {
+		log.G(ctx).WithFields(log.Fields{
+			"container_id":        c.containerID,
+			"usage_usec":          usageUsec,
+			"last_usage_usec":     c.lastUsageUsec,
+			"throttled_usec":      throttledUsec,
+			"last_throttled_usec": c.lastThrottledUsec,
+		}).Warn("cpu-hotplug: CPU usage counters decreased (possible counter overflow or stats bug), resetting baseline")
 		c.lastSampleTime = now
 		c.lastUsageUsec = usageUsec
 		c.lastThrottledUsec = throttledUsec
@@ -443,7 +487,7 @@ func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
 }
 
 // scaleDown removes vCPUs to reach target
-func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
+func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) error {
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": c.containerID,
 		"current":      c.currentCPUs,
@@ -458,8 +502,9 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 				log.G(ctx).WithError(err).WithFields(log.Fields{
 					"container_id": c.containerID,
 					"cpu_id":       i,
-				}).Warn("cpu-hotplug: failed to offline vCPU in guest")
-				break
+				}).Warn("cpu-hotplug: failed to offline vCPU in guest (best-effort, continuing)")
+				// CPU hot-unplug is best-effort - don't fail the operation
+				// Guest may keep the CPU in use, but we proceed with unplug
 			}
 		}
 
@@ -467,9 +512,9 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 			log.G(ctx).WithError(err).WithFields(log.Fields{
 				"container_id": c.containerID,
 				"cpu_id":       i,
-			}).Warn("cpu-hotplug: failed to remove vCPU (may not be supported by guest kernel)")
-			// Don't fail the entire operation - CPU hot-unplug is best-effort
-			break
+			}).Warn("cpu-hotplug: failed to remove vCPU (may not be supported by guest kernel, best-effort)")
+			// CPU hot-unplug is best-effort - don't fail the operation
+			// Continue removing other CPUs even if this one fails
 		}
 
 		log.G(ctx).WithFields(log.Fields{
@@ -481,4 +526,5 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 	c.currentCPUs = targetCPUs
 	c.lastScaleDown = time.Now()
 	c.consecutiveLowUsage = 0
+	return nil
 }

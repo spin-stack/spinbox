@@ -64,20 +64,19 @@ func ParseCNIResultWithNetNS(result *current.Result, netnsPath string) (*CNIResu
 	}
 
 	// Parse IP address, netmask, and gateway
-	var ipAddress net.IP
+	if len(result.IPs) == 0 {
+		return nil, fmt.Errorf("CNI result contains no IP addresses")
+	}
+
+	// Use the first IP configuration
+	ipConfig := result.IPs[0]
+	ipAddress := ipConfig.Address.IP
+	gateway := ipConfig.Gateway
+
+	// Extract netmask from the IPNet
 	var netmask string
-	var gateway net.IP
-
-	if len(result.IPs) > 0 {
-		// Use the first IP configuration
-		ipConfig := result.IPs[0]
-		ipAddress = ipConfig.Address.IP
-		gateway = ipConfig.Gateway
-
-		// Extract netmask from the IPNet
-		if ipConfig.Address.Mask != nil {
-			netmask = net.IP(ipConfig.Address.Mask).String()
-		}
+	if ipConfig.Address.Mask != nil {
+		netmask = net.IP(ipConfig.Address.Mask).String()
 	}
 
 	return &CNIResult{
@@ -90,25 +89,18 @@ func ParseCNIResultWithNetNS(result *current.Result, netnsPath string) (*CNIResu
 }
 
 func readInterfaceMAC(netnsPath, ifName string) (string, error) {
-	targetNS, err := netns.GetFromPath(netnsPath)
-	if err != nil {
-		return "", fmt.Errorf("get target netns: %w", err)
-	}
-	defer func() {
-		if err := targetNS.Close(); err != nil {
-			log.L.WithError(err).Warn("failed to close target netns handle")
-		}
-	}()
-
+	// Get current namespace first so it closes last (LIFO order)
 	origNS, err := netns.Get()
 	if err != nil {
 		return "", fmt.Errorf("get current netns: %w", err)
 	}
-	defer func() {
-		if err := origNS.Close(); err != nil {
-			log.L.WithError(err).Warn("failed to close original netns handle")
-		}
-	}()
+	defer origNS.Close() // Closes last (LIFO)
+
+	targetNS, err := netns.GetFromPath(netnsPath)
+	if err != nil {
+		return "", fmt.Errorf("get target netns: %w", err)
+	}
+	defer targetNS.Close() // Closes first (LIFO)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

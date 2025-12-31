@@ -130,6 +130,11 @@ const (
 	// possible while still catching most logs. Logs lost after this timeout are
 	// considered acceptable data loss (VM is shutting down anyway).
 	eventStreamShutdownDelay = 2 * time.Second
+
+	// eventStreamReconnectTimeout is how long we try to reconnect the event stream.
+	// 2 seconds allows for brief VM pauses (e.g., during snapshot operations)
+	// without triggering shim shutdown, while still detecting genuine VM failures quickly.
+	eventStreamReconnectTimeout = 2 * time.Second
 )
 
 var (
@@ -225,6 +230,7 @@ type service struct {
 	eventsCloseOnce     sync.Once   // Ensures events channel closed exactly once
 	intentionalShutdown atomic.Bool // True for clean shutdown, false for VM crash
 	deletionInProgress  atomic.Bool // True during Delete() to reject concurrent Create()
+	creationInProgress  atomic.Bool // True during Create() to reject concurrent Create() and Delete()
 	shutdownSvc         shutdown.Service
 	inflight            atomic.Int64 // Count of in-flight RPC calls for graceful shutdown
 }
@@ -314,7 +320,7 @@ func (s *service) dialTaskClient(ctx context.Context) (*ttrpc.Client, func(), er
 }
 
 // Create a new initial process and container with the underlying OCI runtime.
-func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
+func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, retErr error) {
 	log.G(ctx).WithFields(log.Fields{
 		"id":     r.ID,
 		"bundle": r.Bundle,
@@ -324,11 +330,19 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(fmt.Errorf("checkpoints not supported: %w", errdefs.ErrNotImplemented))
 	}
 
+	// Atomically mark creation in progress to prevent concurrent Create() or Delete()
+	// Uses CompareAndSwap to avoid TOCTOU race between check and VM creation
+	if !s.creationInProgress.CompareAndSwap(false, true) {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "container creation already in progress")
+	}
+	defer s.creationInProgress.Store(false)
+
 	// Check if deletion is in progress
 	if s.deletionInProgress.Load() {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
 	}
 
+	// Check if container already exists
 	s.containerMu.Lock()
 	hasContainer := s.container != nil
 	s.containerMu.Unlock()
@@ -336,11 +350,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Check if VM already exists
 	if _, err := s.vmLifecycle.Instance(); err == nil || hasContainer {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim already running a container; requires fresh shim per container")
-	}
-
-	// Double-check deletion flag (prevent TOCTOU race)
-	if s.deletionInProgress.Load() {
-		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
 	}
 
 	presetup := time.Now()
@@ -385,21 +394,13 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Cleanup helper for network resources on failure
-	var networkCleanupDone bool
-	cleanupNetwork := func() {
-		if networkCleanupDone {
-			return
-		}
-		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
-		}
-		networkCleanupDone = true
-	}
+	// Cleanup network resources on any error
 	defer func() {
-		if !networkCleanupDone {
-			cleanupNetwork()
+		if retErr != nil {
+			env := &network.Environment{ID: r.ID}
+			if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
+				log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
+			}
 		}
 	}()
 
@@ -410,7 +411,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		vm.WithNetworkNamespace(netnsPath),
 	}
 	if err := vmi.Start(ctx, startOpts...); err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 	bootTime := time.Since(prestart)
@@ -420,7 +420,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Get VM client
 	vmc, err := s.vmLifecycle.Client()
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -428,14 +427,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	ns, _ := namespaces.Namespace(ctx)
 	eventCtx := namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 	if err := s.startEventForwarder(eventCtx, vmc); err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
 	// Dial TTRPC client
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
@@ -447,7 +444,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Create bundle in VM
 	bundleFiles, err := b.Files()
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -457,7 +453,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		Files: bundleFiles,
 	})
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -471,7 +466,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 
 	cio, ioShutdown, err := s.forwardIO(ctx, vmi, rio)
 	if err != nil {
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -503,7 +497,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 				log.G(ctx).WithError(err).Error("failed to shutdown io after create failure")
 			}
 		}
-		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -531,9 +524,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		s.memoryHotplugControllers[r.ID] = memCtrl
 		s.controllerMu.Unlock()
 	}
-
-	// Mark network cleanup as done since we succeeded
-	networkCleanupDone = true
 
 	return &taskAPI.CreateTaskResponse{
 		Pid: resp.Pid,
@@ -588,7 +578,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 // reconnectEventStream attempts to reconnect the event stream within a deadline.
 // Returns the new client, stream, and whether reconnection succeeded.
 func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEvents_StreamClient, bool) {
-	reconnectDeadline := time.Now().Add(2 * time.Second)
+	reconnectDeadline := time.Now().Add(eventStreamReconnectTimeout)
 
 	for time.Now().Before(reconnectDeadline) {
 		if s.intentionalShutdown.Load() {
@@ -596,7 +586,7 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 			return nil, nil, false
 		}
 
-		newClient, dialErr := s.vmLifecycle.DialClientWithRetry(ctx, 2*time.Second)
+		newClient, dialErr := s.vmLifecycle.DialClientWithRetry(ctx, eventStreamReconnectTimeout)
 		if dialErr != nil {
 			log.G(ctx).WithError(dialErr).Debug("event stream reconnect: dial failed")
 			time.Sleep(200 * time.Millisecond)
@@ -663,6 +653,12 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	if r.ExecID == "" {
 		if !s.deletionInProgress.CompareAndSwap(false, true) {
 			return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "delete already in progress")
+		}
+
+		// Check if creation is in progress - fail fast to avoid race
+		if s.creationInProgress.Load() {
+			s.deletionInProgress.Store(false) // Reset deletion flag
+			return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "cannot delete while container creation is in progress")
 		}
 	}
 

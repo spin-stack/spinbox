@@ -4,6 +4,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,11 @@ const (
 	// KVM ioctl obtained by running: printf("KVM_GET_API_VERSION: 0x%llX\n", KVM_GET_API_VERSION);
 	ioctlKVMGetAPIVersion = 0xAE00
 	expectedKVMAPIVersion = 12
+
+	// vsockRetryInterval is the delay between vsock connection attempts.
+	// 200ms balances quick recovery (for transient errors) against
+	// wasted CPU cycles (when VM is genuinely down).
+	vsockRetryInterval = 200 * time.Millisecond
 )
 
 // Manager manages VM instances and their lifecycle.
@@ -83,11 +89,7 @@ func (m *Manager) Client() (*ttrpc.Client, error) {
 	if m.instance == nil {
 		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
 	}
-	client := m.instance.Client()
-	if client == nil {
-		return nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
-	}
-	return client, nil
+	return m.instance.Client()
 }
 
 // DialClient creates a new TTRPC client connection to the VM.
@@ -114,7 +116,7 @@ func (m *Manager) DialClientWithRetry(ctx context.Context, maxWait time.Duration
 		if time.Now().After(deadline) {
 			return nil, err
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(vsockRetryInterval)
 	}
 }
 
@@ -164,15 +166,21 @@ func isTransientVsockError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Import io and errors packages if needed for these checks
-	msg := err.Error()
+
+	// Check typed errors first
 	if errdefs.IsFailedPrecondition(err) || errdefs.IsUnavailable(err) {
 		return true
 	}
-	// Additional string-based checks for vsock-specific errors
-	return msg == "ttrpc: closed" ||
-		msg == "broken pipe" ||
-		msg == "dial vsock: no such device" ||
-		msg == "dial vsock: connection reset" ||
-		msg == "dial vsock: connection refused"
+
+	// Check for syscall errors
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ENODEV) ||
+		errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+
+	// Fallback to string matching only for ttrpc-specific errors
+	msg := err.Error()
+	return msg == "ttrpc: closed"
 }
