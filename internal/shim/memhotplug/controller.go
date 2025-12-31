@@ -12,6 +12,13 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 )
 
+const (
+	// maxMemorySlots is the number of memory hotplug slots configured in QEMU.
+	// This must match the "-device pc-dimm,memdev=mem,id=dimm,slot=N" config
+	// and the vm.defaultMemorySlots value used when starting QEMU.
+	maxMemorySlots = 8
+)
+
 // qmpMemoryClient defines the interface for QMP memory operations.
 // This interface exists to enable testing with mocks.
 type qmpMemoryClient interface {
@@ -51,6 +58,7 @@ type Controller struct {
 
 	// State management
 	mu        sync.Mutex
+	started   bool // Track if Start() has been called
 	stopCh    chan struct{}
 	stoppedCh chan struct{}
 }
@@ -156,6 +164,14 @@ func NewController(
 
 // Start begins monitoring memory usage and managing hotplug
 func (c *Controller) Start(ctx context.Context) {
+	c.mu.Lock()
+	if c.started {
+		c.mu.Unlock()
+		return // Already started
+	}
+	c.started = true
+	c.mu.Unlock()
+
 	go func() {
 		defer close(c.stoppedCh)
 
@@ -375,10 +391,18 @@ func (c *Controller) scaleUp(ctx context.Context, targetMemory int64) error {
 	// Mark slot as used
 	c.usedSlots[slotID] = true
 
-	// Online memory in guest (may not be needed if auto_online is enabled)
+	// Online memory in guest - required for memory to be usable
 	if err := c.onlineMemory(ctx, slotID); err != nil {
 		log.G(ctx).WithError(err).WithField("slot_id", slotID).
-			Warn("memory-hotplug: failed to online memory in guest (non-fatal)")
+			Error("memory-hotplug: failed to online memory in guest")
+		// Memory was allocated via QMP but is not usable by guest
+		// Try to unplug it to avoid wasting resources
+		if unplugErr := c.qmpClient.UnplugMemory(ctx, slotID); unplugErr != nil {
+			log.G(ctx).WithError(unplugErr).WithField("slot_id", slotID).
+				Warn("memory-hotplug: failed to unplug unusable memory")
+		}
+		delete(c.usedSlots, slotID)
+		return fmt.Errorf("memory allocated but failed to online in guest: %w", err)
 	}
 
 	c.lastScaleUp = time.Now()
@@ -426,7 +450,7 @@ func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
 		// Try to bring memory back online if unplug failed
 		if onlineErr := c.onlineMemory(ctx, slotID); onlineErr != nil {
 			log.G(ctx).WithError(onlineErr).WithField("slot_id", slotID).
-				Warn("memory-hotplug: failed to re-online memory after unplug failure")
+				Error("memory-hotplug: CRITICAL - failed to re-online memory after unplug failure, guest may have offline memory")
 		}
 		return fmt.Errorf("failed to unplug memory: %w", err)
 	}
@@ -443,8 +467,7 @@ func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
 
 // findFreeSlot finds the first available memory slot (0-7)
 func (c *Controller) findFreeSlot() int {
-	const maxSlots = 8 // QEMU configured with slots=8
-	for i := range maxSlots {
+	for i := range maxMemorySlots {
 		if !c.usedSlots[i] {
 			return i
 		}
@@ -454,8 +477,7 @@ func (c *Controller) findFreeSlot() int {
 
 // findUsedSlot finds a used memory slot (LIFO - last added first)
 func (c *Controller) findUsedSlot() int {
-	const maxSlots = 8
-	for i := maxSlots - 1; i >= 0; i-- {
+	for i := maxMemorySlots - 1; i >= 0; i-- {
 		if c.usedSlots[i] {
 			return i
 		}

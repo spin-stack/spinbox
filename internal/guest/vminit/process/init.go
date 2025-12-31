@@ -98,12 +98,29 @@ func New(id string, runtime *runc.Runc, stdio stdio.Stdio, sm stream.Manager) *I
 // Create the process with the provided config
 func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 	var (
-		err     error
-		socket  *runc.Socket
-		pio     *processIO
-		pidFile = newPidFile(p.Bundle)
-		retErr  error
+		err              error
+		socket           *runc.Socket
+		pio              *processIO
+		pidFile          = newPidFile(p.Bundle)
+		retErr           error
+		containerCreated bool
 	)
+
+	// Clean up container if it was created but later steps fail
+	defer func() {
+		if retErr != nil && containerCreated {
+			// Container was created via runtime.Create() but something else failed.
+			// We need to delete the container to avoid leaking resources.
+			// Use context.WithoutCancel to ensure cleanup proceeds even if ctx is cancelled
+			cleanupCtx := context.WithoutCancel(ctx)
+			if err := p.runtime.Delete(cleanupCtx, r.ID, &runc.DeleteOpts{
+				Force: true,
+			}); err != nil {
+				log.G(ctx).WithError(err).WithField("container_id", r.ID).
+					Warn("failed to delete container during cleanup after partial create")
+			}
+		}
+	}()
 
 	if r.Terminal {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
@@ -124,11 +141,20 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		}()
 	}
 
+	// TODO(security): NoPivot is disabled due to EINVAL from pivot_root syscall.
+	// Investigation needed:
+	// 1. Is rootfs mount propagation set correctly? (should be MS_PRIVATE)
+	// 2. Is rootfs on the same filesystem as old_root?
+	// 3. Are we calling pivot_root with correct arguments?
+	// See: https://man7.org/linux/man-pages/man2/pivot_root.2.html
+	//
+	// SECURITY RISK: Without pivot_root, container processes can access
+	// VM filesystem outside the container rootfs. This reduces isolation.
+	// The VM boundary provides isolation, but proper pivot_root is still
+	// defense-in-depth and should be re-enabled.
 	opts := &runc.CreateOpts{
-		PidFile: pidFile.Path(),
-		// Pivot root is returning invalid argument
-		// Could otherwise use p.NoPivotRoot
-		NoPivot:      true,
+		PidFile:      pidFile.Path(),
+		NoPivot:      true, // FIXME: Re-enable after investigating EINVAL (see comment above)
 		NoNewKeyring: p.NoNewKeyring,
 	}
 	if p.io != nil {
@@ -143,6 +169,8 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		retErr = p.runtimeError(err, "OCI runtime create failed")
 		return retErr
 	}
+	// Mark container as created so defer cleanup can delete it if later steps fail
+	containerCreated = true
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

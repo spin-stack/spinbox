@@ -36,8 +36,12 @@ func ComputeConfig(ctx context.Context, spec *specs.Spec) (*vm.VMResourceConfig,
 	hostCPUs := getHostCPUCount()
 	hostMemory, err := getHostMemoryTotal()
 	if err != nil {
-		log.G(ctx).WithError(err).Warn("failed to get host memory total, using 256GB default")
-		hostMemory = 256 * 1024 * 1024 * 1024 // 256GB default
+		// Can't determine host memory - use conservative default
+		// 4GB is reasonable for most scenarios and won't cause OOM
+		const conservativeDefault = 4 * 1024 * 1024 * 1024
+		log.G(ctx).WithError(err).WithField("default_gb", 4).
+			Error("failed to get host memory total, using conservative 4GB default")
+		hostMemory = conservativeDefault
 	}
 
 	// Align memory values to 128MB for virtio-mem requirement
@@ -118,12 +122,70 @@ func extractCPURequest(spec *specs.Spec) int {
 	// Fallback: check CPU.Cpus (cpuset format like "0-3" or "0,1,2,3")
 	// This is less common but may be present
 	if cpu.Cpus != "" {
-		// Simple heuristic: count commas + 1, or parse ranges
-		// For now, just return 1 as this requires more complex parsing
-		return 1
+		if count := parseCPUSet(cpu.Cpus); count > 0 {
+			return count
+		}
+		// If parsing failed, fall through to default
 	}
 
 	return 1 // Default to 1 vCPU
+}
+
+// parseCPUSet parses a Linux cpuset string and returns the number of CPUs.
+// Supported formats:
+//   - Ranges: "0-3" → 4 CPUs
+//   - Lists: "0,2,4" → 3 CPUs
+//   - Mixed: "0-3,8-11" → 8 CPUs
+//
+// Returns 0 if the format is invalid or empty.
+func parseCPUSet(cpuset string) int {
+	cpuset = strings.TrimSpace(cpuset)
+	if cpuset == "" {
+		return 0
+	}
+
+	cpus := make(map[int]struct{}) // Use map to deduplicate
+
+	// Split by commas to handle "0-3,8-11" format
+	parts := strings.Split(cpuset, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Check if this is a range (e.g., "0-3")
+		if strings.Contains(part, "-") {
+			rangeParts := strings.SplitN(part, "-", 2)
+			if len(rangeParts) != 2 {
+				return 0 // Invalid range format
+			}
+
+			start, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			if err != nil || start < 0 {
+				return 0 // Invalid start
+			}
+
+			end, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			if err != nil || end < 0 || end < start {
+				return 0 // Invalid end
+			}
+
+			// Add all CPUs in range
+			for i := start; i <= end; i++ {
+				cpus[i] = struct{}{}
+			}
+		} else {
+			// Single CPU number
+			cpu, err := strconv.Atoi(part)
+			if err != nil || cpu < 0 {
+				return 0 // Invalid CPU number
+			}
+			cpus[cpu] = struct{}{}
+		}
+	}
+
+	return len(cpus)
 }
 
 // extractMemoryRequest extracts the memory request from the OCI spec.
@@ -147,7 +209,16 @@ func extractMemoryRequest(spec *specs.Spec) int64 {
 
 // alignMemory rounds up the given memory value to the nearest multiple of alignment.
 // This is required for virtio-mem which needs memory sizes aligned to 128MB.
+// Panics if alignment is invalid (<=0 or not a power of 2).
 func alignMemory(memory, alignment int64) int64 {
+	if alignment <= 0 {
+		panic(fmt.Sprintf("alignMemory: invalid alignment %d (must be > 0)", alignment))
+	}
+	// Check if alignment is power of 2 (virtio-mem requirement)
+	if alignment&(alignment-1) != 0 {
+		panic(fmt.Sprintf("alignMemory: alignment %d is not a power of 2", alignment))
+	}
+
 	if memory%alignment == 0 {
 		return memory
 	}

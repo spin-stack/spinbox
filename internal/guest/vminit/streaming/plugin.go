@@ -150,9 +150,12 @@ type streamConn struct {
 }
 
 func (sc streamConn) Close() error {
+	// Remove from map first, then close connection without holding mutex.
+	// Closing a network connection can block (TCP handshake, pending writes),
+	// so we must not hold the mutex during this I/O operation.
 	sc.s.mu.Lock()
-	defer sc.s.mu.Unlock()
 	delete(sc.s.streams, sc.sid)
+	sc.s.mu.Unlock()
 
 	if err := sc.Conn.Close(); err != nil {
 		return fmt.Errorf("failed to close connection: %w", err)

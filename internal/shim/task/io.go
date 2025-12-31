@@ -2,8 +2,11 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -52,53 +55,61 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 	}
 	log.G(ctx).WithField("scheme", u.Scheme).Debug("setupForwardIO: parsed scheme")
 
-	usePIOPaths := false
 	switch u.Scheme {
 	case "stream":
-		// Pass through
+		// Pass through - no stream setup needed
 		return forwardIOSetup{pio: pio, passthrough: true}, nil
-	case "fifo", "binary", "pipe":
-		// Handled below via createStreams
 	case "file":
-		filePath := u.Path
-		log.G(ctx).WithField("filePath", filePath).Debug("file scheme: using file path for logging")
-
-		// Validate parent directory can be created
-		if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
-			return forwardIOSetup{}, fmt.Errorf("failed to create parent directory: %w", err)
-		}
-
-		// createStreams will replace pio.Stdout/Stderr with stream:// URIs
-		// These stream URIs will be sent to the VM
-		pio, streams, err := createStreams(ctx, vmi, pio)
-		if err != nil {
-			return forwardIOSetup{}, err
-		}
-
-		log.G(ctx).WithFields(log.Fields{
-			"stdout":         pio.Stdout,
-			"stderr":         pio.Stderr,
-			"stdoutFilePath": filePath,
-		}).Debug("file scheme: created streams, will copy to file on host")
-
-		// Save file paths separately - these will be used on the host side in copyStreams
-		// The pio.Stdout/Stderr contain stream:// URIs which will be sent to the VM
-		return forwardIOSetup{
-			pio:            pio,
-			streams:        streams,
-			usePIOPaths:    true,
-			stdoutFilePath: filePath,
-			stderrFilePath: filePath,
-		}, nil
+		return setupFileScheme(ctx, vmi, pio, u.Path)
+	case "fifo", "binary", "pipe":
+		return setupStreamScheme(ctx, vmi, pio)
 	default:
 		return forwardIOSetup{}, fmt.Errorf("unsupported STDIO scheme %s: %w", u.Scheme, errdefs.ErrNotImplemented)
 	}
+}
 
-	pio, streams, err := createStreams(ctx, vmi, pio)
+// setupFileScheme handles the "file://" URI scheme.
+// It creates VM-side streams and saves the original file path for host-side copying.
+func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, filePath string) (forwardIOSetup, error) {
+	log.G(ctx).WithField("filePath", filePath).Debug("file scheme: using file path for logging")
+
+	// Validate parent directory can be created
+	if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
+		return forwardIOSetup{}, fmt.Errorf("failed to create parent directory: %w", err)
+	}
+
+	// createStreams replaces pio.Stdout/Stderr with stream:// URIs for the VM
+	streamPio, streams, err := createStreams(ctx, vmi, pio)
 	if err != nil {
 		return forwardIOSetup{}, err
 	}
-	return forwardIOSetup{pio: pio, streams: streams, usePIOPaths: usePIOPaths}, nil
+
+	log.G(ctx).WithFields(log.Fields{
+		"stdout":         streamPio.Stdout,
+		"stderr":         streamPio.Stderr,
+		"stdoutFilePath": filePath,
+	}).Debug("file scheme: created streams, will copy to file on host")
+
+	// Return setup with:
+	// - streamPio: Contains stream:// URIs for VM
+	// - stdoutFilePath/stderrFilePath: Original file path for host-side copyStreams
+	return forwardIOSetup{
+		pio:            streamPio,
+		streams:        streams,
+		usePIOPaths:    true,
+		stdoutFilePath: filePath,
+		stderrFilePath: filePath,
+	}, nil
+}
+
+// setupStreamScheme handles "fifo://", "binary://", and "pipe://" URI schemes.
+// It creates VM-side streams and uses the original pio paths for host-side I/O.
+func setupStreamScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forwardIOSetup, error) {
+	streamPio, streams, err := createStreams(ctx, vmi, pio)
+	if err != nil {
+		return forwardIOSetup{}, err
+	}
+	return forwardIOSetup{pio: streamPio, streams: streams, usePIOPaths: false}, nil
 }
 
 func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, error) {
@@ -374,9 +385,15 @@ func isClosedConnError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for "use of closed network connection"
-	return err.Error() == "use of closed network connection" ||
-		err.Error() == "read: connection reset by peer"
+	// Check for typed errors first (Go 1.16+)
+	var netErr *net.OpError
+	if errors.As(err, &netErr) && errors.Is(netErr.Err, net.ErrClosed) {
+		return true
+	}
+	// Fallback to string matching for vsock-specific errors or older Go versions
+	msg := err.Error()
+	return msg == "use of closed network connection" ||
+		msg == "read: connection reset by peer"
 }
 
 // isAlreadyClosedError checks if the error is an "already closed" error.
@@ -385,7 +402,11 @@ func isAlreadyClosedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for "file already closed" or "close of closed"
+	// Check for fs.ErrClosed (Go 1.16+)
+	if errors.Is(err, fs.ErrClosed) {
+		return true
+	}
+	// Fallback to string matching for compatibility
 	errStr := err.Error()
 	return errStr == "file already closed" ||
 		errStr == "close of closed file" ||

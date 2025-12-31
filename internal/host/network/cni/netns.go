@@ -37,8 +37,10 @@ func CreateNetNS(vmID string) (string, error) {
 
 	// Check if netns already exists (from previous run)
 	if NetNSExists(vmID) {
-		// Clean up existing netns first
-		_ = DeleteNetNS(vmID)
+		log.L.WithField("vmID", vmID).Warn("netns already exists from previous run, attempting cleanup")
+		if err := DeleteNetNS(vmID); err != nil {
+			return "", fmt.Errorf("failed to clean up existing netns: %w", err)
+		}
 	}
 
 	// Lock OS thread to ensure namespace operations work correctly
@@ -73,6 +75,8 @@ func CreateNetNS(vmID string) (string, error) {
 	nsFdPath := fmt.Sprintf("/proc/self/fd/%d", newNS)
 	if err := bindMountNetNS(nsFdPath, netnsPath); err != nil {
 		if restoreErr := netns.Set(origNS); restoreErr != nil {
+			// Best effort cleanup of netns file on catastrophic failure
+			_ = os.Remove(netnsPath)
 			return "", fmt.Errorf("failed to restore original netns after bind mount error: %w", restoreErr)
 		}
 		return "", fmt.Errorf("failed to bind mount netns: %w", err)
@@ -136,10 +140,8 @@ func DeleteNetNS(vmID string) error {
 	netnsPath := filepath.Join(netnsBasePath, vmID)
 
 	// Unmount the namespace
-	if err := unmountNetNS(netnsPath); err != nil {
-		// Continue with deletion even if unmount fails
-		_ = err // Ignore unmount errors
-	}
+	// Continue with deletion even if unmount fails
+	_ = unmountNetNS(netnsPath)
 
 	// Remove the file
 	if err := os.Remove(netnsPath); err != nil && !os.IsNotExist(err) {
@@ -173,7 +175,7 @@ func bindMountNetNS(source, target string) error {
 	}
 
 	// Bind mount the namespace using MS_BIND | MS_REC flags
-	if err := mount(source, target, "", uintptr(unix.MS_BIND|unix.MS_REC), ""); err != nil {
+	if err := unix.Mount(source, target, "", uintptr(unix.MS_BIND|unix.MS_REC), ""); err != nil {
 		if removeErr := os.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
 			log.L.WithError(removeErr).Warn("failed to remove netns file after mount error")
 		}
@@ -186,7 +188,7 @@ func bindMountNetNS(source, target string) error {
 // unmountNetNS unmounts a network namespace.
 func unmountNetNS(target string) error {
 	// Use MNT_DETACH for lazy unmount
-	if err := unmount(target, unix.MNT_DETACH); err != nil {
+	if err := unix.Unmount(target, unix.MNT_DETACH); err != nil {
 		return fmt.Errorf("failed to unmount netns: %w", err)
 	}
 

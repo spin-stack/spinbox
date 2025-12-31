@@ -25,6 +25,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	// shimGOMAXPROCS limits the shim to 4 OS threads.
+	// The shim is I/O-bound (TTRPC, vsock, FIFO forwarding), not CPU-bound.
+	// 4 threads provides sufficient parallelism while minimizing scheduler overhead.
+	shimGOMAXPROCS = 4
+)
+
 // NewShimManager returns an implementation of the shim manager
 // using run_vminitd
 func NewShimManager(name string) shim.Manager {
@@ -79,9 +86,8 @@ func newCommand(ctx context.Context, id, containerdAddress string, debug bool) (
 	cmd.Dir = cwd
 	// Limit shim process to avoid consuming excessive host CPU resources.
 	// The shim primarily does I/O forwarding and VM management, which are
-	// not CPU-intensive tasks. 4 threads provides sufficient concurrency
-	// for QEMU management, vsock I/O, and TTRPC handling.
-	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
+	// not CPU-intensive tasks.
+	cmd.Env = append(os.Environ(), fmt.Sprintf("GOMAXPROCS=%d", shimGOMAXPROCS))
 	cmd.Env = append(cmd.Env, "OTEL_SERVICE_NAME=containerd-shim-"+id)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
@@ -235,11 +241,10 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 	if err != nil {
 		return params, err
 	}
-	defer func() {
-		if err := origNS.Close(); err != nil {
-			log.L.WithError(err).Warn("failed to close original mount namespace handle")
-		}
-	}()
+	// Register close first - it will execute last (LIFO)
+	defer origNS.Close()
+
+	// Restore namespace before closing (executes first due to LIFO)
 	defer func() {
 		if restoreErr := unix.Setns(int(origNS.Fd()), unix.CLONE_NEWNS); restoreErr != nil && retErr == nil {
 			retErr = restoreErr

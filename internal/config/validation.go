@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Validate validates the entire configuration.
@@ -58,21 +60,21 @@ func (c *Config) validatePaths() error {
 		return fmt.Errorf("cannot access initrd at %s: %w", initrdPath, err)
 	}
 
-	// StateDir must be writable
+	// StateDir must be writable (create if it doesn't exist)
 	if c.Paths.StateDir == "" {
 		return fmt.Errorf("state_dir cannot be empty")
 	}
 
-	if err := validateDirectoryWritable(c.Paths.StateDir, "state_dir"); err != nil {
+	if err := ensureDirectoryWritable(c.Paths.StateDir, "state_dir"); err != nil {
 		return err
 	}
 
-	// LogDir must be writable
+	// LogDir must be writable (create if it doesn't exist)
 	if c.Paths.LogDir == "" {
 		return fmt.Errorf("log_dir cannot be empty")
 	}
 
-	if err := validateDirectoryWritable(c.Paths.LogDir, "log_dir"); err != nil {
+	if err := ensureDirectoryWritable(c.Paths.LogDir, "log_dir"); err != nil {
 		return err
 	}
 
@@ -218,30 +220,24 @@ func validateDirectoryExists(path, fieldName string) error {
 	return nil
 }
 
-func validateDirectoryWritable(path, fieldName string) error {
-	// First check if directory exists
+// ensureDirectoryWritable ensures a directory exists and is writable.
+// If the directory doesn't exist, it creates it with 0750 permissions.
+func ensureDirectoryWritable(path, fieldName string) error {
+	// Check if directory exists
 	if err := validateDirectoryExists(path, fieldName); err != nil {
 		// If directory doesn't exist, try to create it
 		if os.IsNotExist(err) {
 			if err := os.MkdirAll(path, 0750); err != nil {
 				return fmt.Errorf("%s directory does not exist and cannot be created: %s (%w)", fieldName, path, err)
 			}
-			return nil
+		} else {
+			return err
 		}
-		return err
 	}
 
-	// Check write permission by creating a temp file
-	testFile := filepath.Join(path, ".qemubox-write-test")
-	f, err := os.Create(testFile)
-	if err != nil {
-		return fmt.Errorf("%s directory is not writable: %s (permission denied)", fieldName, path)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("%s directory write test failed: %s (%w)", fieldName, path, err)
-	}
-	if err := os.Remove(testFile); err != nil {
-		return fmt.Errorf("%s directory write test cleanup failed: %s (%w)", fieldName, path, err)
+	// Check write permission
+	if err := unix.Access(path, unix.W_OK); err != nil {
+		return fmt.Errorf("%s directory is not writable: %s", fieldName, path)
 	}
 
 	return nil

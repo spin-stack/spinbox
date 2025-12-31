@@ -25,15 +25,22 @@ func newManager() Manager {
 	return &linuxManager{}
 }
 
+// truncateID ensures disk/tag IDs don't exceed QEMU's limits.
+// QEMU restricts device IDs to 36 characters for internal tracking.
+func truncateID(prefix, id string) string {
+	const maxIDLen = 36
+	tag := fmt.Sprintf("%s-%s", prefix, id)
+	if len(tag) > maxIDLen {
+		return tag[:maxIDLen]
+	}
+	return tag
+}
+
 func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) ([]*types.Mount, error) {
 	// Try virtiofs first (not currently implemented for QEMU), fall back to block devices
 
 	if len(rootfsMounts) == 1 && (rootfsMounts[0].Type == "overlay" || rootfsMounts[0].Type == "bind") {
-		tag := fmt.Sprintf("rootfs-%s", id)
-		// Keep disk ID reasonably short for logging and tracking
-		if len(tag) > 36 {
-			tag = tag[:36]
-		}
+		tag := truncateID("rootfs", id)
 		mnt := mount.Mount{
 			Type:    rootfsMounts[0].Type,
 			Source:  rootfsMounts[0].Source,
@@ -51,11 +58,7 @@ func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, ro
 			Options: translateMountOptions(ctx, rootfsMounts[0].Options),
 		}}, nil
 	} else if len(rootfsMounts) == 0 {
-		tag := fmt.Sprintf("rootfs-%s", id)
-		// Keep disk ID reasonably short for logging and tracking
-		if len(tag) > 36 {
-			tag = tag[:36]
-		}
+		tag := truncateID("rootfs", id)
 		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
 			return nil, err
 		}
@@ -71,11 +74,7 @@ func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, ro
 		}
 
 		// Fallback to original rootfs mount
-		tag := fmt.Sprintf("rootfs-%s", id)
-		// Keep disk ID reasonably short for logging and tracking
-		if len(tag) > 36 {
-			tag = tag[:36]
-		}
+		tag := truncateID("rootfs", id)
 		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
 			return nil, err
 		}
@@ -140,11 +139,7 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 }
 
 func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
-	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
-	// Keep disk ID reasonably short for logging and tracking
-	if len(disk) > 36 {
-		disk = disk[:36]
-	}
+	disk := truncateID(fmt.Sprintf("disk-%d", *disks), id)
 
 	var options []string
 	devices := []string{mnt.Source}
@@ -170,12 +165,10 @@ func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, 
 		mergedfsPath := filepath.Dir(mnt.Source) + "/merged_fs.vmdk"
 		if _, err := os.Stat(mergedfsPath); err != nil {
 			if !os.IsNotExist(err) {
-				log.G(ctx).WithError(err).Warnf("failed to stat %v", mergedfsPath)
-				return nil, nil, errdefs.ErrNotImplemented
+				return nil, nil, fmt.Errorf("failed to stat merged EROFS descriptor %s: %w", mergedfsPath, err)
 			}
 			if err := erofs.DumpVMDKDescriptorToFile(mergedfsPath, 0xfffffffe, devices); err != nil {
-				log.G(ctx).WithError(err).Warnf("failed to generate %v", mergedfsPath)
-				return nil, nil, errdefs.ErrNotImplemented
+				return nil, nil, fmt.Errorf("failed to generate merged EROFS descriptor %s: %w", mergedfsPath, err)
 			}
 		}
 		addDisks[0].source = mergedfsPath
@@ -193,11 +186,7 @@ func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, 
 }
 
 func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
-	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
-	// Keep disk ID reasonably short for logging and tracking
-	if len(disk) > 36 {
-		disk = disk[:36]
-	}
+	disk := truncateID(fmt.Sprintf("disk-%d", *disks), id)
 	// Check if mount should be read-only
 	readOnly := false
 	for _, opt := range mnt.Options {
@@ -283,68 +272,12 @@ func filterOptions(options []string) []string {
 	return filtered
 }
 
-// translateMountOptions translates standard mount options to virtiofs-compatible options.
-// Note: virtiofs is not currently implemented for QEMU (uses virtio-blk instead).
-// This function exists for potential future virtiofs support.
+// translateMountOptions will translate mount options when virtiofs is implemented.
+// TODO(virtiofs): Implement option translation when adding virtiofs support.
+// Current implementation uses virtio-blk, not virtiofs, so this function is not
+// exercised. When virtiofs is added, this should translate mount options appropriately.
 func translateMountOptions(ctx context.Context, options []string) []string {
-	var translated []string
-
-	// Map of mount options that are compatible with virtiofs
-	// or need translation
-	compatibleOptions := map[string]string{
-		"ro":       "ro",
-		"rw":       "rw",
-		"nodev":    "nodev",
-		"nosuid":   "nosuid",
-		"noexec":   "noexec",
-		"relatime": "relatime",
-		"noatime":  "noatime",
-	}
-
-	// Options that should be dropped (not supported by virtiofs)
-	droppedOptions := map[string]bool{
-		"rbind":       true,
-		"bind":        true,
-		"rprivate":    true,
-		"private":     true,
-		"rshared":     true,
-		"shared":      true,
-		"rslave":      true,
-		"slave":       true,
-		"remount":     true,
-		"strictatime": true,
-	}
-
-	for _, opt := range options {
-		// Check if it's a compatible option
-		if mappedOpt, ok := compatibleOptions[opt]; ok {
-			translated = append(translated, mappedOpt)
-			continue
-		}
-
-		// Check if it should be dropped
-		if droppedOptions[opt] {
-			log.G(ctx).WithField("option", opt).Debug("dropping incompatible virtiofs mount option")
-			continue
-		}
-
-		// For options with values (e.g., "uid=1000"), check the prefix
-		if strings.Contains(opt, "=") {
-			parts := strings.SplitN(opt, "=", 2)
-			switch parts[0] {
-			case "uid", "gid", "fmode", "dmode":
-				// These options might be supported, include them
-				translated = append(translated, opt)
-			default:
-				// Unknown option with value, log and skip
-				log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
-			}
-			continue
-		}
-
-		// Unknown option without value, log and skip
-		log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
-	}
-
-	return translated
+	// Pass through options unchanged for now
+	// AddFS() currently returns ErrNotImplemented, so this code path is not reached
+	return options
 }
