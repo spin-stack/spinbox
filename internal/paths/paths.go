@@ -1,89 +1,45 @@
 // Package paths provides standard filesystem paths used by qemubox.
-// All paths are now loaded from the centralized configuration file.
+// All path functions are pure functions that take configuration as a parameter,
+// making them easy to test and avoiding tight coupling to the config package.
 package paths
 
 import (
 	"os"
 	"path/filepath"
 
-	"github.com/containerd/log"
-
 	"github.com/aledbf/qemubox/containerd/internal/config"
 )
 
-// GetShareDir returns the qemubox share directory from configuration
-func GetShareDir() string {
-	cfg, err := config.Get()
-	if err != nil {
-		// This should never happen as config is loaded at startup
-		log.L.WithError(err).Error("Failed to get config for share_dir, using default /usr/share/qemubox")
-		return "/usr/share/qemubox"
-	}
-	return cfg.Paths.ShareDir
+// KernelPath returns the full path to the kernel binary based on the provided configuration
+func KernelPath(pathsCfg config.PathsConfig) string {
+	return filepath.Join(pathsCfg.ShareDir, "kernel", "qemubox-kernel-x86_64")
 }
 
-// GetStateDir returns the qemubox state directory from configuration
-func GetStateDir() string {
-	cfg, err := config.Get()
-	if err != nil {
-		log.L.WithError(err).Error("Failed to get config for state_dir, using default /var/lib/qemubox")
-		return "/var/lib/qemubox"
-	}
-	return cfg.Paths.StateDir
+// InitrdPath returns the full path to the initrd binary based on the provided configuration
+func InitrdPath(pathsCfg config.PathsConfig) string {
+	return filepath.Join(pathsCfg.ShareDir, "kernel", "qemubox-initrd")
 }
 
-// GetLogDir returns the qemubox log directory from configuration
-func GetLogDir() string {
-	cfg, err := config.Get()
-	if err != nil {
-		log.L.WithError(err).Error("Failed to get config for log_dir, using default /var/log/qemubox")
-		return "/var/log/qemubox"
-	}
-	return cfg.Paths.LogDir
-}
-
-// KernelPath returns the full path to the kernel binary
-func KernelPath() string {
-	return filepath.Join(GetShareDir(), "kernel", "qemubox-kernel-x86_64")
-}
-
-// InitrdPath returns the full path to the initrd binary
-func InitrdPath() string {
-	return filepath.Join(GetShareDir(), "kernel", "qemubox-initrd")
-}
-
-// QemuPath returns the full path to the qemu-system-x86_64 binary
-func QemuPath() string {
-	cfg, err := config.Get()
-	if err != nil {
-		log.L.WithError(err).Error("Failed to get config for qemu_path, using default /usr/bin/qemu-system-x86_64")
-		return "/usr/bin/qemu-system-x86_64"
-	}
-
+// QemuPath returns the full path to the qemu-system-x86_64 binary based on the provided configuration
+func QemuPath(pathsCfg config.PathsConfig) string {
 	// If explicitly configured, use that path
-	if cfg.Paths.QEMUPath != "" {
-		return cfg.Paths.QEMUPath
+	if pathsCfg.QEMUPath != "" {
+		return pathsCfg.QEMUPath
 	}
 
 	// Otherwise perform auto-discovery
-	return discoverQemuPath(cfg.Paths.ShareDir)
+	return discoverQemuPath(pathsCfg.ShareDir)
 }
 
-// QemuSharePath returns the path to QEMU's share directory containing BIOS files
-func QemuSharePath() string {
-	cfg, err := config.Get()
-	if err != nil {
-		log.L.WithError(err).Error("Failed to get config for qemu_share_path, using default /usr/share/qemu")
-		return "/usr/share/qemu"
-	}
-
+// QemuSharePath returns the path to QEMU's share directory containing BIOS files based on the provided configuration
+func QemuSharePath(pathsCfg config.PathsConfig) string {
 	// If explicitly configured, use that path
-	if cfg.Paths.QEMUSharePath != "" {
-		return cfg.Paths.QEMUSharePath
+	if pathsCfg.QEMUSharePath != "" {
+		return pathsCfg.QEMUSharePath
 	}
 
 	// Otherwise perform auto-discovery
-	return discoverQemuSharePath(cfg.Paths.ShareDir)
+	return discoverQemuSharePath(pathsCfg.ShareDir)
 }
 
 // discoverQemuPath attempts to find qemu-system-x86_64 binary
