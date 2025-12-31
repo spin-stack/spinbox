@@ -87,33 +87,40 @@ ctr run -t --rm \
 ## Architecture
 
 ```mermaid
-graph TB
-    subgraph "Host (Linux)"
-        containerd[containerd]
-        shim[containerd-shim-qemubox-v1]
-        cni[CNI Plugins<br/>bridge, firewall, IPAM]
-        tap[TAP device]
-        store[EROFS snapshots]
-        kernel[VM kernel]
-        initrd[VM initrd]
-        qemu[QEMU/KVM]
+graph LR
+    %% Host (Linux)
+    subgraph host ["**Host (Linux)**"]
+        direction TB
+        containerd:::hostproc
+        shim[containerd-shim-qemubox-v1]:::hostproc
+        cni[CNI Plugins<br/>bridge, firewall, IPAM]:::netdev
+        tap[TAP device]:::netdev
+        store[EROFS snapshots]:::block
+        kernel[VM kernel]:::hostvm
+        initrd[VM initrd]:::hostvm
+        qemu[QEMU/KVM]:::hypervisor
 
-        containerd -->|shim v2 ttrpc| shim
-        shim -->|"CNI setup (netns/tap/IPAM)"| cni
-        cni -->|create/attach| tap
-        shim -->|"spawn/config (kernel args, vsock CID)"| qemu
-        store -->|rootfs via virtio-blk| qemu
-        kernel -->|bzImage| qemu
-        initrd -->|initrd| qemu
+        containerd -- "shim v2 ttrpc" --> shim
+        shim -- "CNI setup
+        (netns/tap/IPAM)" --> cni
+        cni -- "create/attach" --> tap
+        shim -- "spawn/config
+        (kernel args, vsock CID)" --> qemu
+        store -- "rootfs via
+        virtio-blk" --> qemu
+        kernel -- "bzImage" --> qemu
+        initrd -- "initrd" --> qemu
         qemu -.->|virtio-net to TAP| tap
     end
 
-    subgraph "Linux VM"
-        vminitd[vminitd<br/>PID 1 / TTRPC]
-        systemsvc[system service]
-        bundlesvc[bundle service]
-        crun[crun<br/>OCI Runtime]
-        container[Container Process]
+    %% Linux VM
+    subgraph vm ["**Linux VM**"]
+        direction TB
+        vminitd[vminitd<br/>PID 1 / TTRPC]:::vmcore
+        systemsvc[system service]:::srv
+        bundlesvc[bundle service]:::srv
+        crun[crun<br/>OCI Runtime]:::runtime
+        container[Container Process]:::ctr
 
         vminitd --> systemsvc
         vminitd --> bundlesvc
@@ -121,15 +128,32 @@ graph TB
         crun --> container
     end
 
+    %% Connections between host and VM
     shim -.->|vsock ttrpc + stdio| vminitd
 
-    style containerd fill:#e1f5ff
-    style shim fill:#fff4e1
-    style cni fill:#e8f5e9
-    style qemu fill:#fce4ec
-    style vminitd fill:#f3e5f5
-    style crun fill:#fff9c4
-    style container fill:#ffebee
+    %% Styling with classDefs for consistency and clarity
+    classDef hostproc fill:#2962ff,stroke:#152f6b,stroke-width:2px,color:#fff
+    classDef netdev fill:#26a69a,stroke:#00695c,stroke-width:2px,color:#fff
+    classDef block fill:#ffee58,stroke:#666600,stroke-width:2px,color:#111
+    classDef hostvm fill:#ec407a,stroke:#880e4f,stroke-width:2px,color:#fff
+    classDef hypervisor fill:#6d4c41,stroke:#442b2d,stroke-width:2px,color:#fff
+    classDef vmcore fill:#8e24aa,stroke:#4a148c,stroke-width:2px,color:#fff
+    classDef srv fill:#80cbc4,stroke:#004d40,stroke-width:2px,color:#111
+    classDef runtime fill:#ffb300,stroke:#6d4c00,stroke-width:2px,color:#111
+    classDef ctr fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff
+
+    class containerd,shim hostproc
+    class cni,tap netdev
+    class store block
+    class kernel,initrd hostvm
+    class qemu hypervisor
+    class vminitd vmcore
+    class systemsvc,bundlesvc srv
+    class crun runtime
+    class container ctr
+
+    linkStyle 9 stroke-dasharray:4 4,stroke-width:2px,stroke:#6d4c41
+    linkStyle 8 stroke-width:2px,stroke:#00acc1,stroke-dasharray:3 6
 ```
 
 **Key components:**
