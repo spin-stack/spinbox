@@ -178,14 +178,14 @@ const formatCheck = "{{"
 
 // Pattern matchers for safe substitution (compiled once)
 var (
-	// Matches {{source N}} where N is a number
-	sourcePattern = regexp.MustCompile(`\{\{source\s+(\d+)\}\}`)
-	// Matches {{target N}} where N is a number
-	targetPattern = regexp.MustCompile(`\{\{target\s+(\d+)\}\}`)
-	// Matches {{mount N}} where N is a number
-	mountPattern = regexp.MustCompile(`\{\{mount\s+(\d+)\}\}`)
-	// Matches {{overlay N M}} where N and M are numbers
-	overlayPattern = regexp.MustCompile(`\{\{overlay\s+(\d+)\s+(\d+)\}\}`)
+	// Matches {{ source N }} where N is a number (whitespace flexible)
+	sourcePattern = regexp.MustCompile(`\{\{\s*source\s+(\d+)\s*\}\}`)
+	// Matches {{ target N }} where N is a number (whitespace flexible)
+	targetPattern = regexp.MustCompile(`\{\{\s*target\s+(\d+)\s*\}\}`)
+	// Matches {{ mount N }} where N is a number (whitespace flexible)
+	mountPattern = regexp.MustCompile(`\{\{\s*mount\s+(\d+)\s*\}\}`)
+	// Matches {{ overlay N M }} where N and M are numbers (whitespace flexible)
+	overlayPattern = regexp.MustCompile(`\{\{\s*overlay\s+(\d+)\s+(\d+)\s*\}\}`)
 )
 
 // formatString returns a function that performs safe string substitution.
