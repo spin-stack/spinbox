@@ -297,8 +297,12 @@ func (p *Init) SetExited(status int) {
 func (p *Init) setExited(status int) {
 	p.exited = time.Now()
 	p.status = status
-	_ = p.Platform.ShutdownConsole(context.Background(), p.console)
-	close(p.waitBlock)
+	if p.Platform != nil {
+		_ = p.Platform.ShutdownConsole(context.Background(), p.console)
+	}
+	if p.waitBlock != nil {
+		close(p.waitBlock)
+	}
 }
 
 // Delete the init process
@@ -318,6 +322,9 @@ func (p *Init) delete(ctx context.Context) error {
 		}
 	}
 	_ = waitTimeout(ctx, &p.wg, timeout)
+	if p.runtime == nil {
+		return errors.New("runtime not initialized")
+	}
 	err := p.runtime.Delete(ctx, p.id, nil)
 	// ignore errors if a runtime has already deleted the process
 	// but we still hold metadata and pipes
@@ -382,6 +389,9 @@ func (p *Init) Kill(ctx context.Context, signal uint32, all bool) error {
 }
 
 func (p *Init) kill(ctx context.Context, signal uint32, all bool) error {
+	if p.runtime == nil {
+		return errors.New("runtime not initialized")
+	}
 	err := p.runtime.Kill(ctx, p.id, int(signal), &runc.KillOpts{
 		All: all,
 	})
@@ -393,6 +403,9 @@ func (p *Init) KillAll(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.runtime == nil {
+		return errors.New("runtime not initialized")
+	}
 	err := p.runtime.Kill(ctx, p.id, int(unix.SIGKILL), &runc.KillOpts{
 		All: true,
 	})

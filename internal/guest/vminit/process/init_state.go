@@ -355,8 +355,10 @@ func (s *pausedState) Kill(ctx context.Context, sig uint32, all bool) error {
 func (s *pausedState) SetExited(status int) {
 	s.p.setExited(status)
 
-	if err := s.p.runtime.Resume(context.Background(), s.p.id); err != nil {
-		log.L.WithError(err).Error("resuming exited container from paused state")
+	if s.p.runtime != nil {
+		if err := s.p.runtime.Resume(context.Background(), s.p.id); err != nil {
+			log.L.WithError(err).Error("resuming exited container from paused state")
+		}
 	}
 
 	if err := s.transition(stateStopped); err != nil {
