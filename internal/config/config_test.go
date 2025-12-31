@@ -570,6 +570,9 @@ func TestResetForTesting(t *testing.T) {
 	// This test demonstrates that ResetForTesting allows testing different
 	// configurations in the same test run by resetting the global singleton state
 
+	// Reset any cached config from previous tests
+	ResetForTesting()
+
 	// Create first config file
 	dir1 := t.TempDir()
 	configFile1 := filepath.Join(dir1, "config.json")

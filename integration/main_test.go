@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && integration
 
 package integration
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -14,9 +15,14 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Package-level validation only
+	// Check all prerequisites before running any tests
 	if !haveKVM() {
 		log.Print("skipping integration tests: /dev/kvm not available")
+		os.Exit(0)
+	}
+
+	if !haveQEMU() {
+		log.Print("skipping integration tests: qemu-system-x86_64 not found")
 		os.Exit(0)
 	}
 
@@ -27,6 +33,18 @@ func TestMain(m *testing.M) {
 func haveKVM() bool {
 	_, err := os.Stat("/dev/kvm")
 	return err == nil
+}
+
+// haveQEMU checks if QEMU binary is available.
+func haveQEMU() bool {
+	// Check in standard PATH and qemubox share directory
+	if _, err := exec.LookPath("qemu-system-x86_64"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/usr/share/qemubox/bin/qemu-system-x86_64"); err == nil {
+		return true
+	}
+	return false
 }
 
 // setupTestPath adds the output directory to PATH for the test.
