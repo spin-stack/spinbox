@@ -40,7 +40,6 @@ package network
 
 import (
 	"context"
-	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -49,17 +48,6 @@ import (
 
 	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
 )
-
-// NetworkConfig describes the CNI configuration locations.
-type NetworkConfig struct {
-	// CNIConfDir is the directory containing CNI network configuration files.
-	// Default: /etc/cni/net.d
-	CNIConfDir string
-
-	// CNIBinDir is the directory containing CNI plugin binaries.
-	// Default: /opt/cni/bin
-	CNIBinDir string
-}
 
 // LoadNetworkConfig loads CNI network configuration using a three-tier fallback:
 //  1. Environment variables (QEMUBOX_CNI_CONF_DIR, QEMUBOX_CNI_BIN_DIR)
@@ -100,37 +88,6 @@ func LoadNetworkConfig() NetworkConfig {
 		CNIConfDir: "/etc/cni/net.d",
 		CNIBinDir:  "/opt/cni/bin",
 	}
-}
-
-// NetworkInfo holds internal network configuration
-type NetworkInfo struct {
-	TapName string `json:"tap_name"`
-	MAC     string `json:"mac"`
-	IP      net.IP `json:"ip"`
-	Netmask string `json:"netmask"`
-	Gateway net.IP `json:"gateway"`
-}
-
-// Environment represents a VM/container network environment
-type Environment struct {
-	// ID is the unique identifier (container ID or VM ID)
-	ID string
-
-	// NetworkInfo contains allocated network configuration
-	// Set after EnsureNetworkResources() succeeds
-	NetworkInfo *NetworkInfo
-}
-
-// NetworkManager defines the interface for network management operations
-type NetworkManager interface {
-	// Close stops the network manager and releases internal resources
-	Close() error
-
-	// EnsureNetworkResources allocates and configures network resources for an environment
-	EnsureNetworkResources(ctx context.Context, env *Environment) error
-
-	// ReleaseNetworkResources releases network resources for an environment
-	ReleaseNetworkResources(ctx context.Context, env *Environment) error
 }
 
 // setupInFlight tracks an in-progress CNI setup operation.
