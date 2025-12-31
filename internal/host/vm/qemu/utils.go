@@ -20,7 +20,37 @@ import (
 	"github.com/vishvananda/netns"
 )
 
+// tapOpenTimeout is the maximum time to wait for TAP device operations.
+// This prevents indefinite hangs if the TAP device is missing or the netns is stale.
+const tapOpenTimeout = 5 * time.Second
+
 func openTAPInNetNS(ctx context.Context, tapName, netnsPath string) (*os.File, error) {
+	// Add timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(ctx, tapOpenTimeout)
+	defer cancel()
+
+	type result struct {
+		file *os.File
+		err  error
+	}
+	done := make(chan result, 1)
+
+	go func() {
+		file, err := openTAPInNetNSInternal(ctx, tapName, netnsPath)
+		done <- result{file, err}
+	}()
+
+	select {
+	case r := <-done:
+		return r.file, r.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("timeout opening TAP %s in netns %s: %w", tapName, netnsPath, ctx.Err())
+	}
+}
+
+// openTAPInNetNSInternal performs the actual TAP device opening.
+// Separated to allow timeout wrapper in openTAPInNetNS.
+func openTAPInNetNSInternal(ctx context.Context, tapName, netnsPath string) (*os.File, error) {
 	targetNS, err := netns.GetFromPath(netnsPath)
 	if err != nil {
 		return nil, fmt.Errorf("get target netns: %w", err)
