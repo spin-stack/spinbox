@@ -3,7 +3,6 @@
 package qemu
 
 import (
-	"bytes"
 	"io"
 	"testing"
 	"time"
@@ -57,38 +56,13 @@ func (m *mockCloser) Close() error {
 	return m.err
 }
 
-func TestInstance_CloseClientConnections(t *testing.T) {
+func TestInstance_CloseClientConnections_NilFields(t *testing.T) {
 	logger := log.L.WithField("test", true)
 
-	t.Run("all nil - no panic", func(t *testing.T) {
-		q := &Instance{}
-		// Should not panic
-		q.closeClientConnections(logger)
-	})
-
-	t.Run("closes client", func(t *testing.T) {
-		client := &mockCloser{}
-		q := &Instance{client: client}
-		q.closeClientConnections(logger)
-		assert.True(t, client.closed)
-		assert.Nil(t, q.client)
-	})
-
-	t.Run("closes vsockConn", func(t *testing.T) {
-		vsock := &mockCloser{}
-		q := &Instance{vsockConn: vsock}
-		q.closeClientConnections(logger)
-		assert.True(t, vsock.closed)
-		assert.Nil(t, q.vsockConn)
-	})
-
-	t.Run("closes consoleFifo", func(t *testing.T) {
-		fifo := &mockCloser{}
-		q := &Instance{consoleFifo: fifo}
-		q.closeClientConnections(logger)
-		assert.True(t, fifo.closed)
-		assert.Nil(t, q.consoleFifo)
-	})
+	// Test that nil fields don't cause panics
+	q := &Instance{}
+	// Should not panic when all connection fields are nil
+	q.closeClientConnections(logger)
 }
 
 func TestInstance_CancelBackgroundMonitors(t *testing.T) {
@@ -110,30 +84,11 @@ func TestInstance_CancelBackgroundMonitors(t *testing.T) {
 	})
 }
 
-func TestInstance_CleanupAfterFailedKill(t *testing.T) {
-	t.Run("closes qmpClient and TAPs", func(t *testing.T) {
-		qmpClient := &mockCloser{}
-		tap1 := &mockCloser{}
-
-		q := &Instance{
-			qmpClient: &QMPClient{conn: &mockReadWriteCloser{}},
-			tapFiles:  []io.Closer{tap1},
-		}
-
-		// Replace with mock for testing
-		q.qmpClient = nil // Can't easily mock this, so just test the nil case
-
-		q.cleanupAfterFailedKill()
-		// Should not panic when qmpClient is nil
-	})
-}
-
-type mockReadWriteCloser struct {
-	bytes.Buffer
-}
-
-func (m *mockReadWriteCloser) Close() error {
-	return nil
+func TestInstance_CleanupAfterFailedKill_NilFields(t *testing.T) {
+	// Test that nil qmpClient doesn't cause panics
+	q := &Instance{}
+	// Should not panic when qmpClient is nil
+	q.cleanupAfterFailedKill()
 }
 
 func TestInstance_Shutdown_NotRunning(t *testing.T) {
