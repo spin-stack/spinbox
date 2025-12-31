@@ -994,49 +994,10 @@ func closeAndLog(logger *log.Entry, name string, closer io.Closer) {
 	}
 }
 
-func (q *Instance) cleanupResources(logger *log.Entry) {
-	// Close QMP client
-	closeAndLog(logger, "qmp", q.qmpClient)
-	q.qmpClient = nil
-
-	// Close console file (this will also stop the FIFO streaming goroutine)
-	closeAndLog(logger, "console", q.consoleFile)
-	q.consoleFile = nil
-
-	// Remove FIFO pipe
-	if q.consoleFifoPath != "" {
-		if err := os.Remove(q.consoleFifoPath); err != nil && !os.IsNotExist(err) {
-			logger.WithError(err).Debug("qemu: error removing console FIFO")
-		}
-	}
-
-	// Close TAP file descriptors
-	q.closeTAPFiles()
-}
-
-// Shutdown gracefully shuts down the VM
-func (q *Instance) Shutdown(ctx context.Context) error {
-	logger := log.G(ctx)
-	logger.Info("qemu: Shutdown() called, initiating VM shutdown")
-
-	// Mark VM as shutting down (atomic flag prevents re-entry)
-	if !q.compareAndSwapState(vmStateRunning, vmStateShutdown) {
-		currentState := q.getState()
-		logger.WithField("state", currentState).Debug("qemu: VM not in running state, shutdown may already be in progress")
-		// Not an error - idempotent shutdown
-		return nil
-	}
-
-	// Cancel background monitors (VM status, guest RPC)
-	if q.runCancel != nil {
-		logger.Debug("qemu: cancelling background monitors")
-		q.runCancel()
-	}
-
-	// Hold mutex for entire shutdown to prevent races
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
+// closeClientConnections closes all client connections to the VM.
+// This includes TTRPC client, vsock connection, and console FIFO.
+// Must be called with q.mu held.
+func (q *Instance) closeClientConnections(logger *log.Entry) {
 	// Close TTRPC client to stop guest communication
 	if q.client != nil {
 		logger.Debug("qemu: closing TTRPC client")
@@ -1058,7 +1019,62 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		closeAndLog(logger, "console-fifo", q.consoleFifo)
 		q.consoleFifo = nil
 	}
+}
 
+// cancelBackgroundMonitors cancels all background monitoring goroutines.
+// This includes VM status monitors and guest RPC handlers.
+func (q *Instance) cancelBackgroundMonitors(logger *log.Entry) {
+	if q.runCancel != nil {
+		logger.Debug("qemu: cancelling background monitors")
+		q.runCancel()
+	}
+}
+
+func (q *Instance) cleanupResources(logger *log.Entry) {
+	// Close QMP client
+	closeAndLog(logger, "qmp", q.qmpClient)
+	q.qmpClient = nil
+
+	// Close console file (this will also stop the FIFO streaming goroutine)
+	closeAndLog(logger, "console", q.consoleFile)
+	q.consoleFile = nil
+
+	// Remove FIFO pipe
+	if q.consoleFifoPath != "" {
+		if err := os.Remove(q.consoleFifoPath); err != nil && !os.IsNotExist(err) {
+			logger.WithError(err).Debug("qemu: error removing console FIFO")
+		}
+	}
+
+	// Close TAP file descriptors
+	q.closeTAPFiles()
+}
+
+// Shutdown gracefully shuts down the VM following a multi-phase process:
+// 1. State transition and background monitor cancellation
+// 2. Client connection closure (TTRPC, vsock, console)
+// 3. Guest OS shutdown via QMP (CTRL+ALT+DELETE or ACPI)
+// 4. QEMU process termination
+// 5. Resource cleanup (QMP, console file, TAP FDs, FIFO)
+func (q *Instance) Shutdown(ctx context.Context) error {
+	logger := log.G(ctx)
+	logger.Info("qemu: Shutdown() called, initiating VM shutdown")
+
+	// Phase 1: State transition check (idempotent - prevents re-entry)
+	if !q.compareAndSwapState(vmStateRunning, vmStateShutdown) {
+		currentState := q.getState()
+		logger.WithField("state", currentState).Debug("qemu: VM not in running state, shutdown may already be in progress")
+		return nil // Not an error - idempotent shutdown
+	}
+
+	// Phase 1: Cancel background monitors before acquiring lock
+	q.cancelBackgroundMonitors(logger)
+
+	// Phase 2-5: Acquire lock for remainder of shutdown sequence
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.closeClientConnections(logger)
 	q.shutdownGuest(ctx, logger)
 
 	if err := q.stopQemuProcess(ctx, logger); err != nil {
