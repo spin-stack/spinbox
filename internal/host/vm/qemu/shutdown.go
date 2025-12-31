@@ -12,6 +12,26 @@ import (
 	"github.com/containerd/log"
 )
 
+// Shutdown timing constants.
+// These control the timeout durations during the VM shutdown sequence.
+const (
+	// shutdownQMPTimeout is the timeout for QMP commands during shutdown.
+	shutdownQMPTimeout = 2 * time.Second
+
+	// shutdownACPIWait is how long to wait for guest to receive ACPI signal
+	// before sending the quit command.
+	shutdownACPIWait = 500 * time.Millisecond
+
+	// shutdownQuitTimeout is the timeout for the QMP quit command.
+	shutdownQuitTimeout = 1 * time.Second
+
+	// shutdownQuitWait is how long to wait for QEMU to exit after quit command.
+	shutdownQuitWait = 2 * time.Second
+
+	// shutdownKillWait is how long to wait for process to exit after SIGKILL.
+	shutdownKillWait = 2 * time.Second
+)
+
 func (q *Instance) shutdownGuest(ctx context.Context, logger *log.Entry) {
 	// Send graceful shutdown to guest OS
 	// Try CTRL+ALT+DELETE first (more reliable for some distributions), then ACPI powerdown
@@ -19,7 +39,7 @@ func (q *Instance) shutdownGuest(ctx context.Context, logger *log.Entry) {
 	// but we still need time to properly shut down the VM.
 	if q.qmpClient != nil {
 		logger.Info("qemu: sending CTRL+ALT+DELETE via QMP")
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownQMPTimeout)
 		if err := q.qmpClient.SendCtrlAltDelete(shutdownCtx); err != nil {
 			logger.WithError(err).Debug("qemu: failed to send CTRL+ALT+DELETE, trying ACPI powerdown")
 			// Fall back to ACPI powerdown
@@ -47,21 +67,21 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 		return nil
 	}
 
-	// Wait up to 500ms for guest to receive ACPI signal
+	// Wait for guest to receive ACPI signal
 	select {
 	case exitErr := <-q.waitCh:
 		// Unexpected early exit - shouldn't happen but handle it
 		logger.WithError(exitErr).Debug("qemu: process exited during ACPI wait")
 		q.cmd = nil
 		return nil
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(shutdownACPIWait):
 		// Expected - continue to quit command
 	}
 
 	// Send quit command to tell QEMU to exit
 	if q.qmpClient != nil {
 		logger.Debug("qemu: sending quit command to QEMU")
-		quitCtx, quitCancel := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Second)
+		quitCtx, quitCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownQuitTimeout)
 		if err := q.qmpClient.Quit(quitCtx); err != nil {
 			logger.WithError(err).Debug("qemu: failed to send quit command")
 			quitCancel()
@@ -78,7 +98,7 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 				}
 				q.cmd = nil
 				return nil
-			case <-time.After(2 * time.Second):
+			case <-time.After(shutdownQuitWait):
 				// Quit didn't work - fall through to SIGKILL
 				logger.Warning("qemu: quit command timeout, sending SIGKILL")
 			}
@@ -101,7 +121,7 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 		if exitErr != nil {
 			logger.WithError(exitErr).Debug("qemu: process exited after SIGKILL")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(shutdownKillWait):
 		logger.Error("qemu: process did not exit after SIGKILL")
 		q.cmd = nil
 		q.cleanupAfterFailedKill()
