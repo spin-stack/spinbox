@@ -141,7 +141,7 @@ func (nm *cniNetworkManager) performCNISetup(ctx context.Context, containerID st
 			return nil, fmt.Errorf("setup CNI network (veth conflict - orphaned resources from previous run?): %w", err)
 		}
 
-		return nil, fmt.Errorf("setup CNI network: %w", err)
+		return nil, fmt.Errorf("setup CNI network for %s: %w", containerID, err)
 	}
 
 	return result, nil
