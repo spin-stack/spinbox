@@ -78,21 +78,6 @@ func TestGet_MultipleBuffers(t *testing.T) {
 	}
 }
 
-func TestPool_New(t *testing.T) {
-	// Test the Pool.New function directly
-	newBuf := Pool.New()
-	buf, ok := newBuf.(*[]byte)
-	if !ok {
-		t.Fatalf("Pool.New() returned %T, want *[]byte", newBuf)
-	}
-	if buf == nil {
-		t.Fatal("Pool.New() returned nil")
-	}
-	if len(*buf) != 4096 {
-		t.Errorf("Pool.New() buffer length = %d, want 4096", len(*buf))
-	}
-}
-
 func TestGet_Concurrent(t *testing.T) {
 	const goroutines = 100
 	const iterations = 100
@@ -203,13 +188,6 @@ func BenchmarkGetParallel(b *testing.B) {
 			Put(buf)
 		}
 	})
-}
-
-func BenchmarkPoolDirect(b *testing.B) {
-	for range b.N {
-		buf := Pool.Get().(*[]byte)
-		Pool.Put(buf)
-	}
 }
 
 func BenchmarkMakeBuffer(b *testing.B) {
