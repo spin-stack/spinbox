@@ -60,5 +60,5 @@ func (s *deletedState) Exec(ctx context.Context, path string, r *ExecConfig) (Pr
 }
 
 func (s *deletedState) Status(ctx context.Context) (string, error) {
-	return stateStopped, nil
+	return stateDeleted, nil
 }

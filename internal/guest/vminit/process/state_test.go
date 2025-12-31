@@ -306,20 +306,22 @@ func TestStateNameFunction(t *testing.T) {
 	}
 }
 
-// TestStateTransitionPanic tests that invalid transitions cause panics
-func TestStateTransitionPanic(t *testing.T) {
-	// SetExited with invalid state transition should panic
-	s := &createdState{p: &Init{}}
-	s.p.initState = &deletedState{} // Invalid: can't transition from deleted
+// TestDeletedStateSetExitedNoOp tests that SetExited on deleted state is a no-op
+func TestDeletedStateSetExitedNoOp(t *testing.T) {
+	// SetExited on deleted state should be a no-op (not panic)
+	state := &deletedState{}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic from invalid state transition in SetExited")
-		}
-	}()
+	// Should not panic
+	state.SetExited(0)
 
-	// This should attempt to transition from deleted → stopped, which panics
-	s.p.initState.SetExited(0)
+	// Status should still be deleted
+	status, err := state.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() returned error: %v", err)
+	}
+	if status != stateDeleted {
+		t.Errorf("Expected status %s, got %s", stateDeleted, status)
+	}
 }
 
 // TestStatusMethod tests that Status returns correct state name
