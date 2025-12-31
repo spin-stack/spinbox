@@ -18,21 +18,21 @@ type mockCPUHotplugger struct {
 	cpus          []vm.CPUInfo
 	hotplugErr    error
 	unplugErr     error
-	queryCalls    int
-	hotplugCalls  int
-	unplugCalls   int
-	lastHotplugID int
-	lastUnplugID  int
+	queryCalls    atomic.Int32
+	hotplugCalls  atomic.Int32
+	unplugCalls   atomic.Int32
+	lastHotplugID atomic.Int32
+	lastUnplugID  atomic.Int32
 }
 
 func (m *mockCPUHotplugger) QueryCPUs(_ context.Context) ([]vm.CPUInfo, error) {
-	m.queryCalls++
+	m.queryCalls.Add(1)
 	return m.cpus, nil
 }
 
 func (m *mockCPUHotplugger) HotplugCPU(_ context.Context, cpuID int) error {
-	m.hotplugCalls++
-	m.lastHotplugID = cpuID
+	m.hotplugCalls.Add(1)
+	m.lastHotplugID.Store(int32(cpuID))
 	if m.hotplugErr != nil {
 		return m.hotplugErr
 	}
@@ -41,8 +41,8 @@ func (m *mockCPUHotplugger) HotplugCPU(_ context.Context, cpuID int) error {
 }
 
 func (m *mockCPUHotplugger) UnplugCPU(_ context.Context, cpuID int) error {
-	m.unplugCalls++
-	m.lastUnplugID = cpuID
+	m.unplugCalls.Add(1)
+	m.lastUnplugID.Store(int32(cpuID))
 	if m.unplugErr != nil {
 		return m.unplugErr
 	}
@@ -135,7 +135,7 @@ func TestController_StartStop(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Should have queried CPUs at least once
-	assert.GreaterOrEqual(t, mock.queryCalls, 1)
+	assert.GreaterOrEqual(t, mock.queryCalls.Load(), int32(1))
 
 	// Stop the controller
 	ctrl.Stop()
@@ -235,8 +235,8 @@ func TestController_ScaleUp(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, 2, ctrl.currentCPUs)
-		assert.Equal(t, 1, mock.hotplugCalls)
-		assert.Equal(t, 1, mock.lastHotplugID) // Should add CPU 1 (0 already exists)
+		assert.Equal(t, int32(1), mock.hotplugCalls.Load())
+		assert.Equal(t, int32(1), mock.lastHotplugID.Load()) // Should add CPU 1 (0 already exists)
 		assert.False(t, ctrl.lastScaleUp.IsZero())
 	})
 
@@ -312,8 +312,8 @@ func TestController_ScaleDown(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, 1, ctrl.currentCPUs)
-		assert.Equal(t, 1, mock.unplugCalls)
-		assert.Equal(t, 1, mock.lastUnplugID) // Should remove CPU 1 (never remove CPU 0)
+		assert.Equal(t, int32(1), mock.unplugCalls.Load())
+		assert.Equal(t, int32(1), mock.lastUnplugID.Load()) // Should remove CPU 1 (never remove CPU 0)
 		assert.False(t, ctrl.lastScaleDown.IsZero())
 	})
 
@@ -335,7 +335,7 @@ func TestController_ScaleDown(t *testing.T) {
 		err := ctrl.scaleDown(ctx, 0)
 
 		require.NoError(t, err)
-		assert.Equal(t, 0, mock.unplugCalls) // Should not attempt to unplug CPU 0
+		assert.Equal(t, int32(0), mock.unplugCalls.Load()) // Should not attempt to unplug CPU 0
 	})
 
 	t.Run("continues on unplug error", func(t *testing.T) {
@@ -357,7 +357,7 @@ func TestController_ScaleDown(t *testing.T) {
 		err := ctrl.scaleDown(ctx, 1)
 
 		require.NoError(t, err) // Should not fail (best-effort)
-		assert.Equal(t, 2, mock.unplugCalls)
+		assert.Equal(t, int32(2), mock.unplugCalls.Load())
 	})
 
 	t.Run("calls offliner callback", func(t *testing.T) {
@@ -664,7 +664,7 @@ func TestController_CheckAndAdjust(t *testing.T) {
 		err = ctrl.checkAndAdjust(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, 1, ctrl.consecutiveHighUsage)
-		assert.Equal(t, 0, mock.hotplugCalls) // Should not scale yet
+		assert.Equal(t, int32(0), mock.hotplugCalls.Load()) // Should not scale yet
 
 		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
 
@@ -672,14 +672,14 @@ func TestController_CheckAndAdjust(t *testing.T) {
 		err = ctrl.checkAndAdjust(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, 2, ctrl.consecutiveHighUsage)
-		assert.Equal(t, 0, mock.hotplugCalls) // Still not enough
+		assert.Equal(t, int32(0), mock.hotplugCalls.Load()) // Still not enough
 
 		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
 
 		// Fourth call: Third high usage reading - now should scale
 		err = ctrl.checkAndAdjust(ctx)
 		require.NoError(t, err)
-		assert.Equal(t, 1, mock.hotplugCalls) // Should have scaled up now
+		assert.Equal(t, int32(1), mock.hotplugCalls.Load()) // Should have scaled up now
 	})
 
 	t.Run("respects scale down cooldown", func(t *testing.T) {
@@ -720,7 +720,7 @@ func TestController_CheckAndAdjust(t *testing.T) {
 		err := ctrl.checkAndAdjust(ctx)
 
 		require.NoError(t, err)
-		assert.Equal(t, 0, mock.unplugCalls) // Should not scale down due to cooldown
+		assert.Equal(t, int32(0), mock.unplugCalls.Load()) // Should not scale down due to cooldown
 	})
 }
 
