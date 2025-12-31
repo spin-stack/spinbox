@@ -53,9 +53,18 @@ createType="%s"
 	for _, d := range devices {
 		fi, err := os.Stat(d)
 		if err != nil {
-			return err
+			if os.IsNotExist(err) {
+				return fmt.Errorf("device %q does not exist", d)
+			}
+			return fmt.Errorf("failed to stat device %q: %w", d, err)
+		}
+		if fi.Size() == 0 {
+			return fmt.Errorf("device %q has zero size", d)
 		}
 		sectors := uint64(fi.Size()) >> 9
+		if sectors == 0 {
+			return fmt.Errorf("device %q is too small (less than 512 bytes)", d)
+		}
 		err = vmdkDescAddExtent(w, sectors, d, 0)
 		if err != nil {
 			return err
