@@ -251,60 +251,317 @@ func TestGet_Singleton(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidThresholds(t *testing.T) {
+func TestValidate_Comprehensive(t *testing.T) {
+	// Create a valid base config for testing
+	validConfig := func() *Config {
+		cfg := DefaultConfig()
+		// Ensure paths exist for validation
+		tmpDir := t.TempDir()
+		shareDir := filepath.Join(tmpDir, "share")
+		kernelDir := filepath.Join(shareDir, "kernel")
+		stateDir := filepath.Join(tmpDir, "state")
+		logDir := filepath.Join(tmpDir, "log")
+
+		if err := os.MkdirAll(kernelDir, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(stateDir, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(logDir, 0750); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create dummy kernel and initrd
+		kernelPath := filepath.Join(kernelDir, "qemubox-kernel-x86_64")
+		initrdPath := filepath.Join(kernelDir, "qemubox-initrd")
+		if err := os.WriteFile(kernelPath, []byte("dummy"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(initrdPath, []byte("dummy"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg.Paths.ShareDir = shareDir
+		cfg.Paths.StateDir = stateDir
+		cfg.Paths.LogDir = logDir
+
+		return cfg
+	}
+
 	tests := []struct {
 		name      string
 		setupFunc func(*Config)
+		wantErr   bool
 	}{
+		// CPU Hotplug validation
 		{
-			name: "CPU scale_up_threshold too high",
+			name:    "CPU scale_up_threshold too high",
+			wantErr: true,
 			setupFunc: func(c *Config) {
 				c.CPUHotplug.ScaleUpThreshold = 150.0
 			},
 		},
 		{
-			name: "CPU scale_up_threshold too low",
+			name:    "CPU scale_up_threshold too low",
+			wantErr: true,
 			setupFunc: func(c *Config) {
 				c.CPUHotplug.ScaleUpThreshold = 0
 			},
 		},
 		{
-			name: "Memory scale_down_threshold too high",
+			name:    "CPU scale_down_threshold too high",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleDownThreshold = 101.0
+			},
+		},
+		{
+			name:    "CPU scale_down_threshold negative",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleDownThreshold = -10.0
+			},
+		},
+		{
+			name:    "CPU throttle_limit negative",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleUpThrottleLimit = -5.0
+			},
+		},
+		{
+			name:    "CPU throttle_limit too high",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleUpThrottleLimit = 150.0
+			},
+		},
+		{
+			name:    "CPU invalid monitor interval",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.MonitorInterval = "not-a-duration"
+			},
+		},
+		{
+			name:    "CPU invalid scale_up_cooldown",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleUpCooldown = "5x"
+			},
+		},
+		{
+			name:    "CPU invalid scale_down_cooldown",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleDownCooldown = "invalid"
+			},
+		},
+		{
+			name:    "CPU zero scale_up_stability",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleUpStability = 0
+			},
+		},
+		{
+			name:    "CPU negative scale_up_stability",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleUpStability = -1
+			},
+		},
+		{
+			name:    "CPU zero scale_down_stability",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleDownStability = 0
+			},
+		},
+
+		// Memory Hotplug validation
+		{
+			name:    "Memory scale_up_threshold too high",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.ScaleUpThreshold = 105.0
+			},
+		},
+		{
+			name:    "Memory scale_up_threshold zero",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.ScaleUpThreshold = 0
+			},
+		},
+		{
+			name:    "Memory scale_down_threshold too high",
+			wantErr: true,
 			setupFunc: func(c *Config) {
 				c.MemHotplug.ScaleDownThreshold = 101.0
 			},
 		},
 		{
-			name: "Invalid monitor interval",
+			name:    "Memory scale_down_threshold negative",
+			wantErr: true,
 			setupFunc: func(c *Config) {
-				c.CPUHotplug.MonitorInterval = "invalid"
+				c.MemHotplug.ScaleDownThreshold = -20.0
 			},
 		},
 		{
-			name: "Non-aligned increment size",
+			name:    "Memory invalid monitor interval",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.MonitorInterval = "bad-format"
+			},
+		},
+		{
+			name:    "Memory invalid scale_up_cooldown",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.ScaleUpCooldown = "10seconds"
+			},
+		},
+		{
+			name:    "Memory invalid scale_down_cooldown",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.ScaleDownCooldown = "1 minute"
+			},
+		},
+		{
+			name:    "Memory non-aligned increment size",
+			wantErr: true,
 			setupFunc: func(c *Config) {
 				c.MemHotplug.IncrementSizeMB = 100 // Not 128-aligned
 			},
 		},
 		{
-			name: "Zero stability counter",
+			name:    "Memory zero increment size",
+			wantErr: true,
 			setupFunc: func(c *Config) {
-				c.CPUHotplug.ScaleUpStability = 0
+				c.MemHotplug.IncrementSizeMB = 0
+			},
+		},
+		{
+			name:    "Memory negative increment size",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.IncrementSizeMB = -128
+			},
+		},
+		{
+			name:    "Memory zero OOM safety margin",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.OOMSafetyMarginMB = 0
+			},
+		},
+		{
+			name:    "Memory negative OOM safety margin",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.OOMSafetyMarginMB = -64
+			},
+		},
+		{
+			name:    "Memory zero scale_up_stability",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.ScaleUpStability = 0
+			},
+		},
+		{
+			name:    "Memory zero scale_down_stability",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.ScaleDownStability = 0
+			},
+		},
+
+		// Runtime validation
+		{
+			name:    "Invalid VMM type",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.Runtime.VMM = "firecracker"
+			},
+		},
+		{
+			name:    "Empty VMM type",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.Runtime.VMM = ""
+			},
+		},
+
+		// Paths validation
+		{
+			name:    "Empty share_dir",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.Paths.ShareDir = ""
+			},
+		},
+		{
+			name:    "Empty state_dir",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.Paths.StateDir = ""
+			},
+		},
+		{
+			name:    "Empty log_dir",
+			wantErr: true,
+			setupFunc: func(c *Config) {
+				c.Paths.LogDir = ""
+			},
+		},
+
+		// Valid configurations (should not error)
+		{
+			name:    "Valid default config",
+			wantErr: false,
+			setupFunc: func(c *Config) {
+				// No changes - use valid config as-is
+			},
+		},
+		{
+			name:    "Valid edge case - thresholds at boundaries",
+			wantErr: false,
+			setupFunc: func(c *Config) {
+				c.CPUHotplug.ScaleUpThreshold = 100.0
+				c.CPUHotplug.ScaleDownThreshold = 0.1
+				c.MemHotplug.ScaleUpThreshold = 100.0
+				c.MemHotplug.ScaleDownThreshold = 0.1
+			},
+		},
+		{
+			name:    "Valid 128MB-aligned increment",
+			wantErr: false,
+			setupFunc: func(c *Config) {
+				c.MemHotplug.IncrementSizeMB = 256
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultConfig()
+			cfg := validConfig()
 			tt.setupFunc(cfg)
 
 			err := cfg.Validate()
-			if err == nil {
-				t.Fatalf("expected validation error for %s", tt.name)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected validation error for %s, got nil", tt.name)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected no error for %s, got: %v", tt.name, err)
 			}
 
-			t.Logf("Error message: %s", err)
+			if err != nil {
+				t.Logf("Error message: %s", err)
+			}
 		})
 	}
 }
