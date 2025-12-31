@@ -306,7 +306,14 @@ func (p *Init) Delete(ctx context.Context) error {
 }
 
 func (p *Init) delete(ctx context.Context) error {
-	_ = waitTimeout(ctx, &p.wg, 2*time.Second)
+	// Use the minimum of default timeout and context deadline
+	timeout := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	_ = waitTimeout(ctx, &p.wg, timeout)
 	err := p.runtime.Delete(ctx, p.id, nil)
 	// ignore errors if a runtime has already deleted the process
 	// but we still hold metadata and pipes
