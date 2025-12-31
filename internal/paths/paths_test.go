@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/aledbf/qemubox/containerd/internal/config"
 )
 
 func TestFileExists_ResolvesSymlinks(t *testing.T) {
@@ -136,5 +138,193 @@ func TestDirExists_SymlinkToFile(t *testing.T) {
 	// dirExists should return false because target is a file, not a directory
 	if dirExists(symlinkPath) {
 		t.Error("dirExists should return false for symlink pointing to a file")
+	}
+}
+
+// Tests for path functions
+
+func TestKernelPath(t *testing.T) {
+	cfg := config.PathsConfig{
+		ShareDir: "/usr/share/qemubox",
+	}
+
+	got := KernelPath(cfg)
+	want := "/usr/share/qemubox/kernel/qemubox-kernel-x86_64"
+
+	if got != want {
+		t.Errorf("KernelPath() = %q, want %q", got, want)
+	}
+}
+
+func TestInitrdPath(t *testing.T) {
+	cfg := config.PathsConfig{
+		ShareDir: "/usr/share/qemubox",
+	}
+
+	got := InitrdPath(cfg)
+	want := "/usr/share/qemubox/kernel/qemubox-initrd"
+
+	if got != want {
+		t.Errorf("InitrdPath() = %q, want %q", got, want)
+	}
+}
+
+func TestQemuPath_ExplicitConfig(t *testing.T) {
+	cfg := config.PathsConfig{
+		ShareDir: "/usr/share/qemubox",
+		QEMUPath: "/custom/path/qemu-system-x86_64",
+	}
+
+	got := QemuPath(cfg)
+	want := "/custom/path/qemu-system-x86_64"
+
+	if got != want {
+		t.Errorf("QemuPath() with explicit config = %q, want %q", got, want)
+	}
+}
+
+func TestQemuSharePath_ExplicitConfig(t *testing.T) {
+	cfg := config.PathsConfig{
+		ShareDir:      "/usr/share/qemubox",
+		QEMUSharePath: "/custom/share/qemu",
+	}
+
+	got := QemuSharePath(cfg)
+	want := "/custom/share/qemu"
+
+	if got != want {
+		t.Errorf("QemuSharePath() with explicit config = %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverQemuPath_FindsInShareDir(t *testing.T) {
+	shareDir := t.TempDir()
+
+	// Create qemu binary in share dir
+	binDir := filepath.Join(shareDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	qemuPath := filepath.Join(binDir, "qemu-system-x86_64")
+	if err := os.WriteFile(qemuPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := discoverQemuPath(shareDir)
+	if got != qemuPath {
+		t.Errorf("discoverQemuPath() = %q, want %q", got, qemuPath)
+	}
+}
+
+func TestDiscoverQemuPath_FallsBackToDefault(t *testing.T) {
+	// Use a temp dir with no qemu binary
+	shareDir := t.TempDir()
+
+	got := discoverQemuPath(shareDir)
+	want := "/usr/bin/qemu-system-x86_64"
+
+	if got != want {
+		t.Errorf("discoverQemuPath() fallback = %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverQemuSharePath_FindsInShareDir(t *testing.T) {
+	shareDir := t.TempDir()
+
+	// Create qemu share directory
+	qemuShareDir := filepath.Join(shareDir, "qemu")
+	if err := os.MkdirAll(qemuShareDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := discoverQemuSharePath(shareDir)
+	if got != qemuShareDir {
+		t.Errorf("discoverQemuSharePath() = %q, want %q", got, qemuShareDir)
+	}
+}
+
+func TestDiscoverQemuSharePath_FallsBackToDefault(t *testing.T) {
+	// Use a temp dir with no qemu share directory
+	shareDir := t.TempDir()
+
+	got := discoverQemuSharePath(shareDir)
+	want := "/usr/share/qemu"
+
+	if got != want {
+		t.Errorf("discoverQemuSharePath() fallback = %q, want %q", got, want)
+	}
+}
+
+func TestQemuPath_Discovery(t *testing.T) {
+	shareDir := t.TempDir()
+
+	// Create qemu binary in share dir
+	binDir := filepath.Join(shareDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	qemuPath := filepath.Join(binDir, "qemu-system-x86_64")
+	if err := os.WriteFile(qemuPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.PathsConfig{
+		ShareDir: shareDir,
+		// QEMUPath not set - should trigger discovery
+	}
+
+	got := QemuPath(cfg)
+	if got != qemuPath {
+		t.Errorf("QemuPath() with discovery = %q, want %q", got, qemuPath)
+	}
+}
+
+func TestQemuSharePath_Discovery(t *testing.T) {
+	shareDir := t.TempDir()
+
+	// Create qemu share directory
+	qemuShareDir := filepath.Join(shareDir, "qemu")
+	if err := os.MkdirAll(qemuShareDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.PathsConfig{
+		ShareDir: shareDir,
+		// QEMUSharePath not set - should trigger discovery
+	}
+
+	got := QemuSharePath(cfg)
+	if got != qemuShareDir {
+		t.Errorf("QemuSharePath() with discovery = %q, want %q", got, qemuShareDir)
+	}
+}
+
+func TestDiscoverQemuPath_SymlinkToQemu(t *testing.T) {
+	shareDir := t.TempDir()
+
+	// Create a real qemu binary somewhere else
+	realBinDir := filepath.Join(shareDir, "real-bin")
+	if err := os.MkdirAll(realBinDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	realQemuPath := filepath.Join(realBinDir, "qemu-system-x86_64")
+	if err := os.WriteFile(realQemuPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create symlink in expected location
+	binDir := filepath.Join(shareDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(binDir, "qemu-system-x86_64")
+	if err := os.Symlink(realQemuPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	got := discoverQemuPath(shareDir)
+	// Should find the symlink location (which resolves to the real binary)
+	if got != symlinkPath {
+		t.Errorf("discoverQemuPath() with symlink = %q, want %q", got, symlinkPath)
 	}
 }
