@@ -156,6 +156,8 @@ for tf in "${MASK_TMPFILES[@]}"; do mask_tmpfiles "$tf"; done
 log "Disabling Docker and container‑d services (they will not start automatically)…"
 systemctl disable docker.service   || true
 systemctl disable containerd.service || true
+rm -f /etc/systemd/system/multi-user.target.wants/docker.service
+rm -f /etc/systemd/system/sockets.target.wants/docker.service
 
 log "Enabling required services …"
 
