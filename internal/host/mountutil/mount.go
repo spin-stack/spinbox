@@ -5,14 +5,13 @@
 package mountutil
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	types "github.com/containerd/containerd/api/types"
@@ -173,62 +172,156 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 	return nil
 }
 
+// formatCheck is the marker for format strings that need substitution.
+// Using explicit pattern matching instead of Go templates to prevent injection attacks.
 const formatCheck = "{{"
 
+// Pattern matchers for safe substitution (compiled once)
+var (
+	// Matches {{source N}} where N is a number
+	sourcePattern = regexp.MustCompile(`\{\{source\s+(\d+)\}\}`)
+	// Matches {{target N}} where N is a number
+	targetPattern = regexp.MustCompile(`\{\{target\s+(\d+)\}\}`)
+	// Matches {{mount N}} where N is a number
+	mountPattern = regexp.MustCompile(`\{\{mount\s+(\d+)\}\}`)
+	// Matches {{overlay N M}} where N and M are numbers
+	overlayPattern = regexp.MustCompile(`\{\{overlay\s+(\d+)\s+(\d+)\}\}`)
+)
+
+// formatString returns a function that performs safe string substitution.
+// Uses explicit pattern matching instead of Go templates to prevent injection attacks.
+//
+// Supported patterns:
+//   - {{source N}} - replaced with active[N].Source
+//   - {{target N}} - replaced with active[N].Target
+//   - {{mount N}} - replaced with active[N].MountPoint
+//   - {{overlay N M}} - replaced with colon-separated mount points from N to M
 func formatString(s string) func([]mount.ActiveMount) (string, error) {
 	if !strings.Contains(s, formatCheck) {
 		return nil
 	}
 
 	return func(a []mount.ActiveMount) (string, error) {
-		fm := template.FuncMap{
-			"source": func(i int) (string, error) {
-				if i < 0 || i >= len(a) {
-					return "", fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
-				}
-				return a[i].Source, nil
-			},
-			"target": func(i int) (string, error) {
-				if i < 0 || i >= len(a) {
-					return "", fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
-				}
-				return a[i].Target, nil
-			},
-			"mount": func(i int) (string, error) {
-				if i < 0 || i >= len(a) {
-					return "", fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
-				}
-				return a[i].MountPoint, nil
-			},
-			"overlay": func(start, end int) (string, error) {
-				var dirs []string
-				if start > end {
-					if start >= len(a) || end < 0 {
-						return "", fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
-					}
-					for i := start; i >= end; i-- {
-						dirs = append(dirs, a[i].MountPoint)
-					}
-				} else {
-					if start < 0 || end >= len(a) {
-						return "", fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
-					}
-					for i := start; i <= end; i++ {
-						dirs = append(dirs, a[i].MountPoint)
-					}
-				}
-				return strings.Join(dirs, ":"), nil
-			},
-		}
-		t, err := template.New("").Funcs(fm).Parse(s)
-		if err != nil {
-			return "", err
+		result := s
+		var parseErr error
+
+		// Helper to get index and validate bounds
+		getIndex := func(indexStr string) (int, error) {
+			i, err := strconv.Atoi(indexStr)
+			if err != nil {
+				return 0, fmt.Errorf("invalid index %q: %w", indexStr, err)
+			}
+			if i < 0 || i >= len(a) {
+				return 0, fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
+			}
+			return i, nil
 		}
 
-		buf := bytes.NewBuffer(nil)
-		if err := t.Execute(buf, nil); err != nil {
-			return "", err
+		// Replace {{source N}}
+		result = sourcePattern.ReplaceAllStringFunc(result, func(match string) string {
+			if parseErr != nil {
+				return match
+			}
+			matches := sourcePattern.FindStringSubmatch(match)
+			if len(matches) != 2 {
+				parseErr = fmt.Errorf("invalid source pattern: %s", match)
+				return match
+			}
+			idx, err := getIndex(matches[1])
+			if err != nil {
+				parseErr = err
+				return match
+			}
+			return a[idx].Source
+		})
+
+		// Replace {{target N}}
+		result = targetPattern.ReplaceAllStringFunc(result, func(match string) string {
+			if parseErr != nil {
+				return match
+			}
+			matches := targetPattern.FindStringSubmatch(match)
+			if len(matches) != 2 {
+				parseErr = fmt.Errorf("invalid target pattern: %s", match)
+				return match
+			}
+			idx, err := getIndex(matches[1])
+			if err != nil {
+				parseErr = err
+				return match
+			}
+			return a[idx].Target
+		})
+
+		// Replace {{mount N}}
+		result = mountPattern.ReplaceAllStringFunc(result, func(match string) string {
+			if parseErr != nil {
+				return match
+			}
+			matches := mountPattern.FindStringSubmatch(match)
+			if len(matches) != 2 {
+				parseErr = fmt.Errorf("invalid mount pattern: %s", match)
+				return match
+			}
+			idx, err := getIndex(matches[1])
+			if err != nil {
+				parseErr = err
+				return match
+			}
+			return a[idx].MountPoint
+		})
+
+		// Replace {{overlay N M}}
+		result = overlayPattern.ReplaceAllStringFunc(result, func(match string) string {
+			if parseErr != nil {
+				return match
+			}
+			matches := overlayPattern.FindStringSubmatch(match)
+			if len(matches) != 3 {
+				parseErr = fmt.Errorf("invalid overlay pattern: %s", match)
+				return match
+			}
+			start, err := strconv.Atoi(matches[1])
+			if err != nil {
+				parseErr = fmt.Errorf("invalid start index in overlay: %w", err)
+				return match
+			}
+			end, err := strconv.Atoi(matches[2])
+			if err != nil {
+				parseErr = fmt.Errorf("invalid end index in overlay: %w", err)
+				return match
+			}
+
+			var dirs []string
+			if start > end {
+				if start >= len(a) || end < 0 {
+					parseErr = fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
+					return match
+				}
+				for i := start; i >= end; i-- {
+					dirs = append(dirs, a[i].MountPoint)
+				}
+			} else {
+				if start < 0 || end >= len(a) {
+					parseErr = fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
+					return match
+				}
+				for i := start; i <= end; i++ {
+					dirs = append(dirs, a[i].MountPoint)
+				}
+			}
+			return strings.Join(dirs, ":")
+		})
+
+		if parseErr != nil {
+			return "", parseErr
 		}
-		return buf.String(), nil
+
+		// Check for any remaining unprocessed patterns (indicates unsupported syntax)
+		if strings.Contains(result, "{{") {
+			return "", fmt.Errorf("unsupported format pattern in %q", s)
+		}
+
+		return result, nil
 	}
 }
