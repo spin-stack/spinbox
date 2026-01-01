@@ -40,14 +40,17 @@ after 100
 
 comment "=== HOST: Starting QemuBox VM ==="
 comment "Pull qemubox sandbox (Ubuntu 25.10 + Docker)"
-type_cmd "ctr --address /var/run/qemubox/containerd.sock image pull --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.7"
+type_cmd "ctr --address /var/run/qemubox/containerd.sock image pull --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.9"
 
 expect {
     -re {not found|failed|error|Error|denied} {
         send_user "\nERROR: Image pull failed\n"
         exit 1
     }
-    -re {digest|unpacking|done} { expect -re {\$|#} }
+    -re {saved|digest|unpacking|done|elapsed} {
+        expect -re {\$|#}
+    }
+    -re {\$|#} {}
     timeout {
         send_user "\nERROR: Pull timeout\n"
         exit 1
@@ -56,7 +59,7 @@ expect {
 after [expr {$LONG_DELAY * 500}]
 
 comment "Launch VM (watch the boot speed!)"
-type_cmd "ctr --address /var/run/qemubox/containerd.sock run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.7 demo-vm"
+type_cmd "ctr --address /var/run/qemubox/containerd.sock run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.9 demo-vm"
 
 # ============================================
 # INSIDE VM
@@ -117,7 +120,10 @@ expect {
         send_user "\nERROR: Docker pull failed\n"
         exit 1
     }
-    -re {Pull complete|Downloaded|Pulling} { expect -re $PROMPT }
+    -re {Pull complete|Downloaded|Pulling|already exists} {
+        expect -re $PROMPT
+    }
+    -re $PROMPT {}
     timeout {
         send_user "\nERROR: Docker timeout\n"
         exit 1
