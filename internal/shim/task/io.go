@@ -460,7 +460,7 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 				continue
 			}
 
-			if err != nil && err != io.EOF {
+			if err != nil && err != io.EOF && !isNoDataError(err) {
 				// Real error (not just "no data available")
 				if !isClosedConnError(err) {
 					log.G(ctx).WithError(err).Warn("error reading stdin fifo")
@@ -475,6 +475,16 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 		}
 	}()
 	return nil
+}
+
+// isNoDataError checks for non-blocking read errors that indicate no data is available.
+func isNoDataError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, syscall.EAGAIN) ||
+		errors.Is(err, syscall.EWOULDBLOCK) ||
+		errors.Is(err, syscall.EINTR)
 }
 
 // isClosedConnError checks if the error is a closed network connection error.

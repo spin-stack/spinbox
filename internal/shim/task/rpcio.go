@@ -132,13 +132,31 @@ func (f *RPCIOForwarder) forwardStdin(ctx context.Context) {
 	defer iobuf.Put(buf)
 
 	// Get RPC client once
-	client, err := f.getStdIOClient(ctx)
+	client, conn, err := f.getStdIOClient(ctx)
 	if err != nil {
 		logger.WithError(err).Error("failed to get stdio client")
 		return
 	}
+	defer f.closeClient(ctx, conn)
 
-	// Loop to handle FIFO reconnection (when attach disconnects and reconnects)
+	logger.Debug("opening stdin fifo (non-blocking)")
+	fifoReader, err := fifo.OpenFifo(ctx, f.stdinPath, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			logger.Debug("stdin fifo open cancelled")
+			return
+		}
+		logger.WithError(err).Error("failed to open stdin fifo")
+		return
+	}
+	defer func() { _ = fifoReader.Close() }()
+
+	logger.Debug("stdin fifo opened, forwarding data")
+
+	pollInterval := 50 * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -155,74 +173,29 @@ func (f *RPCIOForwarder) forwardStdin(ctx context.Context) {
 			})
 			return
 		default:
-		}
-
-		// Open FIFO for reading - blocks until a writer connects
-		logger.Debug("opening stdin fifo, waiting for writer")
-		fifoReader, err := fifo.OpenFifo(ctx, f.stdinPath, syscall.O_RDONLY, 0)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				logger.Debug("stdin fifo open cancelled")
-				return
-			}
-			logger.WithError(err).Error("failed to open stdin fifo")
-			return
-		}
-
-		logger.Debug("stdin fifo opened, forwarding data")
-
-		// Forward data until EOF or error
-		// Use a flag to break out of the read loop on EOF (break in select only breaks select, not for)
-		gotEOF := false
-		for !gotEOF {
-			select {
-			case <-ctx.Done():
-				_ = fifoReader.Close()
-				logger.Debug("stdin forwarder context done during read")
-				return
-			case <-f.done:
-				_ = fifoReader.Close()
-				logger.Debug("stdin forwarder done during read")
-				return
-			case <-f.stdinCloser:
-				_ = fifoReader.Close()
-				logger.Debug("stdin closed by user during read")
-				_, _ = client.CloseStdin(ctx, &stdiov1.CloseStdinRequest{
+			n, err := fifoReader.Read(*buf)
+			if n > 0 {
+				logger.WithField("bytes", n).Debug("forwarding stdin data to guest")
+				_, err = client.WriteStdin(ctx, &stdiov1.WriteStdinRequest{
 					ContainerId: f.containerID,
 					ExecId:      f.execID,
+					Data:        (*buf)[:n],
 				})
-				return
-			default:
-				n, err := fifoReader.Read(*buf)
 				if err != nil {
-					_ = fifoReader.Close()
-					if errors.Is(err, io.EOF) {
-						// Writer disconnected - this is normal for detached containers
-						// or when attach exits. Reopen FIFO to wait for next writer.
-						logger.Debug("stdin EOF - writer disconnected, waiting for reconnect")
-						gotEOF = true // Exit inner loop, continue outer loop to reopen FIFO
-						continue
-					}
-					if !isClosedConnError(err) {
-						logger.WithError(err).Warn("error reading from stdin fifo")
-					}
+					logger.WithError(err).Warn("error writing to stdin RPC")
 					return
 				}
-
-				if n > 0 {
-					logger.WithField("bytes", n).Debug("forwarding stdin data to guest")
-					_, err = client.WriteStdin(ctx, &stdiov1.WriteStdinRequest{
-						ContainerId: f.containerID,
-						ExecId:      f.execID,
-						Data:        (*buf)[:n],
-					})
-					if err != nil {
-						_ = fifoReader.Close()
-						logger.WithError(err).Warn("error writing to stdin RPC")
-						return
-					}
-				}
+				continue
 			}
+
+			if err != nil && err != io.EOF && !isNoDataError(err) {
+				if !isClosedConnError(err) {
+					logger.WithError(err).Warn("error reading from stdin fifo")
+				}
+				return
+			}
+
+			<-ticker.C
 		}
 	}
 }
@@ -284,7 +257,7 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 
 		// Get RPC client
 		logger.Debug("getting stdio RPC client")
-		client, err := f.getStdIOClient(ctx)
+		client, conn, err := f.getStdIOClient(ctx)
 		if err != nil {
 			attempts++
 			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
@@ -314,6 +287,7 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 			stream, err = client.ReadStderr(ctx, req)
 		}
 		if err != nil {
+			f.closeClient(ctx, conn)
 			if errdefs.IsNotFound(err) {
 				logger.WithError(err).Debug("output stream not found, stopping forwarder")
 				return
@@ -338,6 +312,7 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 
 		// Stream data until error or EOF
 		streamErr := f.streamOutput(ctx, logger, stream, fifoWriter)
+		f.closeClient(ctx, conn)
 		if streamErr == nil {
 			// Clean EOF, we're done
 			return
@@ -436,18 +411,38 @@ func (f *RPCIOForwarder) nextRetryDelay(current time.Duration) time.Duration {
 
 // getStdIOClient returns a StdIO client connected to the guest.
 // The underlying TTRPC connection is tracked and will be closed on Shutdown.
-func (f *RPCIOForwarder) getStdIOClient(ctx context.Context) (stdiov1.StdIOClient, error) {
+func (f *RPCIOForwarder) getStdIOClient(ctx context.Context) (stdiov1.StdIOClient, *ttrpc.Client, error) {
 	conn, err := f.dialClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial guest: %w", err)
+		return nil, nil, fmt.Errorf("failed to dial guest: %w", err)
 	}
 
-	// Track the client for cleanup on Shutdown
+	f.trackClient(conn)
+
+	return stdiov1.NewStdIOClient(conn), conn, nil
+}
+
+func (f *RPCIOForwarder) trackClient(conn *ttrpc.Client) {
 	f.clientsMu.Lock()
 	f.clients = append(f.clients, conn)
 	f.clientsMu.Unlock()
+}
 
-	return stdiov1.NewStdIOClient(conn), nil
+func (f *RPCIOForwarder) closeClient(ctx context.Context, conn *ttrpc.Client) {
+	if conn == nil {
+		return
+	}
+	if err := conn.Close(); err != nil {
+		log.G(ctx).WithError(err).Debug("error closing stdio TTRPC client")
+	}
+	f.clientsMu.Lock()
+	for i, client := range f.clients {
+		if client == conn {
+			f.clients = append(f.clients[:i], f.clients[i+1:]...)
+			break
+		}
+	}
+	f.clientsMu.Unlock()
 }
 
 // CloseStdin signals that stdin should be closed.
