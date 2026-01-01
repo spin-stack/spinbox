@@ -29,18 +29,17 @@ const (
 
 // isFifoScheme returns true if the path is a bare path (no scheme) or uses the fifo:// scheme.
 // These are the paths used by containerd for attach functionality.
-func isFifoScheme(path string) bool {
+func isFifoScheme(path string) (bool, error) {
 	if path == "" {
-		return false
+		return false, nil
 	}
 	u, err := url.Parse(path)
 	if err != nil {
-		// Parse error - treat as bare path (fifo)
-		return true
+		return false, err
 	}
 	// Bare paths have no scheme, and we default to fifo
 	// Explicit fifo:// scheme also counts
-	return u.Scheme == "" || u.Scheme == "fifo"
+	return u.Scheme == "" || u.Scheme == "fifo", nil
 }
 
 type forwardIOSetup struct {
@@ -151,16 +150,34 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 		return pio, nil, nil, nil, nil
 	}
 
-	// For non-TTY mode with fifo:// scheme (or bare paths), use RPC-based I/O to support task attach.
-	// Other schemes (file://, binary://, pipe://, stream://) use direct streaming.
+	// For non-TTY mode with fifo:// scheme (or bare paths) on all configured streams,
+	// use RPC-based I/O to support task attach. Other schemes use direct streaming.
 	// TTY mode always uses direct streams (unchanged behavior).
-	if !sio.Terminal && containerID != "" && isFifoScheme(sio.Stdout) {
+	if !sio.Terminal && containerID != "" {
+		stdinIsFifo, stdinErr := isFifoScheme(sio.Stdin)
+		stdoutIsFifo, stdoutErr := isFifoScheme(sio.Stdout)
+		stderrIsFifo, stderrErr := isFifoScheme(sio.Stderr)
+		if stdinErr != nil || stdoutErr != nil || stderrErr != nil {
+			log.G(ctx).WithFields(log.Fields{
+				"stdinErr":  stdinErr,
+				"stdoutErr": stdoutErr,
+				"stderrErr": stderrErr,
+			}).Debug("skipping RPC I/O due to stdio URI parse error")
+		} else if (sio.Stdin == "" || stdinIsFifo) && (sio.Stdout == "" || stdoutIsFifo) && (sio.Stderr == "" || stderrIsFifo) {
+			log.G(ctx).WithFields(log.Fields{
+				"container": containerID,
+				"exec":      execID,
+				"terminal":  sio.Terminal,
+			}).Debug("using RPC-based I/O for non-TTY fifo mode")
+			return s.forwardIORPC(ctx, containerID, execID, sio)
+		}
+	}
+	if !sio.Terminal && containerID != "" {
 		log.G(ctx).WithFields(log.Fields{
 			"container": containerID,
 			"exec":      execID,
 			"terminal":  sio.Terminal,
-		}).Debug("using RPC-based I/O for non-TTY fifo mode")
-		return s.forwardIORPC(ctx, containerID, execID, sio)
+		}).Debug("using direct I/O for non-TTY non-fifo mode")
 	}
 
 	setup, err := setupForwardIO(ctx, vmi, pio)

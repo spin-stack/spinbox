@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/v2/pkg/stdio"
+	"github.com/containerd/errdefs"
 	"github.com/containerd/fifo"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
@@ -313,6 +314,10 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 			stream, err = client.ReadStderr(ctx, req)
 		}
 		if err != nil {
+			if errdefs.IsNotFound(err) {
+				logger.WithError(err).Debug("output stream not found, stopping forwarder")
+				return
+			}
 			attempts++
 			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
 				logger.WithError(err).WithField("attempts", attempts).Error("failed to start output stream after max retries")
@@ -335,6 +340,11 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 		streamErr := f.streamOutput(ctx, logger, stream, fifoWriter)
 		if streamErr == nil {
 			// Clean EOF, we're done
+			return
+		}
+
+		if errdefs.IsNotFound(streamErr) {
+			logger.WithError(streamErr).Debug("output stream not found, stopping forwarder")
 			return
 		}
 
