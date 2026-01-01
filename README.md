@@ -43,7 +43,7 @@ VM isolation provides a stronger security boundary than namespace-based containe
 
 ## Demo
 
-[![asciicast](https://asciinema.org/a/o08afEiqqtfWegNomf9qWkzxE.svg)](https://asciinema.org/a/o08afEiqqtfWegNomf9qWkzxE)
+[![asciicast](https://asciinema.org/a/INszYqaxkMzQtzIKIDGX8QJqi.svg)](https://asciinema.org/a/INszYqaxkMzQtzIKIDGX8QJqi)
 
 ## Quick Start
 
@@ -75,6 +75,7 @@ See `./install.sh --help` for all options.
 
 ```bash
 sudo systemctl enable --now qemubox-containerd
+sudo systemctl start --now qemubox-containerd
 ```
 
 ### Run a Container
@@ -84,14 +85,14 @@ sudo systemctl enable --now qemubox-containerd
 export PATH=/usr/share/qemubox/bin:$PATH
 
 # Pull an image
-ctr image pull --snapshotter erofs docker.io/library/alpine:latest
+ctr --address /var/run/qemubox/containerd.sock image pull \
+  --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.7
 
 # Run with qemubox runtime
-ctr run -t --rm \
+ctr --address /var/run/qemubox/containerd.sock run -t --rm \
   --snapshotter erofs \
   --runtime io.containerd.qemubox.v1 \
-  docker.io/library/alpine:latest \
-  test /bin/sh
+  ghcr.io/aledbf/qemubox/sandbox:v0.0.7 test-qemu-shim
 ```
 
 ## Architecture

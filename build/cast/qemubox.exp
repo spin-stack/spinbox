@@ -1,0 +1,199 @@
+#!/usr/bin/expect -f
+
+# QemuBox Demo - Optimized for asciinema recording
+# Usage: expect qemubox.exp
+
+set timeout 120
+
+# Configuration
+set TYPING_DELAY 0.02        ;# Delay per character (realistic typing)
+set CMD_DELAY 1              ;# Delay after each command
+set LONG_DELAY 2             ;# Delay for long-running commands
+set READ_DELAY 2             ;# Extra delay for important output
+
+# Enable output logging
+log_user 1
+
+# Function to type commands realistically
+proc type_cmd {cmd {delay 0.03}} {
+    foreach char [split $cmd ""] {
+        send -- $char
+        after [expr {int($delay * 1000)}]
+    }
+    send "\r"
+}
+
+# Function to show a comment and wait
+proc comment {text} {
+    send "# $text\r"
+    expect -re {\$|#}
+}
+
+# Function to show a section header (single line)
+proc section {text} {
+    send "# === $text ===\r"
+    expect -re {\$|#}
+    after 300
+}
+
+# Start bash with a clean prompt
+spawn bash --norc --noprofile
+expect -re {\$|#}
+
+# Set a simple prompt for cleaner output
+send "PS1='\\n\$ '\r"
+expect -re {\$}
+
+send "clear\r"
+expect -re {\$}
+after 500
+
+# ============================================
+# PART 1: HOST - Pull and Run Container
+# ============================================
+
+section "HOST: Starting QemuBox VM"
+
+comment "Pull the qemubox sandbox image (Ubuntu 25.10 with Docker)"
+after 500
+type_cmd "ctr --address /var/run/qemubox/containerd.sock image pull --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.7"
+
+# Wait for pull to complete - abort on error
+expect {
+    -re {not found|failed|error|Error|denied|unauthorized} {
+        send_user "\n\n ERROR: Image pull failed. Aborting demo.\n\n"
+        exit 1
+    }
+    -re {Resolved|digest|sha256|unpacking|done} {
+        expect -re {\$|#}
+    }
+    -re {\$|#} {}
+    timeout {
+        send_user "\n\n ERROR: Pull timeout. Aborting demo.\n\n"
+        exit 1
+    }
+}
+after [expr {$LONG_DELAY * 1000}]
+
+comment "Launch VM with qemubox runtime (watch the boot speed!)"
+after 500
+type_cmd "ctr --address /var/run/qemubox/containerd.sock run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.7 demo-vm"
+
+# ============================================
+# PART 2: INSIDE THE VM - Execute commands
+# ============================================
+
+# Wait for login prompt - look for the specific login pattern
+expect {
+    -re {ctr: failed|error starting|Error:|not found|No such} {
+        send_user "\n\n ERROR: Container failed to start. Aborting demo.\n\n"
+        exit 1
+    }
+    -re {localhost login:} {
+        after 1000
+        type_cmd "root"
+        expect -re {Password:}
+        after 500
+        type_cmd "qemubox"
+        # Wait for the shell prompt after login
+        expect -re {root@localhost|~\]#|~#|\$ $}
+    }
+    -re {root@localhost|~\]#|~#} {
+        # Already at shell prompt (no login required)
+    }
+    timeout {
+        send_user "\n\n ERROR: Timeout waiting for login prompt. Aborting demo.\n\n"
+        exit 1
+    }
+}
+after [expr {$CMD_DELAY * 1000}]
+
+# Shell prompt pattern (more specific to avoid matching systemd output)
+set PROMPT {root@localhost.*#|~#|\$ $}
+
+# Section: VM Environment
+send "# === INSIDE VM ===\r"
+expect -re $PROMPT
+after 300
+
+send "# VM kernel version (isolated from host)\r"
+expect -re $PROMPT
+type_cmd "uname -r"
+expect -re $PROMPT
+after [expr {$READ_DELAY * 1000}]
+
+send "# How fast did this VM boot?\r"
+expect -re $PROMPT
+type_cmd "systemd-analyze"
+expect -re $PROMPT
+after [expr {$READ_DELAY * 1000}]
+
+send "# What services started:\r"
+expect -re $PROMPT
+type_cmd "systemd-analyze blame | head -10"
+expect -re $PROMPT
+after [expr {$LONG_DELAY * 1000}]
+
+# Section: Docker inside VM
+send "# === DOCKER IN VM ===\r"
+expect -re $PROMPT
+after 300
+
+send "# Docker version running in the VM\r"
+expect -re $PROMPT
+type_cmd "docker version --format 'Docker {{.Server.Version}}'"
+expect -re $PROMPT
+after [expr {$CMD_DELAY * 1000}]
+
+send "# Pull Alpine image\r"
+expect -re $PROMPT
+type_cmd "docker pull alpine:latest"
+expect {
+    -re {error response|Error response|failed to|not found|denied} {
+        send_user "\n\n ERROR: Docker pull failed. Aborting demo.\n\n"
+        exit 1
+    }
+    -re {Status:|Pull complete|already exists|Downloaded|Pulling from} {
+        expect -re $PROMPT
+    }
+    -re $PROMPT {}
+    timeout {
+        send_user "\n\n ERROR: Docker pull timeout. Aborting demo.\n\n"
+        exit 1
+    }
+}
+after [expr {$LONG_DELAY * 1000}]
+
+send "# Run container - same kernel as the VM\r"
+expect -re $PROMPT
+type_cmd "docker run --rm alpine:latest uname -a"
+expect -re $PROMPT
+after [expr {$READ_DELAY * 1000}]
+
+# Shutdown
+send "# Shutting down the VM\r"
+expect -re $PROMPT
+after 500
+type_cmd "halt"
+
+# Wait for container to exit
+expect {
+    -re {\$|#} {
+        # Back to host
+    }
+    eof {
+        # Process ended
+    }
+    timeout {}
+}
+
+after 1500
+send_user "\n"
+send_user "Demo complete!\n"
+send_user "\n"
+send_user "What you saw:\n"
+send_user "  - VM boot in ~350ms with full systemd\n"
+send_user "  - Dedicated kernel isolated from host\n"
+send_user "  - Docker running inside the VM\n"
+send_user "  - Containers with VM-level isolation\n"
+send_user "\n"
