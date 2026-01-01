@@ -185,7 +185,7 @@ func TestBinarySchemeSupport(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		pio, _, cleanup, err := svc.forwardIO(ctx, ss, sio)
+		pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
 
 		if err != nil {
 			t.Fatalf("binary scheme should be supported, got error: %v", err)
@@ -228,7 +228,7 @@ func TestPipeSchemeSupport(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		pio, _, cleanup, err := svc.forwardIO(ctx, ss, sio)
+		pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
 
 		if err != nil {
 			t.Fatalf("pipe scheme should be supported, got error: %v", err)
@@ -256,7 +256,7 @@ func TestStreamSchemePassthrough(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pio, _, cleanup, err := svc.forwardIO(ctx, ss, sio)
+	pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -289,7 +289,7 @@ func TestUnsupportedScheme(t *testing.T) {
 
 	ctx := context.Background()
 	//nolint:dogsled // Testing error case, other return values not needed
-	_, _, _, err := svc.forwardIO(ctx, ss, sio)
+	_, _, _, _, err := svc.forwardIO(ctx, ss, sio)
 
 	if err == nil {
 		t.Fatal("expected error for unsupported scheme, got nil")
@@ -308,7 +308,7 @@ func TestNullStdio(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pio, _, cleanup, err := svc.forwardIO(ctx, ss, sio)
+	pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
 
 	if err != nil {
 		t.Fatalf("unexpected error for null stdio: %v", err)

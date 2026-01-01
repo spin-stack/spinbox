@@ -198,8 +198,12 @@ type container struct {
 	hostStderr string
 	terminal   bool
 
-	// Exec I/O paths (map from execID to host paths)
-	execStdio map[string]execIO
+	// RPC I/O forwarder for the init process (nil if not using RPC I/O)
+	rpcForwarder *RPCIOForwarder
+
+	// Exec I/O paths and forwarders (map from execID)
+	execStdio      map[string]execIO
+	execForwarders map[string]*RPCIOForwarder
 }
 
 type execIO struct {
@@ -487,7 +491,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	// Use forwardIOWithIDs to enable RPC-based I/O for non-TTY mode (supports task attach)
 	// Returns a startFunc that must be called AFTER the guest creates the process
-	cio, ioStartFunc, ioShutdown, err := s.forwardIOWithIDs(ctx, vmi, r.ID, "", rio)
+	cio, ioStartFunc, ioShutdown, rpcForwarder, err := s.forwardIOWithIDs(ctx, vmi, r.ID, "", rio)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -508,14 +512,16 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	preCreate := time.Now()
 	c := &container{
-		ioShutdown:    ioShutdown,
-		execShutdowns: make(map[string]func(context.Context) error),
-		execStdio:     make(map[string]execIO),
+		ioShutdown:     ioShutdown,
+		execShutdowns:  make(map[string]func(context.Context) error),
+		execStdio:      make(map[string]execIO),
+		execForwarders: make(map[string]*RPCIOForwarder),
 		// Store original host I/O paths for attach support
-		hostStdin:  rio.Stdin,
-		hostStdout: rio.Stdout,
-		hostStderr: rio.Stderr,
-		terminal:   rio.Terminal,
+		hostStdin:    rio.Stdin,
+		hostStdout:   rio.Stdout,
+		hostStderr:   rio.Stderr,
+		terminal:     rio.Terminal,
+		rpcForwarder: rpcForwarder,
 	}
 	tc := taskAPI.NewTTRPCTaskClient(rpcClient)
 	resp, err := tc.Create(ctx, vr)
@@ -746,6 +752,9 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				ioShutdowns = append(ioShutdowns, ioShutdown)
 				delete(s.container.execShutdowns, r.ExecID)
 			}
+			// Also clean up exec forwarder
+			delete(s.container.execForwarders, r.ExecID)
+			delete(s.container.execStdio, r.ExecID)
 		} else {
 			if s.container.ioShutdown != nil {
 				ioShutdowns = append(ioShutdowns, s.container.ioShutdown)
@@ -843,7 +852,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 	// Use forwardIOWithIDs to enable RPC-based I/O for non-TTY mode (supports task attach)
 	// Returns a startFunc that must be called AFTER the guest creates the exec process
-	cio, ioStartFunc, ioShutdown, err := s.forwardIOWithIDs(ctx, vmi, r.ID, r.ExecID, rio)
+	cio, ioStartFunc, ioShutdown, execForwarder, err := s.forwardIOWithIDs(ctx, vmi, r.ID, r.ExecID, rio)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -856,6 +865,10 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 			stdin:  rio.Stdin,
 			stdout: rio.Stdout,
 			stderr: rio.Stderr,
+		}
+		// Store forwarder for CloseIO support
+		if execForwarder != nil {
+			s.container.execForwarders[r.ExecID] = execForwarder
 		}
 	} else {
 		if ioShutdown != nil {
@@ -1004,6 +1017,30 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 // CloseIO of a process.
 func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io")
+
+	// If stdin is being closed and we have an RPC forwarder, signal it to close stdin.
+	// This allows the forwarder to stop waiting for FIFO writers and propagate the
+	// close to the guest via RPC.
+	if r.Stdin {
+		s.containerMu.Lock()
+		if s.container != nil && s.containerID == r.ID {
+			if r.ExecID == "" {
+				// Container stdin
+				if s.container.rpcForwarder != nil {
+					s.container.rpcForwarder.CloseStdin()
+					log.G(ctx).Debug("signaled RPC forwarder to close container stdin")
+				}
+			} else {
+				// Exec stdin
+				if forwarder, ok := s.container.execForwarders[r.ExecID]; ok && forwarder != nil {
+					forwarder.CloseStdin()
+					log.G(ctx).WithField("exec", r.ExecID).Debug("signaled RPC forwarder to close exec stdin")
+				}
+			}
+		}
+		s.containerMu.Unlock()
+	}
+
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
