@@ -60,6 +60,20 @@ type RPCIOForwarder struct {
 	clientsMu sync.Mutex
 }
 
+type retryState struct {
+	delay    time.Duration
+	attempts int
+}
+
+func newRetryState() *retryState {
+	return &retryState{delay: outputRetryInitialDelay}
+}
+
+func (r *retryState) reset() {
+	r.delay = outputRetryInitialDelay
+	r.attempts = 0
+}
+
 // NewRPCIOForwarder creates a new RPC I/O forwarder.
 func NewRPCIOForwarder(dialClient ClientDialer, containerID, execID string, sio stdio.Stdio) *RPCIOForwarder {
 	return &RPCIOForwarder{
@@ -72,6 +86,18 @@ func NewRPCIOForwarder(dialClient ClientDialer, containerID, execID string, sio 
 		done:        make(chan struct{}),
 		stdinCloser: make(chan struct{}),
 	}
+}
+
+// pollReadOnce reads from a non-blocking reader and returns true if no data is available.
+func pollReadOnce(reader io.Reader, buf []byte) (int, error, bool) {
+	n, err := reader.Read(buf)
+	if n > 0 {
+		return n, err, false
+	}
+	if err == nil || err == io.EOF || isNoDataError(err) {
+		return 0, err, true
+	}
+	return 0, err, false
 }
 
 // Start begins forwarding I/O. This should be called after the guest process is created.
@@ -173,7 +199,7 @@ func (f *RPCIOForwarder) forwardStdin(ctx context.Context) {
 			})
 			return
 		default:
-			n, err := fifoReader.Read(*buf)
+			n, err, noData := pollReadOnce(fifoReader, *buf)
 			if n > 0 {
 				logger.WithField("bytes", n).Debug("forwarding stdin data to guest")
 				_, err = client.WriteStdin(ctx, &stdiov1.WriteStdinRequest{
@@ -188,8 +214,8 @@ func (f *RPCIOForwarder) forwardStdin(ctx context.Context) {
 				continue
 			}
 
-			if err != nil && err != io.EOF && !isNoDataError(err) {
-				if !isClosedConnError(err) {
+			if !noData {
+				if err != nil && !isClosedConnError(err) {
 					logger.WithError(err).Warn("error reading from stdin fifo")
 				}
 				return
@@ -240,8 +266,7 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 	logger.Debug("opened output fifo for writing")
 
 	// Retry loop for connection and streaming
-	retryDelay := outputRetryInitialDelay
-	attempts := 0
+	retry := newRetryState()
 
 	for {
 		// Check for shutdown before each attempt
@@ -259,16 +284,9 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 		logger.Debug("getting stdio RPC client")
 		client, conn, err := f.getStdIOClient(ctx)
 		if err != nil {
-			attempts++
-			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
-				logger.WithError(err).WithField("attempts", attempts).Error("failed to get stdio client after max retries")
+			if !f.retryWait(ctx, logger, retry, err, "failed to get stdio client, will retry") {
 				return
 			}
-			logger.WithError(err).WithField("retryDelay", retryDelay).Debug("failed to get stdio client, will retry")
-			if !f.sleepWithCancel(ctx, retryDelay) {
-				return
-			}
-			retryDelay = f.nextRetryDelay(retryDelay)
 			continue
 		}
 		logger.Debug("got stdio RPC client")
@@ -292,23 +310,15 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 				logger.WithError(err).Debug("output stream not found, stopping forwarder")
 				return
 			}
-			attempts++
-			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
-				logger.WithError(err).WithField("attempts", attempts).Error("failed to start output stream after max retries")
+			if !f.retryWait(ctx, logger, retry, err, "failed to start output stream, will retry") {
 				return
 			}
-			logger.WithError(err).WithField("retryDelay", retryDelay).Debug("failed to start output stream, will retry")
-			if !f.sleepWithCancel(ctx, retryDelay) {
-				return
-			}
-			retryDelay = f.nextRetryDelay(retryDelay)
 			continue
 		}
 		logger.Debug("RPC output stream started, waiting for data")
 
 		// Reset retry state on successful connection
-		retryDelay = outputRetryInitialDelay
-		attempts = 0
+		retry.reset()
 
 		// Stream data until error or EOF
 		streamErr := f.streamOutput(ctx, logger, stream, fifoWriter)
@@ -329,16 +339,9 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 		}
 
 		// For other errors, retry with backoff
-		attempts++
-		if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
-			logger.WithError(streamErr).WithField("attempts", attempts).Error("output stream failed after max retries")
+		if !f.retryWait(ctx, logger, retry, streamErr, "output stream error, will retry") {
 			return
 		}
-		logger.WithError(streamErr).WithField("retryDelay", retryDelay).Debug("output stream error, will retry")
-		if !f.sleepWithCancel(ctx, retryDelay) {
-			return
-		}
-		retryDelay = f.nextRetryDelay(retryDelay)
 	}
 }
 
@@ -398,6 +401,20 @@ func (f *RPCIOForwarder) sleepWithCancel(ctx context.Context, d time.Duration) b
 	case <-timer.C:
 		return true
 	}
+}
+
+func (f *RPCIOForwarder) retryWait(ctx context.Context, logger *log.Entry, state *retryState, err error, msg string) bool {
+	state.attempts++
+	if outputRetryMaxAttempts > 0 && state.attempts >= outputRetryMaxAttempts {
+		logger.WithError(err).WithField("attempts", state.attempts).Error("retry limit reached")
+		return false
+	}
+	logger.WithError(err).WithField("retryDelay", state.delay).Debug(msg)
+	if !f.sleepWithCancel(ctx, state.delay) {
+		return false
+	}
+	state.delay = f.nextRetryDelay(state.delay)
+	return true
 }
 
 // nextRetryDelay calculates the next retry delay with exponential backoff.
@@ -508,9 +525,8 @@ func (f *RPCIOForwarder) GuestStdio() stdio.Stdio {
 }
 
 // forwardIORPC sets up RPC-based I/O forwarding for non-TTY mode.
-// Returns the guest stdio config, a start function (must be called after guest Create),
-// shutdown function, and the forwarder itself (for CloseIO handling).
-func (s *service) forwardIORPC(ctx context.Context, containerID, execID string, sio stdio.Stdio) (stdio.Stdio, func(context.Context) error, func(context.Context) error, *RPCIOForwarder, error) {
+// Returns the guest stdio config and the forwarder (caller starts after guest Create).
+func (s *service) forwardIORPC(ctx context.Context, containerID, execID string, sio stdio.Stdio) (stdio.Stdio, IOForwarder, error) {
 	forwarder := NewRPCIOForwarder(s.vmLifecycle.DialClient, containerID, execID, sio)
 
 	guestStdio := forwarder.GuestStdio()
@@ -523,11 +539,5 @@ func (s *service) forwardIORPC(ctx context.Context, containerID, execID string, 
 		"guestStderr": guestStdio.Stderr,
 	}).Debug("RPC I/O forwarder created (not yet started)")
 
-	// Return a start function that must be called AFTER the guest has created the process.
-	// This ensures the I/O manager has registered the process before we try to subscribe.
-	startFunc := func(ctx context.Context) error {
-		return forwarder.Start(ctx)
-	}
-
-	return guestStdio, startFunc, forwarder.Shutdown, forwarder, nil
+	return guestStdio, forwarder, nil
 }

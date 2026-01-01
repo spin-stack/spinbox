@@ -54,6 +54,40 @@ type forwardIOSetup struct {
 	stderrFilePath string
 }
 
+// IOForwarder owns a complete I/O forwarding lifecycle.
+// GuestStdio returns the stdio config to pass to the guest.
+// Start begins forwarding (no-op for direct I/O).
+// Shutdown stops forwarding and cleans up resources.
+// CloseStdin signals stdin closure (no-op for direct I/O).
+type IOForwarder interface {
+	GuestStdio() stdio.Stdio
+	Start(ctx context.Context) error
+	Shutdown(ctx context.Context) error
+	CloseStdin()
+}
+
+type directForwarder struct {
+	guest    stdio.Stdio
+	shutdown func(context.Context) error
+}
+
+func (d *directForwarder) GuestStdio() stdio.Stdio {
+	return d.guest
+}
+
+func (d *directForwarder) Start(ctx context.Context) error {
+	return nil
+}
+
+func (d *directForwarder) Shutdown(ctx context.Context) error {
+	if d.shutdown == nil {
+		return nil
+	}
+	return d.shutdown(ctx)
+}
+
+func (d *directForwarder) CloseStdin() {}
+
 func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forwardIOSetup, error) {
 	log.G(ctx).WithFields(log.Fields{
 		"stdin":    pio.Stdin,
@@ -128,7 +162,7 @@ func setupStreamScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (f
 	return forwardIOSetup{pio: streamPio, streams: streams, usePIOPaths: false}, nil
 }
 
-func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, func(ctx context.Context) error, *RPCIOForwarder, error) {
+func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, IOForwarder, error) {
 	return s.forwardIOWithIDs(ctx, vmi, "", "", sio)
 }
 
@@ -141,14 +175,14 @@ func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdi
 //   - shutdownFunc: function to call to shut down I/O forwarding
 //   - forwarder: the RPC forwarder (nil for non-RPC modes) - used for CloseIO
 //   - error: any error during setup
-func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, containerID, execID string, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, func(ctx context.Context) error, *RPCIOForwarder, error) {
+func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, containerID, execID string, sio stdio.Stdio) (stdio.Stdio, IOForwarder, error) {
 	// When using a terminal, stderr is not used (it's merged into stdout/pty)
 	if sio.Terminal {
 		sio.Stderr = ""
 	}
 	pio := sio
 	if pio.IsNull() {
-		return pio, nil, nil, nil, nil
+		return pio, nil, nil
 	}
 
 	// For non-TTY mode with fifo:// scheme (or bare paths) on all configured streams,
@@ -170,7 +204,8 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 				"exec":      execID,
 				"terminal":  sio.Terminal,
 			}).Debug("using RPC-based I/O for non-TTY fifo mode")
-			return s.forwardIORPC(ctx, containerID, execID, sio)
+			guestStdio, forwarder, err := s.forwardIORPC(ctx, containerID, execID, sio)
+			return guestStdio, forwarder, err
 		}
 	}
 	if !sio.Terminal && containerID != "" {
@@ -183,10 +218,10 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 
 	setup, err := setupForwardIO(ctx, vmi, pio)
 	if err != nil {
-		return stdio.Stdio{}, nil, nil, nil, err
+		return stdio.Stdio{}, nil, err
 	}
 	if setup.passthrough {
-		return setup.pio, nil, nil, nil, nil
+		return setup.pio, &directForwarder{guest: setup.pio}, nil
 	}
 	pio = setup.pio
 	streams := setup.streams
@@ -218,10 +253,9 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 		}).Debug("forwardIO: using file paths for copyStreams, stream URIs for VM")
 	}
 	if err = copyStreams(ctx, streams, stdinPath, stdoutPath, stderrPath, ioDone); err != nil {
-		return stdio.Stdio{}, nil, nil, nil, err
+		return stdio.Stdio{}, nil, err
 	}
-	// For non-RPC modes, startFunc and forwarder are nil (I/O starts immediately)
-	return pio, nil, func(ctx context.Context) error {
+	shutdown := func(ctx context.Context) error {
 		for i, c := range streams {
 			if c != nil && (i != 2 || c != streams[1]) {
 				_ = c.Close()
@@ -233,7 +267,8 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	}, nil, nil
+	}
+	return pio, &directForwarder{guest: pio, shutdown: shutdown}, nil
 }
 
 func createStreams(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, [3]io.ReadWriteCloser, error) {

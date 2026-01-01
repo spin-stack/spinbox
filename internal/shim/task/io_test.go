@@ -185,7 +185,7 @@ func TestBinarySchemeSupport(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
+		pio, forwarder, err := svc.forwardIO(ctx, ss, sio)
 
 		if err != nil {
 			t.Fatalf("binary scheme should be supported, got error: %v", err)
@@ -195,8 +195,10 @@ func TestBinarySchemeSupport(t *testing.T) {
 			t.Error("expected stdout to be set for binary scheme")
 		}
 
-		if cleanup != nil {
-			defer cleanup(ctx)
+		if forwarder != nil {
+			defer func() {
+				_ = forwarder.Shutdown(ctx)
+			}()
 		}
 	})
 }
@@ -228,7 +230,7 @@ func TestPipeSchemeSupport(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
+		pio, forwarder, err := svc.forwardIO(ctx, ss, sio)
 
 		if err != nil {
 			t.Fatalf("pipe scheme should be supported, got error: %v", err)
@@ -238,8 +240,10 @@ func TestPipeSchemeSupport(t *testing.T) {
 			t.Error("expected stdout to be set for pipe scheme")
 		}
 
-		if cleanup != nil {
-			defer cleanup(ctx)
+		if forwarder != nil {
+			defer func() {
+				_ = forwarder.Shutdown(ctx)
+			}()
 		}
 	})
 }
@@ -256,7 +260,7 @@ func TestStreamSchemePassthrough(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
+	pio, forwarder, err := svc.forwardIO(ctx, ss, sio)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -270,9 +274,11 @@ func TestStreamSchemePassthrough(t *testing.T) {
 		t.Errorf("expected stderr %q, got %q", sio.Stderr, pio.Stderr)
 	}
 
-	// No cleanup should be needed for stream scheme
-	if cleanup != nil {
-		t.Error("expected nil cleanup for stream scheme")
+	// Forwarder exists but should be a no-op for stream scheme
+	if forwarder != nil {
+		if err := forwarder.Shutdown(ctx); err != nil {
+			t.Errorf("unexpected shutdown error for stream scheme: %v", err)
+		}
 	}
 }
 
@@ -288,8 +294,7 @@ func TestUnsupportedScheme(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	//nolint:dogsled // Testing error case, other return values not needed
-	_, _, _, _, err := svc.forwardIO(ctx, ss, sio)
+	_, _, err := svc.forwardIO(ctx, ss, sio)
 
 	if err == nil {
 		t.Fatal("expected error for unsupported scheme, got nil")
@@ -308,7 +313,7 @@ func TestNullStdio(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pio, _, cleanup, _, err := svc.forwardIO(ctx, ss, sio)
+	pio, forwarder, err := svc.forwardIO(ctx, ss, sio)
 
 	if err != nil {
 		t.Fatalf("unexpected error for null stdio: %v", err)
@@ -318,7 +323,52 @@ func TestNullStdio(t *testing.T) {
 		t.Error("expected null stdio to remain null")
 	}
 
-	if cleanup != nil {
-		t.Error("expected nil cleanup for null stdio")
+	if forwarder != nil {
+		t.Error("expected nil forwarder for null stdio")
 	}
+}
+
+func TestForwardIOUsesRPCForNonTTYFifo(t *testing.T) {
+	svc := &service{}
+	ss := &mockVMInstance{}
+
+	sio := stdio.Stdio{
+		Stdin:    "/run/containerd/test.stdin",
+		Stdout:   "/run/containerd/test.stdout",
+		Stderr:   "/run/containerd/test.stderr",
+		Terminal: false,
+	}
+
+	ctx := context.Background()
+	_, forwarder, err := svc.forwardIOWithIDs(ctx, ss, "cid", "", sio)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := forwarder.(*RPCIOForwarder); !ok {
+		t.Fatalf("expected RPC forwarder, got %T", forwarder)
+	}
+}
+
+func TestForwardIOUsesDirectForNonTTYNonFifo(t *testing.T) {
+	withTempCwd(t, func(tmp string) {
+		svc := &service{}
+		ss := &mockVMInstance{}
+
+		logPath := filepath.Join(tmp, "out.log")
+		sio := stdio.Stdio{
+			Stdin:    "",
+			Stdout:   "file://" + logPath,
+			Stderr:   "file://" + logPath,
+			Terminal: false,
+		}
+
+		ctx := context.Background()
+		_, forwarder, err := svc.forwardIOWithIDs(ctx, ss, "cid", "", sio)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := forwarder.(*directForwarder); !ok {
+			t.Fatalf("expected direct forwarder, got %T", forwarder)
+		}
+	})
 }

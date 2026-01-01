@@ -188,28 +188,27 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 }
 
 type container struct {
-	ioShutdown    func(context.Context) error
-	execShutdowns map[string]func(context.Context) error
-	pid           uint32
+	pid uint32
 
-	// Host-side I/O paths (original FIFOs) - needed for attach since guest uses rpcio:// URIs
-	hostStdin  string
-	hostStdout string
-	hostStderr string
-	terminal   bool
-
-	// RPC I/O forwarder for the init process (nil if not using RPC I/O)
-	rpcForwarder *RPCIOForwarder
-
-	// Exec I/O paths and forwarders (map from execID)
-	execStdio      map[string]execIO
-	execForwarders map[string]*RPCIOForwarder
+	// I/O state for init and exec processes.
+	io *taskIO
 }
 
 type execIO struct {
 	stdin  string
 	stdout string
 	stderr string
+}
+
+type processIOState struct {
+	host      execIO
+	terminal  bool
+	forwarder IOForwarder
+}
+
+type taskIO struct {
+	init processIOState
+	exec map[string]processIOState
 }
 
 // service is the shim implementation of a remote shim over TTRPC.
@@ -281,14 +280,20 @@ func (s *service) shutdown(ctx context.Context) error {
 
 	// Shutdown IO for container and execs
 	if s.container != nil {
-		if s.container.ioShutdown != nil {
-			if err := s.container.ioShutdown(ctx); err != nil {
+		if s.container.io != nil && s.container.io.init.forwarder != nil {
+			if err := s.container.io.init.forwarder.Shutdown(ctx); err != nil {
 				errs = append(errs, fmt.Errorf("container %q io shutdown: %w", s.containerID, err))
 			}
 		}
-		for execID, ioShutdown := range s.container.execShutdowns {
-			if err := ioShutdown(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
+		if s.container.io != nil {
+			for execID, pio := range s.container.io.exec {
+				forwarder := pio.forwarder
+				if forwarder == nil {
+					continue
+				}
+				if err := forwarder.Shutdown(ctx); err != nil {
+					errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
+				}
 			}
 		}
 	}
@@ -490,8 +495,8 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	}
 
 	// Use forwardIOWithIDs to enable RPC-based I/O for non-TTY mode (supports task attach)
-	// Returns a startFunc that must be called AFTER the guest creates the process
-	cio, ioStartFunc, ioShutdown, rpcForwarder, err := s.forwardIOWithIDs(ctx, vmi, r.ID, "", rio)
+	// The forwarder must be started AFTER the guest creates the process.
+	cio, ioForwarder, err := s.forwardIOWithIDs(ctx, vmi, r.ID, "", rio)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -512,23 +517,25 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	preCreate := time.Now()
 	c := &container{
-		ioShutdown:     ioShutdown,
-		execShutdowns:  make(map[string]func(context.Context) error),
-		execStdio:      make(map[string]execIO),
-		execForwarders: make(map[string]*RPCIOForwarder),
-		// Store original host I/O paths for attach support
-		hostStdin:    rio.Stdin,
-		hostStdout:   rio.Stdout,
-		hostStderr:   rio.Stderr,
-		terminal:     rio.Terminal,
-		rpcForwarder: rpcForwarder,
+		io: &taskIO{
+			init: processIOState{
+				host: execIO{
+					stdin:  rio.Stdin,
+					stdout: rio.Stdout,
+					stderr: rio.Stderr,
+				},
+				terminal:  rio.Terminal,
+				forwarder: ioForwarder,
+			},
+			exec: make(map[string]processIOState),
+		},
 	}
 	tc := taskAPI.NewTTRPCTaskClient(rpcClient)
 	resp, err := tc.Create(ctx, vr)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to create task")
-		if c.ioShutdown != nil {
-			if err := c.ioShutdown(ctx); err != nil {
+		if c.io != nil && c.io.init.forwarder != nil {
+			if err := c.io.init.forwarder.Shutdown(ctx); err != nil {
 				log.G(ctx).WithError(err).Error("failed to shutdown io after create failure")
 			}
 		}
@@ -537,8 +544,8 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	// Start the I/O forwarder AFTER guest has created the process and registered with I/O manager.
 	// This ensures the RPC I/O subscriber can find the process.
-	if ioStartFunc != nil {
-		if err := ioStartFunc(ctx); err != nil {
+	if ioForwarder != nil {
+		if err := ioForwarder.Start(ctx); err != nil {
 			log.G(ctx).WithError(err).Error("failed to start I/O forwarder")
 			// Don't fail the create, just log the error - I/O may not work but container is created
 		}
@@ -722,8 +729,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
 		if r.ExecID == "" {
 			s.containerMu.Lock()
-			if s.container != nil && s.container.ioShutdown != nil {
-				if ioErr := s.container.ioShutdown(ctx); ioErr != nil {
+			if s.container != nil && s.container.io != nil && s.container.io.init.forwarder != nil {
+				if ioErr := s.container.io.init.forwarder.Shutdown(ctx); ioErr != nil {
 					log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
 				}
 			}
@@ -740,7 +747,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 
 	// Extract cleanup targets
-	var ioShutdowns []func(context.Context) error
+	var ioForwarders []IOForwarder
 	var cpuController cpuhotplug.CPUHotplugController
 	var memController memhotplug.MemoryHotplugController
 	var needNetworkClean, needVMShutdown bool
@@ -748,19 +755,20 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	s.containerMu.Lock()
 	if s.container != nil && s.containerID == r.ID {
 		if r.ExecID != "" {
-			if ioShutdown, ok := s.container.execShutdowns[r.ExecID]; ok {
-				ioShutdowns = append(ioShutdowns, ioShutdown)
-				delete(s.container.execShutdowns, r.ExecID)
+			if s.container.io != nil {
+				if pio, ok := s.container.io.exec[r.ExecID]; ok {
+					ioForwarders = append(ioForwarders, pio.forwarder)
+					delete(s.container.io.exec, r.ExecID)
+				}
 			}
-			// Also clean up exec forwarder
-			delete(s.container.execForwarders, r.ExecID)
-			delete(s.container.execStdio, r.ExecID)
 		} else {
-			if s.container.ioShutdown != nil {
-				ioShutdowns = append(ioShutdowns, s.container.ioShutdown)
-			}
-			for _, ioShutdown := range s.container.execShutdowns {
-				ioShutdowns = append(ioShutdowns, ioShutdown)
+			if s.container.io != nil {
+				if s.container.io.init.forwarder != nil {
+					ioForwarders = append(ioForwarders, s.container.io.init.forwarder)
+				}
+				for _, pio := range s.container.io.exec {
+					ioForwarders = append(ioForwarders, pio.forwarder)
+				}
 			}
 			needNetworkClean = true
 			needVMShutdown = true
@@ -781,8 +789,11 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 
 	// Execute cleanup operations
-	for i, ioShutdown := range ioShutdowns {
-		if err := ioShutdown(ctx); err != nil {
+	for i, forwarder := range ioForwarders {
+		if forwarder == nil {
+			continue
+		}
+		if err := forwarder.Shutdown(ctx); err != nil {
 			if i == 0 && r.ExecID == "" {
 				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
 			} else {
@@ -851,28 +862,31 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 	}
 
 	// Use forwardIOWithIDs to enable RPC-based I/O for non-TTY mode (supports task attach)
-	// Returns a startFunc that must be called AFTER the guest creates the exec process
-	cio, ioStartFunc, ioShutdown, execForwarder, err := s.forwardIOWithIDs(ctx, vmi, r.ID, r.ExecID, rio)
+	// The forwarder must be started AFTER the guest creates the exec process.
+	cio, execForwarder, err := s.forwardIOWithIDs(ctx, vmi, r.ID, r.ExecID, rio)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 
 	s.containerMu.Lock()
 	if s.container != nil && s.containerID == r.ID {
-		s.container.execShutdowns[r.ExecID] = ioShutdown
-		// Store original host I/O paths for attach support
-		s.container.execStdio[r.ExecID] = execIO{
-			stdin:  rio.Stdin,
-			stdout: rio.Stdout,
-			stderr: rio.Stderr,
+		if s.container.io == nil {
+			s.container.io = &taskIO{exec: make(map[string]processIOState)}
 		}
-		// Store forwarder for CloseIO support
-		if execForwarder != nil {
-			s.container.execForwarders[r.ExecID] = execForwarder
+		if s.container.io.exec == nil {
+			s.container.io.exec = make(map[string]processIOState)
+		}
+		s.container.io.exec[r.ExecID] = processIOState{
+			host: execIO{
+				stdin:  rio.Stdin,
+				stdout: rio.Stdout,
+				stderr: rio.Stderr,
+			},
+			forwarder: execForwarder,
 		}
 	} else {
-		if ioShutdown != nil {
-			if err := ioShutdown(ctx); err != nil {
+		if execForwarder != nil {
+			if err := execForwarder.Shutdown(ctx); err != nil {
 				log.G(ctx).WithError(err).Error("failed to shutdown exec io after container not found")
 			}
 		}
@@ -896,11 +910,13 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 	if err != nil {
 		s.containerMu.Lock()
 		if s.container != nil && s.containerID == r.ID {
-			if ioShutdown, ok := s.container.execShutdowns[r.ExecID]; ok {
-				if err := ioShutdown(ctx); err != nil {
-					log.G(ctx).WithError(err).Error("failed to shutdown exec io after exec failure")
+			if s.container.io != nil {
+				if pio, ok := s.container.io.exec[r.ExecID]; ok && pio.forwarder != nil {
+					if err := pio.forwarder.Shutdown(ctx); err != nil {
+						log.G(ctx).WithError(err).Error("failed to shutdown exec io after exec failure")
+					}
+					delete(s.container.io.exec, r.ExecID)
 				}
-				delete(s.container.execShutdowns, r.ExecID)
 			}
 		}
 		s.containerMu.Unlock()
@@ -909,8 +925,8 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 	// Start the I/O forwarder AFTER guest has created the exec process and registered with I/O manager.
 	// This ensures the RPC I/O subscriber can find the process.
-	if ioStartFunc != nil {
-		if err := ioStartFunc(ctx); err != nil {
+	if execForwarder != nil {
+		if err := execForwarder.Start(ctx); err != nil {
 			log.G(ctx).WithError(err).Error("failed to start exec I/O forwarder")
 			// Don't fail the exec, just log the error - I/O may not work but exec is created
 		}
@@ -951,18 +967,20 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	s.containerMu.Unlock()
 
 	if c != nil {
-		if r.ExecID == "" {
-			// Container I/O paths
-			st.Stdin = c.hostStdin
-			st.Stdout = c.hostStdout
-			st.Stderr = c.hostStderr
-			st.Terminal = c.terminal
-		} else {
-			// Exec process I/O paths
-			if execPaths, ok := c.execStdio[r.ExecID]; ok {
-				st.Stdin = execPaths.stdin
-				st.Stdout = execPaths.stdout
-				st.Stderr = execPaths.stderr
+		if c.io != nil {
+			if r.ExecID == "" {
+				// Container I/O paths
+				st.Stdin = c.io.init.host.stdin
+				st.Stdout = c.io.init.host.stdout
+				st.Stderr = c.io.init.host.stderr
+				st.Terminal = c.io.init.terminal
+			} else {
+				// Exec process I/O paths
+				if pio, ok := c.io.exec[r.ExecID]; ok {
+					st.Stdin = pio.host.stdin
+					st.Stdout = pio.host.stdout
+					st.Stderr = pio.host.stderr
+				}
 			}
 		}
 	}
@@ -1026,15 +1044,17 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 		if s.container != nil && s.containerID == r.ID {
 			if r.ExecID == "" {
 				// Container stdin
-				if s.container.rpcForwarder != nil {
-					s.container.rpcForwarder.CloseStdin()
+				if s.container.io != nil && s.container.io.init.forwarder != nil {
+					s.container.io.init.forwarder.CloseStdin()
 					log.G(ctx).Debug("signaled RPC forwarder to close container stdin")
 				}
 			} else {
 				// Exec stdin
-				if forwarder, ok := s.container.execForwarders[r.ExecID]; ok && forwarder != nil {
-					forwarder.CloseStdin()
-					log.G(ctx).WithField("exec", r.ExecID).Debug("signaled RPC forwarder to close exec stdin")
+				if s.container.io != nil {
+					if pio, ok := s.container.io.exec[r.ExecID]; ok && pio.forwarder != nil {
+						pio.forwarder.CloseStdin()
+						log.G(ctx).WithField("exec", r.ExecID).Debug("signaled RPC forwarder to close exec stdin")
+					}
 				}
 			}
 		}
