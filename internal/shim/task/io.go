@@ -446,7 +446,7 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 	// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
 	// not tied to any specific operation context. Using the RPC context would cause the FIFO to
 	// close when the Create RPC completes, breaking stdin for later attach operations.
-	f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := fifo.OpenFifo(context.WithoutCancel(ctx), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("containerd-shim: opening %s failed: %w", stdin, err)
 	}
@@ -495,7 +495,7 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 				continue
 			}
 
-			if err != nil && err != io.EOF && !isNoDataError(err) {
+			if err != nil && !errors.Is(err, io.EOF) && !isNoDataError(err) {
 				// Real error (not just "no data available")
 				if !isClosedConnError(err) {
 					log.G(ctx).WithError(err).Warn("error reading stdin fifo")

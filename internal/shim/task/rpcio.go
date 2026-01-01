@@ -48,8 +48,6 @@ type RPCIOForwarder struct {
 	done    chan struct{}
 	wg      sync.WaitGroup
 
-	// ctx is a long-lived context for the forwarder goroutines, tied to container lifecycle
-	ctx    context.Context
 	cancel context.CancelFunc
 
 	// stdinCloser is used to signal stdin closure
@@ -114,10 +112,11 @@ func (f *RPCIOForwarder) Start(ctx context.Context) error {
 	// Create a long-lived context for the forwarder goroutines.
 	// This context is NOT tied to the RPC request context - it lives until Shutdown.
 	// We use context.WithoutCancel to preserve log fields but detach from parent cancellation.
-	f.ctx, f.cancel = context.WithCancel(context.WithoutCancel(ctx))
+	fwdCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	f.cancel = cancel
 	f.mu.Unlock()
 
-	log.G(f.ctx).WithFields(log.Fields{
+	log.G(fwdCtx).WithFields(log.Fields{
 		"container": f.containerID,
 		"exec":      f.execID,
 		"stdin":     f.stdinPath,
@@ -128,19 +127,19 @@ func (f *RPCIOForwarder) Start(ctx context.Context) error {
 	// Start stdin forwarder if stdin is configured
 	if f.stdinPath != "" {
 		f.wg.Add(1)
-		go f.forwardStdin(f.ctx)
+		go f.forwardStdin(fwdCtx)
 	}
 
 	// Start stdout forwarder if stdout is configured
 	if f.stdoutPath != "" {
 		f.wg.Add(1)
-		go f.forwardStdout(f.ctx)
+		go f.forwardStdout(fwdCtx)
 	}
 
 	// Start stderr forwarder if stderr is configured and different from stdout
 	if f.stderrPath != "" && f.stderrPath != f.stdoutPath {
 		f.wg.Add(1)
-		go f.forwardStderr(f.ctx)
+		go f.forwardStderr(fwdCtx)
 	}
 
 	return nil
