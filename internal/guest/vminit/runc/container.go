@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/typeurl/v2"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
+	vmstdio "github.com/aledbf/qemubox/containerd/internal/guest/vminit/stdio"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
 	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
 )
@@ -56,7 +57,7 @@ func getRuntimePath() string {
 }
 
 // NewContainer returns a new runc container
-func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest, streams stream.Manager) (*Container, error) {
+func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest, streams stream.Manager, stdioMgr *vmstdio.Manager) (*Container, error) {
 	opts := &options.Options{}
 	if r.Options.GetValue() != nil {
 		v, err := typeurl.UnmarshalAny(r.Options)
@@ -130,6 +131,7 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		opts,
 		rootfs,
 		streams,
+		stdioMgr,
 	)
 	if err := p.Create(ctx, config); err != nil {
 		return nil, err
@@ -184,7 +186,7 @@ func WriteOptions(path string, opts *options.Options) error {
 }
 
 func newInit(path, workDir string, platform stdio.Platform,
-	r *process.CreateConfig, options *options.Options, rootfs string, streams stream.Manager) *process.Init {
+	r *process.CreateConfig, options *options.Options, rootfs string, streams stream.Manager, stdioMgr *vmstdio.Manager) *process.Init {
 	runtime := process.NewRunc(options.Root, path, getRuntimePath(), options.SystemdCgroup)
 
 	p := process.New(r.ID, runtime, stdio.Stdio{
@@ -192,7 +194,7 @@ func newInit(path, workDir string, platform stdio.Platform,
 		Stdout:   r.Stdout,
 		Stderr:   r.Stderr,
 		Terminal: r.Terminal,
-	}, streams)
+	}, streams, stdioMgr)
 	p.Bundle = r.Bundle
 	p.Platform = platform
 	p.Rootfs = rootfs

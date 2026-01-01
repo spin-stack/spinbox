@@ -26,6 +26,7 @@ import (
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
+	vmstdio "github.com/aledbf/qemubox/containerd/internal/guest/vminit/stdio"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
 )
 
@@ -35,7 +36,7 @@ var (
 )
 
 // NewTaskService creates a new instance of a task service
-func NewTaskService(ctx context.Context, bundle string, publisher events.Publisher, sd shutdown.Service, sm stream.Manager) (task.TTRPCTaskService, error) {
+func NewTaskService(ctx context.Context, bundle string, publisher events.Publisher, sd shutdown.Service, sm stream.Manager, stdioMgr *vmstdio.Manager) (task.TTRPCTaskService, error) {
 	if cgroups.Mode() != cgroups.Unified {
 		return nil, fmt.Errorf("only unified cgroups mode is supported: %w", errdefs.ErrNotImplemented)
 	}
@@ -50,6 +51,7 @@ func NewTaskService(ctx context.Context, bundle string, publisher events.Publish
 		ec:          reaper.Default.Subscribe(),
 		ep:          ep,
 		streams:     sm,
+		stdioMgr:    stdioMgr,
 		shutdown:    sd,
 		containers:  make(map[string]*runc.Container),
 		exitTracker: newExitTracker(),
@@ -83,7 +85,8 @@ type service struct {
 	ec       chan runcC.Exit
 	ep       oom.Watcher
 
-	streams stream.Manager
+	streams  stream.Manager
+	stdioMgr *vmstdio.Manager
 
 	containers map[string]*runc.Container
 

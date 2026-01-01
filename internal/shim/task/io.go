@@ -112,22 +112,44 @@ func setupStreamScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (f
 	return forwardIOSetup{pio: streamPio, streams: streams, usePIOPaths: false}, nil
 }
 
-func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, error) {
+func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, func(ctx context.Context) error, error) {
+	return s.forwardIOWithIDs(ctx, vmi, "", "", sio)
+}
+
+// forwardIOWithIDs sets up I/O forwarding between host and guest.
+// For non-TTY mode with a container ID, it uses RPC-based I/O (supports attach).
+// Returns:
+//   - guestStdio: the stdio config to pass to the guest
+//   - startFunc: function to call AFTER guest creates the process (nil for non-RPC modes)
+//   - shutdownFunc: function to call to shut down I/O forwarding
+//   - error: any error during setup
+func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, containerID, execID string, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, func(ctx context.Context) error, error) {
 	// When using a terminal, stderr is not used (it's merged into stdout/pty)
 	if sio.Terminal {
 		sio.Stderr = ""
 	}
 	pio := sio
 	if pio.IsNull() {
-		return pio, nil, nil
+		return pio, nil, nil, nil
+	}
+
+	// For non-TTY mode, use RPC-based I/O to support task attach
+	// TTY mode uses direct streams (unchanged behavior)
+	if !sio.Terminal && containerID != "" {
+		log.G(ctx).WithFields(log.Fields{
+			"container": containerID,
+			"exec":      execID,
+			"terminal":  sio.Terminal,
+		}).Debug("using RPC-based I/O for non-TTY mode")
+		return s.forwardIORPC(ctx, containerID, execID, sio)
 	}
 
 	setup, err := setupForwardIO(ctx, vmi, pio)
 	if err != nil {
-		return stdio.Stdio{}, nil, err
+		return stdio.Stdio{}, nil, nil, err
 	}
 	if setup.passthrough {
-		return setup.pio, nil, nil
+		return setup.pio, nil, nil, nil
 	}
 	pio = setup.pio
 	streams := setup.streams
@@ -159,9 +181,10 @@ func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdi
 		}).Debug("forwardIO: using file paths for copyStreams, stream URIs for VM")
 	}
 	if err = copyStreams(ctx, streams, stdinPath, stdoutPath, stderrPath, ioDone); err != nil {
-		return stdio.Stdio{}, nil, err
+		return stdio.Stdio{}, nil, nil, err
 	}
-	return pio, func(ctx context.Context) error {
+	// For non-RPC modes, startFunc is nil (I/O starts immediately)
+	return pio, nil, func(ctx context.Context) error {
 		for i, c := range streams {
 			if c != nil && (i != 2 || c != streams[1]) {
 				_ = c.Close()

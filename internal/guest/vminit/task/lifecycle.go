@@ -34,7 +34,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 
 	systools.DumpFile(ctx, filepath.Join(r.Bundle, "config.json"))
 
-	container, err := runc.NewContainer(ctx, s.platform, r, s.streams)
+	container, err := runc.NewContainer(ctx, s.platform, r, s.streams, s.stdioMgr)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}

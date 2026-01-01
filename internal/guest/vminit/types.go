@@ -6,4 +6,7 @@ import "github.com/containerd/plugin"
 const (
 	// StreamingPlugin implements a stream manager
 	StreamingPlugin plugin.Type = "qemubox.streaming.v1"
+
+	// StdIOPlugin implements RPC-based I/O for container processes
+	StdIOPlugin plugin.Type = "qemubox.stdio.v1"
 )

@@ -1,0 +1,343 @@
+// Package stdio provides RPC-based I/O management for container processes.
+// It maintains per-process I/O pipes and supports multiple subscribers
+// for attach/detach functionality.
+package stdio
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+
+	"github.com/containerd/errdefs"
+	"github.com/containerd/log"
+)
+
+// processKey uniquely identifies a process within a container.
+type processKey struct {
+	containerID string
+	execID      string
+}
+
+// subscriber represents a client subscribed to output streams.
+type subscriber struct {
+	ch     chan OutputData
+	cancel context.CancelFunc
+}
+
+// OutputData represents a chunk of output data sent to subscribers.
+type OutputData struct {
+	Data []byte
+	EOF  bool
+}
+
+// processIO holds the I/O state for a single process.
+type processIO struct {
+	mu sync.Mutex
+
+	// stdin is the writer to the process's stdin pipe.
+	stdin       io.WriteCloser
+	stdinClosed bool
+
+	// stdout/stderr readers from the process.
+	stdoutReader io.Reader
+	stderrReader io.Reader
+
+	// Subscribers for fan-out.
+	stdoutSubs []*subscriber
+	stderrSubs []*subscriber
+
+	// Process lifecycle.
+	exited   bool
+	exitChan chan struct{}
+
+	// Goroutine synchronization.
+	wg sync.WaitGroup
+}
+
+// Manager maintains I/O state for all container processes.
+// It supports multiple subscribers per process for attach functionality.
+type Manager struct {
+	mu        sync.RWMutex
+	processes map[processKey]*processIO
+}
+
+// NewManager creates a new I/O manager.
+func NewManager() *Manager {
+	return &Manager{
+		processes: make(map[processKey]*processIO),
+	}
+}
+
+// Register registers a new process with its I/O pipes.
+// The manager takes ownership of the pipes and will close them when the process exits.
+func (m *Manager) Register(containerID, execID string, stdin io.WriteCloser, stdout, stderr io.Reader) {
+	key := processKey{containerID: containerID, execID: execID}
+
+	pio := &processIO{
+		stdin:        stdin,
+		stdoutReader: stdout,
+		stderrReader: stderr,
+		exitChan:     make(chan struct{}),
+	}
+
+	m.mu.Lock()
+	m.processes[key] = pio
+	m.mu.Unlock()
+
+	// Start fan-out goroutines for stdout and stderr.
+	if stdout != nil {
+		pio.wg.Add(1)
+		go m.fanOutReader(containerID, execID, "stdout", stdout, pio, func(p *processIO) *[]*subscriber { return &p.stdoutSubs })
+	}
+	if stderr != nil {
+		pio.wg.Add(1)
+		go m.fanOutReader(containerID, execID, "stderr", stderr, pio, func(p *processIO) *[]*subscriber { return &p.stderrSubs })
+	}
+
+	log.L.WithField("container", containerID).WithField("exec", execID).Debug("registered process I/O")
+}
+
+// fanOutReader reads from a reader and distributes data to all subscribers.
+func (m *Manager) fanOutReader(containerID, execID, streamName string, reader io.Reader, pio *processIO, getSubs func(*processIO) *[]*subscriber) {
+	defer pio.wg.Done()
+
+	log.L.WithField("container", containerID).WithField("stream", streamName).Debug("fanOutReader started")
+
+	buf := make([]byte, 32*1024) // 32KB buffer
+	for {
+		n, err := reader.Read(buf)
+		log.L.WithField("container", containerID).WithField("stream", streamName).
+			WithField("n", n).WithField("err", err).Debug("fanOutReader read result")
+
+		if n > 0 {
+			data := make([]byte, n)
+			copy(data, buf[:n])
+
+			pio.mu.Lock()
+			subs := *getSubs(pio)
+			for _, sub := range subs {
+				select {
+				case sub.ch <- OutputData{Data: data}:
+				default:
+					// Slow subscriber, drop data to avoid blocking.
+					log.L.WithField("container", containerID).WithField("stream", streamName).Warn("dropping data for slow subscriber")
+				}
+			}
+			pio.mu.Unlock()
+		}
+
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				log.L.WithField("container", containerID).WithField("stream", streamName).Debug("fanOutReader got EOF")
+			} else {
+				log.L.WithError(err).WithField("container", containerID).WithField("stream", streamName).Warn("error reading from process")
+			}
+
+			// Send EOF to all subscribers.
+			pio.mu.Lock()
+			subs := *getSubs(pio)
+			log.L.WithField("container", containerID).WithField("stream", streamName).
+				WithField("subscriberCount", len(subs)).Debug("sending EOF to subscribers")
+			for _, sub := range subs {
+				select {
+				case sub.ch <- OutputData{EOF: true}:
+				default:
+				}
+			}
+			pio.mu.Unlock()
+			return
+		}
+	}
+}
+
+// Unregister removes a process from the manager.
+// This should be called when the process exits.
+func (m *Manager) Unregister(containerID, execID string) {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.Lock()
+	pio, ok := m.processes[key]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.processes, key)
+	m.mu.Unlock()
+
+	// Mark as exited and close exit channel.
+	pio.mu.Lock()
+	pio.exited = true
+	close(pio.exitChan)
+
+	// Cancel all subscribers.
+	for _, sub := range pio.stdoutSubs {
+		sub.cancel()
+		close(sub.ch)
+	}
+	for _, sub := range pio.stderrSubs {
+		sub.cancel()
+		close(sub.ch)
+	}
+	pio.stdoutSubs = nil
+	pio.stderrSubs = nil
+	pio.mu.Unlock()
+
+	// Wait for fan-out goroutines to finish.
+	pio.wg.Wait()
+
+	// Close stdin if not already closed.
+	if pio.stdin != nil && !pio.stdinClosed {
+		_ = pio.stdin.Close()
+	}
+
+	log.L.WithField("container", containerID).WithField("exec", execID).Debug("unregistered process I/O")
+}
+
+// WriteStdin writes data to a process's stdin.
+func (m *Manager) WriteStdin(containerID, execID string, data []byte) (int, error) {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.RLock()
+	pio, ok := m.processes[key]
+	m.mu.RUnlock()
+
+	if !ok {
+		return 0, fmt.Errorf("process not found: %w", errdefs.ErrNotFound)
+	}
+
+	pio.mu.Lock()
+	defer pio.mu.Unlock()
+
+	if pio.stdinClosed {
+		return 0, fmt.Errorf("stdin closed: %w", errdefs.ErrFailedPrecondition)
+	}
+
+	if pio.stdin == nil {
+		return 0, fmt.Errorf("stdin not available: %w", errdefs.ErrFailedPrecondition)
+	}
+
+	n, err := pio.stdin.Write(data)
+	if err != nil {
+		return n, fmt.Errorf("write failed: %w", err)
+	}
+
+	return n, nil
+}
+
+// CloseStdin closes a process's stdin.
+func (m *Manager) CloseStdin(containerID, execID string) error {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.RLock()
+	pio, ok := m.processes[key]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("process not found: %w", errdefs.ErrNotFound)
+	}
+
+	pio.mu.Lock()
+	defer pio.mu.Unlock()
+
+	if pio.stdinClosed {
+		return fmt.Errorf("stdin already closed: %w", errdefs.ErrFailedPrecondition)
+	}
+
+	if pio.stdin != nil {
+		if err := pio.stdin.Close(); err != nil {
+			return fmt.Errorf("close failed: %w", err)
+		}
+	}
+	pio.stdinClosed = true
+
+	return nil
+}
+
+// SubscribeStdout subscribes to a process's stdout stream.
+// Returns a channel that receives output chunks.
+// The caller should cancel the context when done.
+func (m *Manager) SubscribeStdout(ctx context.Context, containerID, execID string) (<-chan OutputData, error) {
+	return m.subscribe(ctx, containerID, execID, func(p *processIO) *[]*subscriber { return &p.stdoutSubs })
+}
+
+// SubscribeStderr subscribes to a process's stderr stream.
+// Returns a channel that receives output chunks.
+// The caller should cancel the context when done.
+func (m *Manager) SubscribeStderr(ctx context.Context, containerID, execID string) (<-chan OutputData, error) {
+	return m.subscribe(ctx, containerID, execID, func(p *processIO) *[]*subscriber { return &p.stderrSubs })
+}
+
+func (m *Manager) subscribe(ctx context.Context, containerID, execID string, getSubs func(*processIO) *[]*subscriber) (<-chan OutputData, error) {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.RLock()
+	pio, ok := m.processes[key]
+	m.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("process not found: %w", errdefs.ErrNotFound)
+	}
+
+	pio.mu.Lock()
+	defer pio.mu.Unlock()
+
+	if pio.exited {
+		// Process already exited, return a channel with EOF.
+		ch := make(chan OutputData, 1)
+		ch <- OutputData{EOF: true}
+		close(ch)
+		return ch, nil
+	}
+
+	// Create subscriber with buffered channel.
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan OutputData, 64) // Buffer to avoid blocking the fan-out.
+	sub := &subscriber{ch: ch, cancel: cancel}
+
+	subs := getSubs(pio)
+	*subs = append(*subs, sub)
+
+	// Remove subscriber when context is cancelled.
+	go func() {
+		<-ctx.Done()
+		m.removeSubscriber(containerID, execID, sub, getSubs)
+	}()
+
+	return ch, nil
+}
+
+func (m *Manager) removeSubscriber(containerID, execID string, sub *subscriber, getSubs func(*processIO) *[]*subscriber) {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.RLock()
+	pio, ok := m.processes[key]
+	m.mu.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	pio.mu.Lock()
+	defer pio.mu.Unlock()
+
+	subs := getSubs(pio)
+	for i, s := range *subs {
+		if s == sub {
+			*subs = append((*subs)[:i], (*subs)[i+1:]...)
+			break
+		}
+	}
+}
+
+// HasProcess checks if a process is registered.
+func (m *Manager) HasProcess(containerID, execID string) bool {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.RLock()
+	_, ok := m.processes[key]
+	m.mu.RUnlock()
+
+	return ok
+}

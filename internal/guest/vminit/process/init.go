@@ -24,6 +24,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
+	vmstdio "github.com/aledbf/qemubox/containerd/internal/guest/vminit/stdio"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
 )
@@ -64,6 +65,7 @@ type Init struct {
 	NoNewKeyring bool
 	CriuWorkPath string
 	streams      stream.Manager
+	stdioMgr     *vmstdio.Manager
 }
 
 // NewRunc returns a new runc instance for a process
@@ -83,7 +85,7 @@ func NewRunc(root, path, runtime string, systemd bool) *runc.Runc {
 }
 
 // New returns a new process
-func New(id string, runtime *runc.Runc, stdio stdio.Stdio, sm stream.Manager) *Init {
+func New(id string, runtime *runc.Runc, stdio stdio.Stdio, sm stream.Manager, stdioMgr *vmstdio.Manager) *Init {
 	p := &Init{
 		id:        id,
 		runtime:   runtime,
@@ -91,6 +93,7 @@ func New(id string, runtime *runc.Runc, stdio stdio.Stdio, sm stream.Manager) *I
 		status:    0,
 		waitBlock: make(chan struct{}),
 		streams:   sm,
+		stdioMgr:  stdioMgr,
 	}
 	p.initState = &createdState{p: p}
 	return p
@@ -201,6 +204,12 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		if c != nil {
 			p.stdin = c
 			p.closers = append(p.closers, c)
+		}
+
+		// Register with stdio manager for RPC-based I/O
+		if pio.IsRPCIO() && p.stdioMgr != nil && pio.IO() != nil {
+			p.stdioMgr.Register(r.ID, "", pio.IO().Stdin(), pio.IO().Stdout(), pio.IO().Stderr())
+			log.G(ctx).WithField("container", r.ID).Debug("registered process I/O with stdio manager")
 		}
 	}
 	pid, err := pidFile.Read()
@@ -314,6 +323,12 @@ func (p *Init) Delete(ctx context.Context) error {
 }
 
 func (p *Init) delete(ctx context.Context) error {
+	// Unregister from stdio manager if using RPC-based I/O
+	if p.stdioMgr != nil && p.io != nil && p.io.IsRPCIO() {
+		p.stdioMgr.Unregister(p.id, "")
+		log.G(ctx).WithField("container", p.id).Debug("unregistered process I/O from stdio manager")
+	}
+
 	// Use the minimum of default timeout and context deadline
 	timeout := 2 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {

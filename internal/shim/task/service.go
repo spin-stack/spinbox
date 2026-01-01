@@ -191,6 +191,21 @@ type container struct {
 	ioShutdown    func(context.Context) error
 	execShutdowns map[string]func(context.Context) error
 	pid           uint32
+
+	// Host-side I/O paths (original FIFOs) - needed for attach since guest uses rpcio:// URIs
+	hostStdin  string
+	hostStdout string
+	hostStderr string
+	terminal   bool
+
+	// Exec I/O paths (map from execID to host paths)
+	execStdio map[string]execIO
+}
+
+type execIO struct {
+	stdin  string
+	stdout string
+	stderr string
 }
 
 // service is the shim implementation of a remote shim over TTRPC.
@@ -470,7 +485,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		Terminal: r.Terminal,
 	}
 
-	cio, ioShutdown, err := s.forwardIO(ctx, vmi, rio)
+	// Use forwardIOWithIDs to enable RPC-based I/O for non-TTY mode (supports task attach)
+	// Returns a startFunc that must be called AFTER the guest creates the process
+	cio, ioStartFunc, ioShutdown, err := s.forwardIOWithIDs(ctx, vmi, r.ID, "", rio)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -493,6 +510,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	c := &container{
 		ioShutdown:    ioShutdown,
 		execShutdowns: make(map[string]func(context.Context) error),
+		execStdio:     make(map[string]execIO),
+		// Store original host I/O paths for attach support
+		hostStdin:  rio.Stdin,
+		hostStdout: rio.Stdout,
+		hostStderr: rio.Stderr,
+		terminal:   rio.Terminal,
 	}
 	tc := taskAPI.NewTTRPCTaskClient(rpcClient)
 	resp, err := tc.Create(ctx, vr)
@@ -504,6 +527,15 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 			}
 		}
 		return nil, errgrpc.ToGRPC(err)
+	}
+
+	// Start the I/O forwarder AFTER guest has created the process and registered with I/O manager.
+	// This ensures the RPC I/O subscriber can find the process.
+	if ioStartFunc != nil {
+		if err := ioStartFunc(ctx); err != nil {
+			log.G(ctx).WithError(err).Error("failed to start I/O forwarder")
+			// Don't fail the create, just log the error - I/O may not work but container is created
+		}
 	}
 
 	log.G(ctx).WithFields(log.Fields{
@@ -809,7 +841,9 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		Terminal: r.Terminal,
 	}
 
-	cio, ioShutdown, err := s.forwardIO(ctx, vmi, rio)
+	// Use forwardIOWithIDs to enable RPC-based I/O for non-TTY mode (supports task attach)
+	// Returns a startFunc that must be called AFTER the guest creates the exec process
+	cio, ioStartFunc, ioShutdown, err := s.forwardIOWithIDs(ctx, vmi, r.ID, r.ExecID, rio)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -817,6 +851,12 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 	s.containerMu.Lock()
 	if s.container != nil && s.containerID == r.ID {
 		s.container.execShutdowns[r.ExecID] = ioShutdown
+		// Store original host I/O paths for attach support
+		s.container.execStdio[r.ExecID] = execIO{
+			stdin:  rio.Stdin,
+			stdout: rio.Stdout,
+			stderr: rio.Stderr,
+		}
 	} else {
 		if ioShutdown != nil {
 			if err := ioShutdown(ctx); err != nil {
@@ -854,6 +894,15 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		return nil, errgrpc.ToGRPC(err)
 	}
 
+	// Start the I/O forwarder AFTER guest has created the exec process and registered with I/O manager.
+	// This ensures the RPC I/O subscriber can find the process.
+	if ioStartFunc != nil {
+		if err := ioStartFunc(ctx); err != nil {
+			log.G(ctx).WithError(err).Error("failed to start exec I/O forwarder")
+			// Don't fail the exec, just log the error - I/O may not work but exec is created
+		}
+	}
+
 	return resp, nil
 }
 
@@ -881,6 +930,30 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("state: guest state failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
+
+	// Replace guest's I/O paths (rpcio:// URIs) with host FIFO paths for attach support.
+	// The guest uses rpcio:// URIs internally, but containerd's attach expects host FIFOs.
+	s.containerMu.Lock()
+	c := s.container
+	s.containerMu.Unlock()
+
+	if c != nil {
+		if r.ExecID == "" {
+			// Container I/O paths
+			st.Stdin = c.hostStdin
+			st.Stdout = c.hostStdout
+			st.Stderr = c.hostStderr
+			st.Terminal = c.terminal
+		} else {
+			// Exec process I/O paths
+			if execPaths, ok := c.execStdio[r.ExecID]; ok {
+				st.Stdin = execPaths.stdin
+				st.Stdout = execPaths.stdout
+				st.Stderr = execPaths.stderr
+			}
+		}
+	}
+
 	return st, nil
 }
 
