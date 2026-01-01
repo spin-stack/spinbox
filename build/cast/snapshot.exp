@@ -1,0 +1,241 @@
+#!/usr/bin/expect -f
+# QemuBox Snapshot Demo - Persist disk state between runs
+
+set timeout 120
+
+# Config
+set TYPING_DELAY 0.04
+set CMD_DELAY 1
+set LONG_DELAY 2
+
+log_user 1
+
+# Type commands realistically
+proc type_cmd {cmd} {
+    global TYPING_DELAY
+    foreach char [split $cmd ""] {
+        send -- $char
+        after [expr {int($TYPING_DELAY * 500)}]
+    }
+    send "\r"
+}
+
+proc comment {text} {
+    send "# $text\r"
+    expect -re {\$|#}
+}
+
+# Start clean bash
+spawn bash --norc --noprofile
+expect -re {\$|#}
+send "PS1='\\n\$ '\r"
+expect -re {\$}
+send "clear\r"
+expect -re {\$}
+after 100
+
+# Define ctr command
+set CTR "ctr --address /var/run/qemubox/containerd.sock"
+
+# ============================================
+# PHASE 1: Run container and make changes
+# ============================================
+
+comment "=== QEMUBOX SNAPSHOT DEMO ==="
+comment "Demonstrating persistent disk state between VM runs"
+after 1500
+
+comment "Step 1: Pull the sandbox image"
+type_cmd "$CTR image pull --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.9"
+
+expect {
+    -re {not found|failed|error|Error|denied} {
+        send_user "\nERROR: Image pull failed\n"
+        exit 1
+    }
+    -re {saved|digest|unpacking|done|elapsed} {
+        expect -re {\$|#}
+    }
+    -re {\$|#} {}
+    timeout {
+        send_user "\nERROR: Pull timeout\n"
+        exit 1
+    }
+}
+after [expr {$LONG_DELAY * 500}]
+
+comment "Step 2: Run VM (note: no --rm flag, we'll snapshot it later)"
+type_cmd "$CTR run -t --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.9 snapshot-demo"
+
+# Wait for login
+expect {
+    -re {ctr: failed|error starting|Error} {
+        send_user "\nERROR: Container failed to start\n"
+        exit 1
+    }
+    -re {localhost login:} {
+        after 1000
+        type_cmd "root"
+        expect -re {Password:}
+        after 500
+        type_cmd "qemubox"
+        expect -re {root@localhost.*#|~#}
+    }
+    -re {root@localhost.*#|~#} {}
+    timeout {
+        send_user "\nERROR: Login timeout\n"
+        exit 1
+    }
+}
+after [expr {$CMD_DELAY * 500}]
+
+set PROMPT {root@localhost.*#|~#}
+
+# ============================================
+# PHASE 2: Make changes inside VM
+# ============================================
+
+comment "=== INSIDE VM: Making persistent changes ==="
+
+comment "Create a file that will persist"
+type_cmd "echo 'Hello from the original VM!' > /root/persistent-data.txt"
+expect -re $PROMPT
+after 500
+
+comment "Create a directory with content"
+type_cmd "mkdir -p /root/my-project && echo 'version: 1.0' > /root/my-project/config.yaml"
+expect -re $PROMPT
+after 500
+
+comment "Install a package (this will persist in the snapshot)"
+type_cmd "apt-get update -qq && apt-get install -qq -y cowsay > /dev/null 2>&1"
+expect -re $PROMPT
+after 2000
+
+comment "Verify the package works"
+type_cmd "/usr/games/cowsay 'State will persist!'"
+expect -re $PROMPT
+after 1500
+
+comment "Show what we created"
+type_cmd "cat /root/persistent-data.txt && cat /root/my-project/config.yaml"
+expect -re $PROMPT
+after 1500
+
+comment "Now shutdown the VM to create a snapshot"
+after 500
+type_cmd "halt"
+
+expect {
+    -re {\$|#} {}
+    eof {}
+    timeout {}
+}
+after 2000
+
+# ============================================
+# PHASE 3: Create snapshot on host
+# ============================================
+
+comment "=== HOST: Creating snapshot from container ==="
+
+comment "List current snapshots (note: snapshot-demo is Active)"
+type_cmd "$CTR snapshots --snapshotter erofs ls"
+expect -re {\$|#}
+after 1500
+
+comment "Commit the active snapshot to preserve our changes"
+type_cmd "$CTR snapshots --snapshotter erofs commit my-saved-state snapshot-demo"
+expect -re {\$|#}
+after 1000
+
+comment "List snapshots - my-saved-state is now Committed"
+type_cmd "$CTR snapshots --snapshotter erofs ls | grep -E 'KEY|my-saved-state'"
+expect -re {\$|#}
+after 1500
+
+comment "Clean up the original container"
+type_cmd "$CTR task kill snapshot-demo 2>/dev/null || true"
+expect -re {\$|#}
+type_cmd "$CTR container rm snapshot-demo 2>/dev/null || true"
+expect -re {\$|#}
+after 500
+
+# ============================================
+# PHASE 4: Run new VM from snapshot
+# ============================================
+
+comment "=== Run new VM from committed snapshot ==="
+
+comment "Prepare an active snapshot from our saved state"
+type_cmd "$CTR snapshots --snapshotter erofs prepare snapshot-test my-saved-state"
+expect -re {\$|#}
+after 1000
+
+comment "Start a new VM using the prepared snapshot"
+type_cmd "$CTR run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.9 snapshot-test"
+
+# Wait for login
+expect {
+    -re {ctr: failed|error starting|Error} {
+        send_user "\nERROR: Container failed to start\n"
+        exit 1
+    }
+    -re {localhost login:} {
+        after 1000
+        type_cmd "root"
+        expect -re {Password:}
+        after 500
+        type_cmd "qemubox"
+        expect -re {root@localhost.*#|~#}
+    }
+    -re {root@localhost.*#|~#} {}
+    timeout {
+        send_user "\nERROR: Login timeout\n"
+        exit 1
+    }
+}
+after [expr {$CMD_DELAY * 500}]
+
+# ============================================
+# PHASE 5: Verify changes persisted
+# ============================================
+
+comment "=== VERIFY: Changes persisted! ==="
+
+comment "Check our persistent file"
+type_cmd "cat /root/persistent-data.txt"
+expect -re $PROMPT
+after 1000
+
+comment "Check our project directory"
+type_cmd "cat /root/my-project/config.yaml"
+expect -re $PROMPT
+after 1000
+
+comment "Verify installed package still works"
+type_cmd "/usr/games/cowsay 'Snapshot works!'"
+expect -re $PROMPT
+after 2000
+
+comment "All changes from the original VM are preserved!"
+after 1000
+
+# Shutdown
+comment "Done! Shutting down..."
+type_cmd "halt"
+
+expect {
+    -re {\$|#} {}
+    eof {}
+    timeout {}
+}
+
+after 1000
+send_user "\n"
+send_user "Snapshot Demo Complete!\n"
+send_user "  - Created files and installed packages in VM\n"
+send_user "  - Created snapshot of VM state\n"
+send_user "  - New VM has all previous changes\n"
+send_user "  - Disk state persists across VM runs\n"
+send_user "\n"

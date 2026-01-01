@@ -20,8 +20,10 @@ asciinema play qemubox-demo.cast
 
 ## 📁 Files
 
-- **`qemubox.exp`** - Expect script that automates the demo
-- **`record.sh`** - Wrapper to record with asciinema
+- **`qemubox.exp`** - Expect script for basic demo (boot, docker)
+- **`record.sh`** - Wrapper to record basic demo
+- **`snapshot.exp`** - Expect script for snapshot demo (persistent state)
+- **`record-snapshot.sh`** - Wrapper to record snapshot demo
 
 ## 🎬 Recording
 
@@ -31,6 +33,12 @@ asciinema play qemubox-demo.cast
 ```
 This creates `qemubox-demo.cast`
 
+### Snapshot Recording
+```bash
+./record-snapshot.sh
+```
+This creates `qemubox-snapshot-demo.cast`
+
 ### Custom Filename
 ```bash
 ./record.sh my-custom-name
@@ -38,15 +46,20 @@ This creates `qemubox-demo.cast`
 This creates `my-custom-name.cast`
 
 ### What Gets Recorded
-The demo automatically shows:
+
+**Basic Demo (`record.sh`):**
 1. Pulling the qemubox image
 2. Running a container with qemubox runtime
 3. Inside container:
    - systemd analysis
    - Docker operations
    - Pulling and running Alpine
-4. Creating and managing snapshots
-5. Running a container from snapshot
+
+**Snapshot Demo (`record-snapshot.sh`):**
+1. Running a VM and making changes (files, packages)
+2. Shutting down and creating a snapshot
+3. Running a new VM from the snapshot
+4. Verifying all changes persisted
 
 ## 📤 Sharing
 
