@@ -48,6 +48,12 @@ type processIO struct {
 	stdoutSubs []*subscriber
 	stderrSubs []*subscriber
 
+	// Buffered output for late subscribers.
+	stdoutBuf      []OutputData
+	stderrBuf      []OutputData
+	stdoutBufBytes int
+	stderrBufBytes int
+
 	// Process lifecycle.
 	exited   bool
 	exitChan chan struct{}
@@ -117,12 +123,16 @@ func (m *Manager) fanOutReader(containerID, execID, streamName string, reader io
 
 			pio.mu.Lock()
 			subs := *getSubs(pio)
-			for _, sub := range subs {
-				select {
-				case sub.ch <- OutputData{Data: data}:
-				default:
-					// Slow subscriber, drop data to avoid blocking.
-					log.L.WithField("container", containerID).WithField("stream", streamName).Warn("dropping data for slow subscriber")
+			if len(subs) == 0 {
+				m.bufferOutputLocked(pio, streamName, OutputData{Data: data})
+			} else {
+				for _, sub := range subs {
+					select {
+					case sub.ch <- OutputData{Data: data}:
+					default:
+						// Slow subscriber, drop data to avoid blocking.
+						log.L.WithField("container", containerID).WithField("stream", streamName).Warn("dropping data for slow subscriber")
+					}
 				}
 			}
 			pio.mu.Unlock()
@@ -135,15 +145,19 @@ func (m *Manager) fanOutReader(containerID, execID, streamName string, reader io
 				log.L.WithError(err).WithField("container", containerID).WithField("stream", streamName).Warn("error reading from process")
 			}
 
-			// Send EOF to all subscribers.
+			// Send or buffer EOF for subscribers.
 			pio.mu.Lock()
 			subs := *getSubs(pio)
 			log.L.WithField("container", containerID).WithField("stream", streamName).
 				WithField("subscriberCount", len(subs)).Debug("sending EOF to subscribers")
-			for _, sub := range subs {
-				select {
-				case sub.ch <- OutputData{EOF: true}:
-				default:
+			if len(subs) == 0 {
+				m.bufferOutputLocked(pio, streamName, OutputData{EOF: true})
+			} else {
+				for _, sub := range subs {
+					select {
+					case sub.ch <- OutputData{EOF: true}:
+					default:
+					}
 				}
 			}
 			pio.mu.Unlock()
@@ -208,7 +222,6 @@ func (m *Manager) WriteStdin(containerID, execID string, data []byte) (int, erro
 	}
 
 	pio.mu.Lock()
-	defer pio.mu.Unlock()
 
 	if pio.stdinClosed {
 		return 0, fmt.Errorf("stdin closed: %w", errdefs.ErrFailedPrecondition)
@@ -288,6 +301,7 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 		ch := make(chan OutputData, 1)
 		ch <- OutputData{EOF: true}
 		close(ch)
+		pio.mu.Unlock()
 		return ch, nil
 	}
 
@@ -296,8 +310,28 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 	ch := make(chan OutputData, 64) // Buffer to avoid blocking the fan-out.
 	sub := &subscriber{ch: ch, cancel: cancel}
 
+	var buffered []OutputData
+	if getSubs(pio) == &pio.stdoutSubs {
+		buffered = append(buffered, pio.stdoutBuf...)
+		pio.stdoutBuf = nil
+		pio.stdoutBufBytes = 0
+	} else {
+		buffered = append(buffered, pio.stderrBuf...)
+		pio.stderrBuf = nil
+		pio.stderrBufBytes = 0
+	}
+
 	subs := getSubs(pio)
 	*subs = append(*subs, sub)
+	pio.mu.Unlock()
+
+	for _, data := range buffered {
+		select {
+		case ch <- data:
+		default:
+			log.L.WithField("container", containerID).Warn("dropping buffered data for slow subscriber")
+		}
+	}
 
 	// Remove subscriber when context is cancelled.
 	go func() {
@@ -340,4 +374,24 @@ func (m *Manager) HasProcess(containerID, execID string) bool {
 	m.mu.RUnlock()
 
 	return ok
+}
+
+func (m *Manager) bufferOutputLocked(pio *processIO, streamName string, data OutputData) {
+	const maxBufferedBytes = 256 * 1024
+	if streamName == "stdout" {
+		pio.stdoutBuf = append(pio.stdoutBuf, data)
+		pio.stdoutBufBytes += len(data.Data)
+		for pio.stdoutBufBytes > maxBufferedBytes && len(pio.stdoutBuf) > 0 {
+			pio.stdoutBufBytes -= len(pio.stdoutBuf[0].Data)
+			pio.stdoutBuf = pio.stdoutBuf[1:]
+		}
+		return
+	}
+
+	pio.stderrBuf = append(pio.stderrBuf, data)
+	pio.stderrBufBytes += len(data.Data)
+	for pio.stderrBufBytes > maxBufferedBytes && len(pio.stderrBuf) > 0 {
+		pio.stderrBufBytes -= len(pio.stderrBuf[0].Data)
+		pio.stderrBuf = pio.stderrBuf[1:]
+	}
 }
