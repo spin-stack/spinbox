@@ -86,13 +86,13 @@ export PATH=/usr/share/qemubox/bin:$PATH
 
 # Pull an image
 ctr --address /var/run/qemubox/containerd.sock image pull \
-  --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.7
+  --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.8
 
 # Run with qemubox runtime
 ctr --address /var/run/qemubox/containerd.sock run -t --rm \
   --snapshotter erofs \
   --runtime io.containerd.qemubox.v1 \
-  ghcr.io/aledbf/qemubox/sandbox:v0.0.7 test-qemu-shim
+  ghcr.io/aledbf/qemubox/sandbox:v0.0.8 test-qemu-shim
 ```
 
 ## Architecture
