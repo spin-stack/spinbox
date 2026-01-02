@@ -222,6 +222,7 @@ func (m *Manager) WriteStdin(containerID, execID string, data []byte) (int, erro
 	}
 
 	pio.mu.Lock()
+	defer pio.mu.Unlock()
 
 	if pio.stdinClosed {
 		return 0, fmt.Errorf("stdin closed: %w", errdefs.ErrFailedPrecondition)
@@ -294,7 +295,6 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 	}
 
 	pio.mu.Lock()
-	defer pio.mu.Unlock()
 
 	if pio.exited {
 		// Process already exited, return a channel with EOF.
