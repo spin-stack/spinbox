@@ -10,7 +10,6 @@ import (
 	"github.com/containerd/plugin/registry"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/bundle"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stdio"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/task"
 )
@@ -23,7 +22,6 @@ func init() {
 			cplugins.EventPlugin,
 			cplugins.InternalPlugin,
 			StreamingPlugin,
-			StdIOPlugin,
 		},
 		InitFn: func(ic *plugin.InitContext) (interface{}, error) {
 			pp, err := ic.GetSingle(cplugins.EventPlugin)
@@ -35,10 +33,6 @@ func init() {
 				return nil, err
 			}
 			sm, err := ic.GetByID(StreamingPlugin, "vsock")
-			if err != nil {
-				return nil, err
-			}
-			sp, err := ic.GetByID(StdIOPlugin, "stdio")
 			if err != nil {
 				return nil, err
 			}
@@ -54,11 +48,7 @@ func init() {
 			if !ok {
 				return nil, fmt.Errorf("unexpected stream manager type %T", sm)
 			}
-			stdioPlugin, ok := sp.(*stdio.Plugin)
-			if !ok {
-				return nil, fmt.Errorf("unexpected stdio plugin type %T", sp)
-			}
-			return task.NewTaskService(ic.Context, bundle.RootDir, publisher, shutdownSvc, streamMgr, stdioPlugin.Manager())
+			return task.NewTaskService(ic.Context, bundle.RootDir, publisher, shutdownSvc, streamMgr)
 		},
 	})
 }

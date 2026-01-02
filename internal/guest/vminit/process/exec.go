@@ -13,14 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/errdefs"
 	runc "github.com/containerd/go-runc"
-	"github.com/containerd/log"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 )
 
 type execProcess struct {
@@ -95,12 +93,6 @@ func (e *execProcess) Delete(ctx context.Context) error {
 }
 
 func (e *execProcess) delete(ctx context.Context) error {
-	// Unregister from stdio manager if using RPC-based I/O
-	if e.parent != nil && e.parent.stdioMgr != nil && e.io != nil && e.io.IsRPCIO() {
-		e.parent.stdioMgr.Unregister(e.parent.id, e.id)
-		log.G(ctx).WithField("container", e.parent.id).WithField("exec", e.id).Debug("unregistered exec process I/O from stdio manager")
-	}
-
 	_ = waitTimeout(ctx, &e.wg, 2*time.Second)
 	if e.io != nil {
 		for _, c := range e.closers {
@@ -245,12 +237,6 @@ func (e *execProcess) start(ctx context.Context) error {
 		if c != nil {
 			e.stdin = c
 			e.closers = append(e.closers, c)
-		}
-
-		// Register with stdio manager for RPC-based I/O
-		if pio.IsRPCIO() && e.parent.stdioMgr != nil && pio.IO() != nil {
-			e.parent.stdioMgr.Register(e.parent.id, e.id, pio.IO().Stdin(), pio.IO().Stdout(), pio.IO().Stderr())
-			log.G(ctx).WithField("container", e.parent.id).WithField("exec", e.id).Debug("registered exec process I/O with stdio manager")
 		}
 	}
 	pid, err := pidFile.Read()

@@ -333,28 +333,7 @@ func TestNullStdio(t *testing.T) {
 	}
 }
 
-func TestForwardIOUsesRPCForNonTTYFifo(t *testing.T) {
-	svc := &service{}
-	ss := &mockVMInstance{}
-
-	sio := stdio.Stdio{
-		Stdin:    "/run/containerd/test.stdin",
-		Stdout:   "/run/containerd/test.stdout",
-		Stderr:   "/run/containerd/test.stderr",
-		Terminal: false,
-	}
-
-	ctx := context.Background()
-	_, forwarder, err := svc.forwardIOWithIDs(ctx, ss, "cid", "", sio)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := forwarder.(*RPCIOForwarder); !ok {
-		t.Fatalf("expected RPC forwarder, got %T", forwarder)
-	}
-}
-
-func TestForwardIOUsesDirectForNonTTYNonFifo(t *testing.T) {
+func TestForwardIOUsesDirectForFileScheme(t *testing.T) {
 	withTempCwd(t, func(tmp string) {
 		svc := &service{}
 		ss := &mockVMInstance{}

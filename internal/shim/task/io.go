@@ -28,95 +28,26 @@ const (
 	defaultScheme = "fifo"
 )
 
-// fifoKeepalive manages read-side FIFO file descriptors that prevent buffer loss.
-//
-// When a process writes to a FIFO and closes it before the reader opens,
-// the kernel discards the buffered data. By holding a read-side FD open,
-// we ensure the buffer persists until containerd opens its read side.
-//
-// Race this prevents:
-//
-//	Without keepalive:
-//	  1. Process writes "hello\n" to FIFO
-//	  2. Process exits, closes write end
-//	  3. Kernel discards buffer (no readers!)
-//	  4. Containerd opens FIFO for reading
-//	  5. Containerd sees EOF, never gets "hello\n"
-//
-//	With keepalive:
-//	  1. We open read end (keepalive FD)
-//	  2. Process writes "hello\n" to FIFO
-//	  3. Process exits, closes write end
-//	  4. Containerd opens FIFO for reading
-//	  5. Containerd reads "hello\n", then EOF
-//	  6. We close keepalive FD (after I/O complete)
-//
-// This pattern is borrowed from Kata Containers (process.rs stdout_r/stderr_r).
+// fifoKeepalive manages closers that need to be released after I/O completes.
 type fifoKeepalive struct {
 	stdout io.Closer
 	stderr io.Closer
 }
 
-// Close releases both keepalive FDs. Call this AFTER all I/O is complete
-// to ensure containerd has had time to read all buffered data.
+// Close releases both closers.
 func (k *fifoKeepalive) Close(ctx context.Context) {
 	if k.stdout != nil {
 		if err := k.stdout.Close(); err != nil {
-			log.G(ctx).WithError(err).Debug("error closing stdout keepalive FIFO")
+			log.G(ctx).WithError(err).Debug("error closing stdout closer")
 		}
 		k.stdout = nil
 	}
 	if k.stderr != nil {
 		if err := k.stderr.Close(); err != nil {
-			log.G(ctx).WithError(err).Debug("error closing stderr keepalive FIFO")
+			log.G(ctx).WithError(err).Debug("error closing stderr closer")
 		}
 		k.stderr = nil
 	}
-}
-
-// openKeepaliveFIFOs opens read-side FDs for stdout/stderr FIFOs to prevent buffer loss.
-// Returns a fifoKeepalive that should be closed after all I/O is complete.
-func openKeepaliveFIFOs(ctx context.Context, stdoutPath, stderrPath string) fifoKeepalive {
-	var k fifoKeepalive
-
-	if stdoutPath != "" {
-		if ok, _ := fifo.IsFifo(stdoutPath); ok {
-			fd, err := fifo.OpenFifo(ctx, stdoutPath, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
-			if err != nil {
-				log.G(ctx).WithError(err).Debug("failed to open stdout keepalive FIFO (non-fatal)")
-			} else {
-				k.stdout = fd
-			}
-		}
-	}
-
-	if stderrPath != "" && stderrPath != stdoutPath {
-		if ok, _ := fifo.IsFifo(stderrPath); ok {
-			fd, err := fifo.OpenFifo(ctx, stderrPath, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
-			if err != nil {
-				log.G(ctx).WithError(err).Debug("failed to open stderr keepalive FIFO (non-fatal)")
-			} else {
-				k.stderr = fd
-			}
-		}
-	}
-
-	return k
-}
-
-// isFifoScheme returns true if the path is a bare path (no scheme) or uses the fifo:// scheme.
-// These are the paths used by containerd for attach functionality.
-func isFifoScheme(path string) (bool, error) {
-	if path == "" {
-		return false, nil
-	}
-	u, err := url.Parse(path)
-	if err != nil {
-		return false, err
-	}
-	// Bare paths have no scheme, and we default to fifo
-	// Explicit fifo:// scheme also counts
-	return u.Scheme == "" || u.Scheme == "fifo", nil
 }
 
 type forwardIOSetup struct {
@@ -134,13 +65,11 @@ type forwardIOSetup struct {
 //
 // Design note: This interface uses the Null Object Pattern. It is always non-nil
 // when returned from forwardIO/forwardIOWithIDs, even for passthrough or null I/O.
-// This eliminates nil checks at all call sites (5+ locations) and simplifies the
-// calling code. The tradeoff is an extra noopForwarder type that does nothing.
+// This eliminates nil checks at all call sites and simplifies the calling code.
 //
 // Implementations:
 //   - noopForwarder: Null object for passthrough or null I/O.
-//   - directForwarder: Uses synchronous io.Copy goroutines.
-//   - RPCIOForwarder: Uses TTRPC streaming for attach support.
+//   - directForwarder: Uses synchronous io.Copy goroutines with vsock streams.
 type IOForwarder interface {
 	// GuestStdio returns the stdio config to pass to the guest.
 	GuestStdio() stdio.Stdio
@@ -295,13 +224,11 @@ func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdi
 }
 
 // forwardIOWithIDs sets up I/O forwarding between host and guest.
-// For non-TTY mode with fifo:// scheme, it uses RPC-based I/O (supports attach).
-// For other schemes (file://, binary://, pipe://, stream://), it uses direct streaming.
+// All I/O uses direct vsock streaming. The stream EOF provides natural synchronization
+// for ensuring output is delivered before exit events.
 // Returns:
 //   - guestStdio: the stdio config to pass to the guest
-//   - startFunc: function to call AFTER guest creates the process (nil for non-RPC modes)
-//   - shutdownFunc: function to call to shut down I/O forwarding
-//   - forwarder: the RPC forwarder (nil for non-RPC modes) - used for CloseIO
+//   - forwarder: the I/O forwarder (never nil - noopForwarder for null I/O)
 //   - error: any error during setup
 func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, containerID, execID string, sio stdio.Stdio) (stdio.Stdio, IOForwarder, error) {
 	// When using a terminal, stderr is not used (it's merged into stdout/pty)
@@ -314,35 +241,12 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 		return pio, &noopForwarder{guest: pio}, nil
 	}
 
-	// For non-TTY mode with fifo:// scheme (or bare paths) on all configured streams,
-	// use RPC-based I/O to support task attach. Other schemes use direct streaming.
-	// TTY mode always uses direct streams (unchanged behavior).
-	if !sio.Terminal && containerID != "" {
-		stdinIsFifo, stdinErr := isFifoScheme(sio.Stdin)
-		stdoutIsFifo, stdoutErr := isFifoScheme(sio.Stdout)
-		stderrIsFifo, stderrErr := isFifoScheme(sio.Stderr)
-		if stdinErr != nil || stdoutErr != nil || stderrErr != nil {
-			log.G(ctx).WithFields(log.Fields{
-				"stdinErr":  stdinErr,
-				"stdoutErr": stdoutErr,
-				"stderrErr": stderrErr,
-			}).Debug("skipping RPC I/O due to stdio URI parse error")
-		} else if (sio.Stdin == "" || stdinIsFifo) && (sio.Stdout == "" || stdoutIsFifo) && (sio.Stderr == "" || stderrIsFifo) {
-			log.G(ctx).WithFields(log.Fields{
-				"container": containerID,
-				"exec":      execID,
-				"terminal":  sio.Terminal,
-			}).Debug("using RPC-based I/O for non-TTY fifo mode")
-			guestStdio, forwarder, err := s.forwardIORPC(ctx, containerID, execID, sio)
-			return guestStdio, forwarder, err
-		}
-	}
-	if !sio.Terminal && containerID != "" {
+	if containerID != "" {
 		log.G(ctx).WithFields(log.Fields{
 			"container": containerID,
 			"exec":      execID,
 			"terminal":  sio.Terminal,
-		}).Debug("using direct I/O for non-TTY non-fifo mode")
+		}).Debug("using direct stream I/O")
 	}
 
 	setup, err := setupForwardIO(ctx, vmi, pio)

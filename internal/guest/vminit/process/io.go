@@ -35,7 +35,6 @@ type processIO struct {
 
 	uri   *url.URL
 	copy  bool
-	rpcio bool // true if using RPC-based I/O (rpcio:// scheme)
 	stdio stdio.Stdio
 
 	streams [3]io.ReadWriteCloser
@@ -57,16 +56,10 @@ func (p *processIO) IO() runc.IO {
 	return p.io
 }
 
-// IsRPCIO returns true if using RPC-based I/O (rpcio:// scheme).
-func (p *processIO) IsRPCIO() bool {
-	return p.rpcio
-}
-
 func (p *processIO) Copy(ctx context.Context, wg *sync.WaitGroup) (io.Closer, error) {
 	if !p.copy {
 		var c io.Closer
-		// For RPC-based I/O, don't try to open FIFOs - the stdio manager handles all I/O
-		if p.stdio.Stdin != "" && !p.rpcio {
+		if p.stdio.Stdin != "" {
 			var err error
 			// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
 			// not tied to any specific operation context.
@@ -117,12 +110,6 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 		log.G(ctx).WithField("id", id).WithField("streams", streams).Debug("using stream IO")
 		pio.streams = streams
 		pio.copy = true
-		pio.io, err = runc.NewPipeIO(ioUID, ioGID, withConditionalIO(stdio))
-	case "rpcio":
-		// RPC-based I/O: create pipes but don't copy - the stdio manager handles I/O via RPC
-		log.G(ctx).WithField("id", id).Debug("using RPC-based IO")
-		pio.rpcio = true
-		pio.copy = false // Don't use copyPipes, stdio manager handles I/O
 		pio.io, err = runc.NewPipeIO(ioUID, ioGID, withConditionalIO(stdio))
 	case "fifo":
 		pio.copy = true

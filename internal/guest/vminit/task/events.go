@@ -120,17 +120,10 @@ func (s *service) handleInitExit(e runcC.Exit, c *runc.Container, p *process.Ini
 func (s *service) handleProcessExit(e runcC.Exit, c *runc.Container, p process.Process) {
 	p.SetExited(e.Status)
 
-	// Wait for I/O to complete before sending exit event.
-	// This ensures all stdout/stderr data has been delivered to subscribers
-	// before the exit event arrives. Without this, there's a race where the
-	// exit event arrives before all output is received.
-	if s.stdioMgr != nil {
-		execID := ""
-		if _, init := p.(*process.Init); !init {
-			execID = p.ID()
-		}
-		s.stdioMgr.WaitForIOComplete(c.ID, execID)
-	}
+	// With direct stream I/O, synchronization happens at the host side.
+	// The host waits for stream EOF before forwarding TaskExit to containerd.
+	// The guest just sends the exit event - the stream close (from process exit)
+	// naturally signals completion to the host.
 
 	s.send(&eventstypes.TaskExit{
 		ContainerID: c.ID,

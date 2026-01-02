@@ -92,7 +92,6 @@ import (
 	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
 	"github.com/aledbf/qemubox/containerd/internal/host/network"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/iotimeouts"
 	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
 	"github.com/aledbf/qemubox/containerd/internal/shim/lifecycle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
@@ -1219,8 +1218,11 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 		"exec":      execID,
 	}).Debug("waiting for I/O forwarder to complete before forwarding TaskExit")
 
-	// Wait for I/O with a timeout to prevent blocking the event loop indefinitely.
-	// See iotimeouts.HostIOWaitTimeout for rationale and coordination notes.
+	// Wait for I/O to complete. With direct stream I/O, the guest closes the stream
+	// when the process exits, and we see EOF. The timeout is a safety measure for
+	// cases where the stream doesn't close cleanly (e.g., vsock connection lost).
+	const ioWaitTimeout = 30 * time.Second
+
 	done := make(chan struct{})
 	go func() {
 		forwarder.WaitForComplete()
@@ -1233,11 +1235,11 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 			"container": taskExit.ContainerID,
 			"exec":      execID,
 		}).Debug("I/O forwarder complete, forwarding TaskExit")
-	case <-time.After(iotimeouts.HostIOWaitTimeout):
+	case <-time.After(ioWaitTimeout):
 		log.G(ctx).WithFields(log.Fields{
 			"container": taskExit.ContainerID,
 			"exec":      execID,
-			"timeout":   iotimeouts.HostIOWaitTimeout,
+			"timeout":   ioWaitTimeout,
 		}).Warn("timeout waiting for I/O forwarder, proceeding with TaskExit")
 	}
 }
