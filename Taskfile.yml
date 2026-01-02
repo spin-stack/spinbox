@@ -157,6 +157,7 @@ tasks:
           --file Dockerfile \
           --target containerd \
           --platform linux/amd64 \
+          --no-cache \
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
         echo "✓ Containerd built: _output/containerd, _output/containerd-shim-runc-v2"

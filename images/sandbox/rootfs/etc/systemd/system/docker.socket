@@ -4,9 +4,9 @@ PartOf=docker.service
 
 [Socket]
 ListenStream=/run/docker.sock
-SocketMode=0660
+SocketMode=0666
 SocketUser=root
-SocketGroup=docker
+SocketGroup=root
 
 [Install]
 WantedBy=sockets.target

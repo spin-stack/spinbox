@@ -1,17 +1,3 @@
-# Optimized udev rules for VM - minimize processing time
-# Stop udev from waiting for events that will never fire.
+# Minimal udev rules for VM - skip unnecessary processing
 ACTION=="add", SUBSYSTEM=="net", RUN+="/bin/true"
 ACTION=="remove", SUBSYSTEM=="net", RUN+="/bin/true"
-
-# Skip firmware loading (not needed in VM)
-SUBSYSTEM=="firmware", OPTIONS+="nowatch"
-
-# Skip slow device enumeration for unused subsystems
-SUBSYSTEM=="usb", OPTIONS+="nowatch"
-SUBSYSTEM=="bluetooth", OPTIONS+="nowatch"
-SUBSYSTEM=="sound", OPTIONS+="nowatch"
-SUBSYSTEM=="input", OPTIONS+="nowatch"
-
-# Speed up block device handling
-SUBSYSTEM=="block", KERNEL=="vd*", OPTIONS+="nowatch"
-SUBSYSTEM=="block", KERNEL=="sd*", OPTIONS+="nowatch"
