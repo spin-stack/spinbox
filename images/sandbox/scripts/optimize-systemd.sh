@@ -152,12 +152,16 @@ for m in "${MASK_MOUNTS[@]}";  do mask_mount "$m"; done
 for ms in "${MASK_MODPROBE[@]}"; do mask_modprobe "$ms"; done
 for tf in "${MASK_TMPFILES[@]}"; do mask_tmpfiles "$tf"; done
 
-# Docker & containerd are only useful if you plan to run containers inside the VM.
-log "Disabling Docker and container‑d services (they will not start automatically)…"
+# Docker & containerd: use socket activation for faster boot
+log "Configuring Docker and containerd for socket activation…"
 systemctl disable docker.service   || true
 systemctl disable containerd.service || true
 rm -f /etc/systemd/system/multi-user.target.wants/docker.service
 rm -f /etc/systemd/system/sockets.target.wants/docker.service
+
+# Enable socket activation (services start on first connection)
+systemctl enable containerd.socket || true
+systemctl enable docker.socket || true
 
 log "Enabling required services …"
 
@@ -194,3 +198,176 @@ EOF
 log "Pre-generating ld.so.cache and masking ldconfig.service"
 ldconfig || true
 systemctl mask ldconfig.service || true
+
+log "Configuring systemd manager for fast boot…"
+mkdir -p /etc/systemd/system.conf.d
+cat <<'EOF' >/etc/systemd/system.conf.d/fast-boot.conf
+[Manager]
+# Reduce default timeouts significantly for VM environment
+DefaultTimeoutStartSec=10s
+DefaultTimeoutStopSec=5s
+DefaultDeviceTimeoutSec=5s
+DefaultStartLimitIntervalSec=10s
+DefaultStartLimitBurst=3
+# Disable watchdogs (not needed in VM)
+RuntimeWatchdogSec=0
+ShutdownWatchdogSec=0
+# Increase file descriptor limit
+DefaultLimitNOFILE=65536
+# Reduce logging verbosity
+LogLevel=warning
+LogTarget=journal
+# Limit concurrent jobs for predictable boot
+DefaultTasksMax=512
+EOF
+
+# =============================================================================
+# ADDITIONAL UNITS TO MASK - User sessions, first-boot, random seed
+# =============================================================================
+log "Masking additional unnecessary units for VM boot…"
+ADDITIONAL_MASK_UNITS=(
+    # User session management (not needed for container workloads)
+    systemd-user-sessions.service
+    systemd-logind.service
+    user@.service
+    user-runtime-dir@.service
+
+    # First-boot & machine-id setup (done at build time)
+    systemd-firstboot.service
+    systemd-machine-id-commit.service
+
+    # Random seed (VM gets entropy from host via virtio-rng)
+    systemd-random-seed.service
+
+    # Sysctl/sysusers (do it at build time instead)
+    systemd-sysctl.service
+    systemd-sysusers.service
+
+    # Boot complete notification (not needed)
+    systemd-boot-system-token.service
+
+    # Additional tmpfiles processing
+    systemd-tmpfiles-setup-dev.service
+
+    # Hostname setup (kernel param or static)
+    systemd-hostnamed.service
+)
+
+for u in "${ADDITIONAL_MASK_UNITS[@]}"; do
+    log "Masking additional unit: $u"
+    systemctl mask "$u" 2>/dev/null || true
+done
+
+log "Disabling unnecessary systemd generators…"
+mkdir -p /etc/systemd/system-generators
+DISABLE_GENERATORS=(
+    systemd-fstab-generator
+    systemd-getty-generator
+    systemd-debug-generator
+    systemd-gpt-auto-generator
+    systemd-sysv-generator
+    systemd-rc-local-generator
+    systemd-hibernate-resume-generator
+    systemd-system-update-generator
+)
+
+for gen in "${DISABLE_GENERATORS[@]}"; do
+    ln -sf /dev/null "/etc/systemd/system-generators/$gen"
+    log "Disabled generator: $gen"
+done
+
+log "Creating kernel module blacklist for VM…"
+cat <<'EOF' >/etc/modprobe.d/blacklist-boot.conf
+# Hardware not present in VM
+blacklist floppy
+blacklist pcspkr
+blacklist snd_pcsp
+blacklist cdrom
+blacklist sr_mod
+blacklist i2c_piix4
+blacklist parport
+blacklist parport_pc
+blacklist lp
+blacklist ppdev
+
+# Bluetooth (not needed in VM)
+blacklist bluetooth
+blacklist btusb
+blacklist btrtl
+blacklist btbcm
+blacklist btintel
+
+# Wireless (not needed in VM)
+blacklist iwlwifi
+blacklist iwlmvm
+blacklist cfg80211
+
+# Firewire (legacy, not in VM)
+blacklist firewire_ohci
+blacklist firewire_core
+EOF
+
+log "Disabling unnecessary getty instances…"
+# Keep only tty1, mask the rest
+for tty in tty2 tty3 tty4 tty5 tty6; do
+    systemctl mask "getty@${tty}.service" 2>/dev/null || true
+done
+rm -f /etc/systemd/system/getty.target.wants/getty@tty[2-6].service 2>/dev/null || true
+log "Pre-warming caches at build time…"
+
+# Pre-generate locale archive
+locale-gen en_US.UTF-8 2>/dev/null || true
+update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 2>/dev/null || true
+
+# Pre-generate gconv modules cache
+iconvconfig 2>/dev/null || true
+
+# Update font cache
+fc-cache -f 2>/dev/null || true
+
+# Pre-compile Python bytecode if Python is installed
+if command -v python3 &>/dev/null; then
+    log "Pre-compiling Python bytecode…"
+    python3 -m compileall -q /usr/lib/python3* 2>/dev/null || true
+fi
+
+log "Optimizing nsswitch.conf for fast lookups…"
+cat <<'EOF' >/etc/nsswitch.conf
+# Optimized for VM - minimal lookups
+passwd:         files
+group:          files
+shadow:         files
+gshadow:        files
+hosts:          files dns
+networks:       files
+protocols:      files
+services:       files
+ethers:         files
+rpc:            files
+EOF
+
+log "Optimizing PAM configuration…"
+# Disable pam_systemd for faster session setup (not needed in container workloads)
+if [ -f /etc/pam.d/common-session ]; then
+    sed -i '/pam_systemd.so/s/^/# /' /etc/pam.d/common-session || true
+fi
+
+# Disable pam_motd in login (already disabled in sshd)
+if [ -f /etc/pam.d/login ]; then
+    sed -i '/pam_motd.so/s/^/# /' /etc/pam.d/login || true
+fi
+
+log "Running final cleanup…"
+
+# Remove unnecessary documentation
+rm -rf /usr/share/doc/* 2>/dev/null || true
+rm -rf /usr/share/man/* 2>/dev/null || true
+rm -rf /usr/share/info/* 2>/dev/null || true
+
+# Remove apt cache
+rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+
+# Clear systemd journal
+rm -rf /var/log/journal/* 2>/dev/null || true
+
+log "Boot optimization complete!"
