@@ -152,6 +152,11 @@ RUN --mount=type=bind,target=.,rw \
 
 FROM base AS containerd-build
 
+# Install git and make (not guaranteed in all golang image variants)
+RUN --mount=type=cache,sharing=locked,id=containerd-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=containerd-aptcache,target=/var/cache/apt \
+    apt-get update && apt-get install --no-install-recommends -y git make
+
 WORKDIR /go/src/github.com/containerd/containerd
 
 ARG CONTAINERD_BRANCH="aledbf/erofs-snapshot-narrow"
