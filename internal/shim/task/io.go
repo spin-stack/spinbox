@@ -71,6 +71,12 @@ type IOForwarder interface {
 type directForwarder struct {
 	guest    stdio.Stdio
 	shutdown func(context.Context) error
+
+	// FIFO keepalive: read-side FDs opened at setup, kept alive until Shutdown.
+	// This prevents FIFO buffer loss if containerd hasn't opened its read side yet.
+	// See Kata Containers pattern: process.rs stdout_r/stderr_r
+	stdoutKeepalive io.Closer
+	stderrKeepalive io.Closer
 }
 
 func (d *directForwarder) GuestStdio() stdio.Stdio {
@@ -82,10 +88,27 @@ func (d *directForwarder) Start(ctx context.Context) error {
 }
 
 func (d *directForwarder) Shutdown(ctx context.Context) error {
-	if d.shutdown == nil {
-		return nil
+	var err error
+	if d.shutdown != nil {
+		err = d.shutdown(ctx)
 	}
-	return d.shutdown(ctx)
+
+	// Close FIFO keepalive FDs LAST, after all I/O is complete.
+	// This ensures the FIFO buffer persists until containerd has read all data.
+	if d.stdoutKeepalive != nil {
+		if closeErr := d.stdoutKeepalive.Close(); closeErr != nil {
+			log.G(ctx).WithError(closeErr).Debug("error closing stdout keepalive FIFO")
+		}
+		d.stdoutKeepalive = nil
+	}
+	if d.stderrKeepalive != nil {
+		if closeErr := d.stderrKeepalive.Close(); closeErr != nil {
+			log.G(ctx).WithError(closeErr).Debug("error closing stderr keepalive FIFO")
+		}
+		d.stderrKeepalive = nil
+	}
+
+	return err
 }
 
 func (d *directForwarder) CloseStdin() {}
@@ -278,7 +301,8 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 			"usePIOPaths": setup.usePIOPaths,
 		}).Debug("forwardIO: using file paths for copyStreams, stream URIs for VM")
 	}
-	if err = copyStreams(ctx, streams, stdinPath, stdoutPath, stderrPath, ioDone); err != nil {
+	keepalives, err := copyStreams(ctx, streams, stdinPath, stdoutPath, stderrPath, ioDone)
+	if err != nil {
 		return stdio.Stdio{}, nil, err
 	}
 	shutdown := func(ctx context.Context) error {
@@ -294,7 +318,12 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 			return ctx.Err()
 		}
 	}
-	return pio, &directForwarder{guest: pio, shutdown: shutdown}, nil
+	return pio, &directForwarder{
+		guest:           pio,
+		shutdown:        shutdown,
+		stdoutKeepalive: keepalives.stdout,
+		stderrKeepalive: keepalives.stderr,
+	}, nil
 }
 
 func createStreams(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, [3]io.ReadWriteCloser, error) {
@@ -353,18 +382,25 @@ type outputTarget struct {
 	label  string
 }
 
-func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdout, stderr string, done chan struct{}) error {
+// fifoKeepalives holds the read-side FIFO FDs for keepalive purposes.
+type fifoKeepalives struct {
+	stdout io.Closer
+	stderr io.Closer
+}
+
+func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdout, stderr string, done chan struct{}) (fifoKeepalives, error) {
 	var cwg sync.WaitGroup
 	var copying atomic.Int32
 	copying.Store(2)
 	var sameFile *countingWriteCloser
+	var keepalives fifoKeepalives
 
 	outputs := []outputTarget{
 		{name: stdout, stream: streams[1], label: "stdout"},
 		{name: stderr, stream: streams[2], label: "stderr"},
 	}
 
-	for _, target := range outputs {
+	for i, target := range outputs {
 		if target.name == "" {
 			if copying.Add(-1) == 0 {
 				close(done)
@@ -373,17 +409,23 @@ func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdo
 		}
 		fw, fr, err := openOutputDestination(ctx, target.name, stdout, stderr, &sameFile)
 		if err != nil {
-			return err
+			return keepalives, err
 		}
-		startOutputCopy(ctx, &cwg, &copying, done, target, fw, fr)
+		// Store keepalive closers - these will be closed by the directForwarder.Shutdown()
+		if i == 0 {
+			keepalives.stdout = fr
+		} else {
+			keepalives.stderr = fr
+		}
+		startOutputCopy(ctx, &cwg, &copying, done, target, fw)
 	}
 
 	if err := startStdinCopy(ctx, &cwg, streams[0], stdin); err != nil {
-		return err
+		return keepalives, err
 	}
 
 	cwg.Wait()
-	return nil
+	return keepalives, nil
 }
 
 func openOutputDestination(ctx context.Context, name, stdout, stderr string, sameFile **countingWriteCloser) (io.WriteCloser, io.Closer, error) {
@@ -426,7 +468,7 @@ func openOutputDestination(ctx context.Context, name, stdout, stderr string, sam
 	return fw, nil, nil
 }
 
-func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.Int32, done chan struct{}, target outputTarget, wc io.WriteCloser, rc io.Closer) {
+func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.Int32, done chan struct{}, target outputTarget, wc io.WriteCloser) {
 	cwg.Add(1)
 	go func() {
 		cwg.Done()
@@ -455,11 +497,7 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 		if err := wc.Close(); err != nil {
 			log.G(ctx).WithError(err).WithField("stream", target.stream).Warn("error closing output writer")
 		}
-		if rc != nil {
-			if err := rc.Close(); err != nil {
-				log.G(ctx).WithError(err).WithField("stream", target.stream).Warn("error closing output reader")
-			}
-		}
+		// Note: keepalive closer (rc) is now stored in directForwarder and closed in Shutdown()
 	}()
 }
 
