@@ -346,43 +346,44 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 
 // streamOutput reads from the RPC stream and writes to the FIFO.
 // Returns nil on clean EOF, or an error if the stream should be retried.
+//
+// IMPORTANT: This function prioritizes draining all data from the stream
+// before returning. We do NOT check ctx.Done() or f.done before receiving,
+// ensuring that any data sent by the guest is received and written to the FIFO.
+// The function only exits when:
+// - EOF is received from the stream (clean exit)
+// - An error occurs (connection closed, etc.)
 func (f *RPCIOForwarder) streamOutput(ctx context.Context, logger *log.Entry, stream stdiov1.StdIO_ReadStdoutClient, fifoWriter io.Writer) error {
 	for {
-		select {
-		case <-ctx.Done():
-			logger.Debug("output forwarder context done")
-			return nil
-		case <-f.done:
-			logger.Debug("output forwarder done")
-			return nil
-		default:
-			chunk, err := stream.Recv()
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					logger.Debug("output stream EOF")
-					return nil
-				}
-				if isClosedConnError(err) {
-					// Connection closed - could be transient, return error for retry
-					return err
-				}
-				logger.WithError(err).Warn("error receiving from output stream")
-				return err
-			}
-
-			if chunk.Eof {
-				logger.Debug("output chunk EOF")
+		// Receive from stream - this blocks until data arrives or stream closes.
+		// We intentionally do NOT check ctx.Done() or f.done before calling Recv()
+		// to ensure we drain all pending data before exiting.
+		chunk, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				logger.Debug("output stream EOF")
 				return nil
 			}
+			if isClosedConnError(err) {
+				// Connection closed - could be transient, return error for retry
+				return err
+			}
+			logger.WithError(err).Warn("error receiving from output stream")
+			return err
+		}
 
-			if len(chunk.Data) > 0 {
-				logger.WithField("bytes", len(chunk.Data)).Debug("received data from guest, writing to fifo")
-				_, err = fifoWriter.Write(chunk.Data)
-				if err != nil {
-					logger.WithError(err).Warn("error writing to output fifo")
-					// FIFO write errors are terminal - don't retry
-					return nil
-				}
+		if chunk.Eof {
+			logger.Debug("output chunk EOF")
+			return nil
+		}
+
+		if len(chunk.Data) > 0 {
+			logger.WithField("bytes", len(chunk.Data)).Debug("received data from guest, writing to fifo")
+			_, err = fifoWriter.Write(chunk.Data)
+			if err != nil {
+				logger.WithError(err).Warn("error writing to output fifo")
+				// FIFO write errors are terminal - don't retry
+				return nil
 			}
 		}
 	}
