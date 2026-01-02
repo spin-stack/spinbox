@@ -86,6 +86,9 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 				return stream.Send(&stdiov1.OutputChunk{Eof: true})
 			}
 
+			log.G(ctx).WithField("container", containerID).WithField("stream", streamName).
+				WithField("bytes", len(data.Data)).WithField("eof", data.EOF).Debug("received chunk from channel")
+
 			chunk := &stdiov1.OutputChunk{
 				Data: data.Data,
 				Eof:  data.EOF,

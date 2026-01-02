@@ -124,8 +124,12 @@ func (m *Manager) fanOutReader(containerID, execID, streamName string, reader io
 			pio.mu.Lock()
 			subs := *getSubs(pio)
 			if len(subs) == 0 {
+				log.L.WithField("container", containerID).WithField("stream", streamName).
+					WithField("bytes", n).Debug("buffering data (no subscribers)")
 				m.bufferOutputLocked(pio, streamName, OutputData{Data: data})
 			} else {
+				log.L.WithField("container", containerID).WithField("stream", streamName).
+					WithField("bytes", n).WithField("subscriberCount", len(subs)).Debug("sending data to subscribers")
 				for _, sub := range subs {
 					select {
 					case sub.ch <- OutputData{Data: data}:
@@ -323,9 +327,14 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 
 	subs := getSubs(pio)
 	*subs = append(*subs, sub)
+
+	log.L.WithField("container", containerID).WithField("exec", execID).
+		WithField("bufferedChunks", len(buffered)).Debug("subscriber registered")
 	pio.mu.Unlock()
 
 	for _, data := range buffered {
+		log.L.WithField("container", containerID).WithField("bytes", len(data.Data)).
+			WithField("eof", data.EOF).Debug("sending buffered data to new subscriber")
 		select {
 		case ch <- data:
 		default:
