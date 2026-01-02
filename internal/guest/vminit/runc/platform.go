@@ -80,17 +80,25 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, cons console.Console, i
 		cwg.Add(1)
 		go func() {
 			cwg.Done()
+			log.L.Debug("console stdin copy goroutine started")
 			bp := iobuf.Get()
 			defer iobuf.Put(bp)
-			if _, err := io.CopyBuffer(epollConsole, in, *bp); err != nil {
-				log.L.WithError(err).Debug("console copy error")
+			n, err := io.CopyBuffer(epollConsole, in, *bp)
+			log.L.WithFields(log.Fields{
+				"bytes": n,
+				"error": err,
+			}).Debug("console stdin copy finished")
+			if err != nil {
+				log.L.WithError(err).Debug("console stdin copy error")
 			}
-			// we need to shutdown epollConsole when pipe broken
-			if err := epollConsole.Shutdown(p.epoller.CloseConsole); err != nil {
-				log.L.WithError(err).Debug("console shutdown error")
-			}
-			if err := epollConsole.Close(); err != nil {
-				log.L.WithError(err).Debug("console close error")
+			// Close only the stdin reader when EOF/error occurs.
+			// Do NOT close the console itself - it's needed for:
+			// 1. Resize operations (ResizePty)
+			// 2. Continued output streaming
+			// 3. Multiple attach/detach cycles
+			// The console will be properly closed when the process exits.
+			if err := in.Close(); err != nil {
+				log.L.WithError(err).Debug("console stdin close error")
 			}
 		}()
 	}

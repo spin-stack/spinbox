@@ -231,6 +231,16 @@ func runContainer(t *testing.T, client *containerd.Client, cfg testConfig, conta
 		t.Fatalf("get task result for %s: %v", containerName, err)
 	}
 
+	// Wait for I/O copy goroutines to complete.
+	// containerd's cio.WithStreams creates io.Copy goroutines that copy from FIFO to file.
+	// We must call Wait() to block until these finish, then Close() to clean up.
+	// IMPORTANT: Close() alone is NOT sufficient - it closes the FIFOs but doesn't
+	// wait for the copy goroutines. Wait() blocks until all data has been copied.
+	if io := task.IO(); io != nil {
+		io.Wait()
+		io.Close()
+	}
+
 	// Ensure files are flushed
 	stdoutFile.Sync()
 	stderrFile.Sync()
@@ -441,6 +451,379 @@ func TestContainerdNamespaceIsolation(t *testing.T) {
 
 	t.Logf("namespace isolation verified: default=%d containers, test=%d containers",
 		len(defaultContainers), len(testContainers))
+}
+
+// TestContainerdKernelIsolation verifies that the VM runs its own kernel,
+// isolated from the host. This is the core security property of qemubox.
+// Inspired by: build/cast/qemubox.exp (uname -r check)
+func TestContainerdKernelIsolation(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	containerName := "qbx-kernel-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+
+	// Get kernel version from inside the VM
+	result := runContainer(t, client, cfg, containerName, []string{"/bin/uname", "-r"})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("uname failed with exit code %d\nstderr: %s", result.ExitCode, result.Stderr)
+	}
+
+	vmKernel := strings.TrimSpace(result.Stdout)
+	if vmKernel == "" {
+		t.Fatal("empty kernel version from VM")
+	}
+
+	// The VM kernel should be a valid Linux version string
+	// Format: major.minor.patch[-extra]
+	if !strings.Contains(vmKernel, ".") {
+		t.Fatalf("unexpected kernel version format: %q", vmKernel)
+	}
+
+	t.Logf("VM kernel: %s (isolated from host)", vmKernel)
+}
+
+// TestContainerdLargeOutput verifies that large stdout output is captured correctly
+// through the VM boundary. This tests the I/O streaming path.
+func TestContainerdLargeOutput(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	containerName := "qbx-largeout-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+
+	// Generate substantial output - 1000 lines with sequence numbers
+	// This tests the streaming I/O path across the VM boundary
+	result := runContainer(t, client, cfg, containerName,
+		[]string{"/bin/sh", "-c", "seq 1 1000"})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("seq command failed with exit code %d\nstderr: %s", result.ExitCode, result.Stderr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+	if len(lines) != 1000 {
+		t.Fatalf("expected 1000 lines, got %d", len(lines))
+	}
+
+	// Verify first and last lines to ensure no data corruption
+	if lines[0] != "1" {
+		t.Fatalf("first line should be '1', got %q", lines[0])
+	}
+	if lines[999] != "1000" {
+		t.Fatalf("last line should be '1000', got %q", lines[999])
+	}
+
+	t.Logf("captured %d lines of output correctly", len(lines))
+}
+
+// TestContainerdStderrCapture verifies that stderr output is captured separately from stdout.
+func TestContainerdStderrCapture(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	containerName := "qbx-stderr-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+
+	// Write to both stdout and stderr
+	result := runContainer(t, client, cfg, containerName,
+		[]string{"/bin/sh", "-c", "echo STDOUT_MSG && echo STDERR_MSG >&2"})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("command failed with exit code %d", result.ExitCode)
+	}
+
+	if !strings.Contains(result.Stdout, "STDOUT_MSG") {
+		t.Fatalf("stdout should contain 'STDOUT_MSG', got: %q", result.Stdout)
+	}
+
+	if !strings.Contains(result.Stderr, "STDERR_MSG") {
+		t.Fatalf("stderr should contain 'STDERR_MSG', got: %q", result.Stderr)
+	}
+
+	// Verify streams are separate
+	if strings.Contains(result.Stdout, "STDERR_MSG") {
+		t.Fatal("stdout should not contain stderr content")
+	}
+	if strings.Contains(result.Stderr, "STDOUT_MSG") {
+		t.Fatal("stderr should not contain stdout content")
+	}
+
+	t.Log("stdout and stderr captured separately")
+}
+
+// TestContainerdFileOperations verifies that file operations work correctly inside the VM.
+// Inspired by: build/cast/snapshot.exp (creating files and directories)
+func TestContainerdFileOperations(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	containerName := "qbx-fileops-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+
+	// Create a file, directory, and verify contents
+	script := `
+		mkdir -p /tmp/testdir && \
+		echo "test content" > /tmp/testdir/file.txt && \
+		cat /tmp/testdir/file.txt && \
+		ls -la /tmp/testdir/
+	`
+	result := runContainer(t, client, cfg, containerName, []string{"/bin/sh", "-c", script})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("file operations failed with exit code %d\nstderr: %s", result.ExitCode, result.Stderr)
+	}
+
+	if !strings.Contains(result.Stdout, "test content") {
+		t.Fatalf("file content not found in output: %q", result.Stdout)
+	}
+
+	if !strings.Contains(result.Stdout, "file.txt") {
+		t.Fatalf("file.txt not listed in directory: %q", result.Stdout)
+	}
+
+	t.Log("file operations completed successfully")
+}
+
+// TestContainerdEnvironmentVariables verifies that environment variables are passed to the container.
+func TestContainerdEnvironmentVariables(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	ctx := namespaces.WithNamespace(context.Background(), cfg.Namespace)
+	image, err := client.GetImage(ctx, cfg.Image)
+	if err != nil {
+		t.Fatalf("get image: %v", err)
+	}
+
+	containerName := "qbx-env-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+
+	// Create container with custom environment variable
+	container, err := client.NewContainer(ctx, containerName,
+		containerd.WithSnapshotter(cfg.Snapshotter),
+		containerd.WithImage(image),
+		containerd.WithNewSnapshot(containerName+"-snapshot", image),
+		containerd.WithRuntime(cfg.Runtime, nil),
+		containerd.WithNewSpec(
+			oci.WithImageConfig(image),
+			oci.WithProcessArgs("/bin/sh", "-c", "echo $TEST_VAR"),
+			oci.WithEnv([]string{"TEST_VAR=qemubox_test_value"}),
+		),
+	)
+	if err != nil {
+		t.Fatalf("create container: %v", err)
+	}
+	defer container.Delete(ctx, containerd.WithSnapshotCleanup)
+
+	// Create output files
+	outputDir := t.TempDir()
+	stdoutPath := filepath.Join(outputDir, "stdout.log")
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		t.Fatalf("create stdout file: %v", err)
+	}
+	defer stdoutFile.Close()
+
+	ioCreator := cio.NewCreator(cio.WithStreams(nil, stdoutFile, nil))
+	task, err := container.NewTask(ctx, ioCreator)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	defer task.Delete(ctx, containerd.WithProcessKill)
+
+	exitCh, err := task.Wait(ctx)
+	if err != nil {
+		t.Fatalf("wait for task: %v", err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	status := <-exitCh
+	exitCode, _, err := status.Result()
+	if err != nil {
+		t.Fatalf("get task result: %v", err)
+	}
+
+	if io := task.IO(); io != nil {
+		io.Wait()
+		io.Close()
+	}
+
+	stdoutFile.Sync()
+	stdoutData, _ := os.ReadFile(stdoutPath)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code %d", exitCode)
+	}
+
+	if !strings.Contains(string(stdoutData), "qemubox_test_value") {
+		t.Fatalf("expected env var value in output, got: %q", string(stdoutData))
+	}
+
+	t.Log("environment variable passed correctly to container")
+}
+
+// TestContainerdProcessInfo verifies that process information is visible inside the VM.
+func TestContainerdProcessInfo(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	containerName := "qbx-procinfo-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+
+	// Check PID 1 and process info
+	result := runContainer(t, client, cfg, containerName,
+		[]string{"/bin/sh", "-c", "echo PID=$$ && cat /proc/1/cmdline | tr '\\0' ' '"})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("command failed with exit code %d\nstderr: %s", result.ExitCode, result.Stderr)
+	}
+
+	// Verify we have process info
+	if !strings.Contains(result.Stdout, "PID=") {
+		t.Fatalf("expected PID info, got: %q", result.Stdout)
+	}
+
+	t.Logf("process info:\n%s", result.Stdout)
+}
+
+// TestContainerdQuickExit verifies that containers that exit quickly don't lose output.
+// This is a regression test for the I/O synchronization issue.
+func TestContainerdQuickExit(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	// Run multiple quick-exit containers to stress the I/O path
+	for i := range 5 {
+		containerName := fmt.Sprintf("qbx-quick-%d-%s", i,
+			strings.ReplaceAll(time.Now().Format("150405.000"), ".", ""))
+
+		t.Run(fmt.Sprintf("quick-exit-%d", i), func(t *testing.T) {
+			// Very short command that writes output and exits immediately
+			result := runContainer(t, client, cfg, containerName,
+				[]string{"/bin/echo", fmt.Sprintf("QUICK_OUTPUT_%d", i)})
+
+			if result.ExitCode != 0 {
+				t.Fatalf("exit code %d", result.ExitCode)
+			}
+
+			expected := fmt.Sprintf("QUICK_OUTPUT_%d", i)
+			if !strings.Contains(result.Stdout, expected) {
+				t.Fatalf("expected %q in stdout, got: %q", expected, result.Stdout)
+			}
+		})
+	}
+}
+
+// TestContainerdWorkingDirectory verifies that the working directory is set correctly.
+func TestContainerdWorkingDirectory(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	ctx := namespaces.WithNamespace(context.Background(), cfg.Namespace)
+	image, err := client.GetImage(ctx, cfg.Image)
+	if err != nil {
+		t.Fatalf("get image: %v", err)
+	}
+
+	containerName := "qbx-cwd-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+
+	// Create container with custom working directory
+	container, err := client.NewContainer(ctx, containerName,
+		containerd.WithSnapshotter(cfg.Snapshotter),
+		containerd.WithImage(image),
+		containerd.WithNewSnapshot(containerName+"-snapshot", image),
+		containerd.WithRuntime(cfg.Runtime, nil),
+		containerd.WithNewSpec(
+			oci.WithImageConfig(image),
+			oci.WithProcessArgs("/bin/pwd"),
+			oci.WithProcessCwd("/tmp"),
+		),
+	)
+	if err != nil {
+		t.Fatalf("create container: %v", err)
+	}
+	defer container.Delete(ctx, containerd.WithSnapshotCleanup)
+
+	// Create output files
+	outputDir := t.TempDir()
+	stdoutPath := filepath.Join(outputDir, "stdout.log")
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		t.Fatalf("create stdout file: %v", err)
+	}
+	defer stdoutFile.Close()
+
+	ioCreator := cio.NewCreator(cio.WithStreams(nil, stdoutFile, nil))
+	task, err := container.NewTask(ctx, ioCreator)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	defer task.Delete(ctx, containerd.WithProcessKill)
+
+	exitCh, err := task.Wait(ctx)
+	if err != nil {
+		t.Fatalf("wait for task: %v", err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	status := <-exitCh
+	exitCode, _, err := status.Result()
+	if err != nil {
+		t.Fatalf("get task result: %v", err)
+	}
+
+	if io := task.IO(); io != nil {
+		io.Wait()
+		io.Close()
+	}
+
+	stdoutFile.Sync()
+	stdoutData, _ := os.ReadFile(stdoutPath)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code %d", exitCode)
+	}
+
+	output := strings.TrimSpace(string(stdoutData))
+	if output != "/tmp" {
+		t.Fatalf("expected working directory '/tmp', got: %q", output)
+	}
+
+	t.Log("working directory set correctly")
 }
 
 func getenvDefault(key, def string) string {

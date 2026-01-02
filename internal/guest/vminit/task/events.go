@@ -119,6 +119,12 @@ func (s *service) handleInitExit(e runcC.Exit, c *runc.Container, p *process.Ini
 
 func (s *service) handleProcessExit(e runcC.Exit, c *runc.Container, p process.Process) {
 	p.SetExited(e.Status)
+
+	// With direct stream I/O, synchronization happens at the host side.
+	// The host waits for stream EOF before forwarding TaskExit to containerd.
+	// The guest just sends the exit event - the stream close (from process exit)
+	// naturally signals completion to the host.
+
 	s.send(&eventstypes.TaskExit{
 		ContainerID: c.ID,
 		ID:          p.ID(),
