@@ -64,20 +64,6 @@ type RPCIOForwarder struct {
 	stderrKeepalive io.Closer
 }
 
-type retryState struct {
-	delay    time.Duration
-	attempts int
-}
-
-func newRetryState() *retryState {
-	return &retryState{delay: outputRetryInitialDelay}
-}
-
-func (r *retryState) reset() {
-	r.delay = outputRetryInitialDelay
-	r.attempts = 0
-}
-
 // NewRPCIOForwarder creates a new RPC I/O forwarder.
 func NewRPCIOForwarder(dialClient ClientDialer, containerID, execID string, sio stdio.Stdio) *RPCIOForwarder {
 	return &RPCIOForwarder{
@@ -90,18 +76,6 @@ func NewRPCIOForwarder(dialClient ClientDialer, containerID, execID string, sio 
 		done:        make(chan struct{}),
 		stdinCloser: make(chan struct{}),
 	}
-}
-
-// pollReadOnce reads from a non-blocking reader and returns true if no data is available.
-func pollReadOnce(reader io.Reader, buf []byte) (int, error, bool) {
-	n, err := reader.Read(buf)
-	if n > 0 {
-		return n, err, false
-	}
-	if err == nil || err == io.EOF || isNoDataError(err) {
-		return 0, err, true
-	}
-	return 0, err, false
 }
 
 // Start begins forwarding I/O. This should be called after the guest process is created.
@@ -232,23 +206,24 @@ func (f *RPCIOForwarder) forwardStdin(ctx context.Context) {
 			})
 			return
 		default:
-			n, err, noData := pollReadOnce(fifoReader, *buf)
+			n, err := fifoReader.Read(*buf)
 			if n > 0 {
 				logger.WithField("bytes", n).Debug("forwarding stdin data to guest")
-				_, err = client.WriteStdin(ctx, &stdiov1.WriteStdinRequest{
+				_, writeErr := client.WriteStdin(ctx, &stdiov1.WriteStdinRequest{
 					ContainerId: f.containerID,
 					ExecId:      f.execID,
 					Data:        (*buf)[:n],
 				})
-				if err != nil {
-					logger.WithError(err).Warn("error writing to stdin RPC")
+				if writeErr != nil {
+					logger.WithError(writeErr).Warn("error writing to stdin RPC")
 					return
 				}
 				continue
 			}
 
-			if !noData {
-				if err != nil && !isClosedConnError(err) {
+			// No data read - check if it's a temporary condition or a real error
+			if err != nil && !errors.Is(err, io.EOF) && !isNoDataError(err) {
+				if !isClosedConnError(err) {
 					logger.WithError(err).Warn("error reading from stdin fifo")
 				}
 				return
@@ -294,7 +269,8 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 	logger.Debug("opened output fifo for writing (reader is ready)")
 
 	// Retry loop for connection and streaming
-	retry := newRetryState()
+	retryDelay := outputRetryInitialDelay
+	attempts := 0
 
 	for {
 		// Check for shutdown before each attempt
@@ -312,9 +288,16 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 		logger.Debug("getting stdio RPC client")
 		client, conn, err := f.getStdIOClient(ctx)
 		if err != nil {
-			if !f.retryWait(ctx, logger, retry, err, "failed to get stdio client, will retry") {
+			attempts++
+			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
+				logger.WithError(err).WithField("attempts", attempts).Error("retry limit reached")
 				return
 			}
+			logger.WithError(err).WithField("retryDelay", retryDelay).Debug("failed to get stdio client, will retry")
+			if !f.sleepWithCancel(ctx, retryDelay) {
+				return
+			}
+			retryDelay = min(retryDelay*2, outputRetryMaxDelay)
 			continue
 		}
 		logger.Debug("got stdio RPC client")
@@ -338,15 +321,23 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 				logger.WithError(err).Debug("output stream not found, stopping forwarder")
 				return
 			}
-			if !f.retryWait(ctx, logger, retry, err, "failed to start output stream, will retry") {
+			attempts++
+			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
+				logger.WithError(err).WithField("attempts", attempts).Error("retry limit reached")
 				return
 			}
+			logger.WithError(err).WithField("retryDelay", retryDelay).Debug("failed to start output stream, will retry")
+			if !f.sleepWithCancel(ctx, retryDelay) {
+				return
+			}
+			retryDelay = min(retryDelay*2, outputRetryMaxDelay)
 			continue
 		}
 		logger.Debug("RPC output stream started, waiting for data")
 
 		// Reset retry state on successful connection
-		retry.reset()
+		retryDelay = outputRetryInitialDelay
+		attempts = 0
 
 		// Stream data until error or EOF
 		streamErr := f.streamOutput(ctx, logger, stream, fifoWriter)
@@ -367,9 +358,16 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 		}
 
 		// For other errors, retry with backoff
-		if !f.retryWait(ctx, logger, retry, streamErr, "output stream error, will retry") {
+		attempts++
+		if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
+			logger.WithError(streamErr).WithField("attempts", attempts).Error("retry limit reached")
 			return
 		}
+		logger.WithError(streamErr).WithField("retryDelay", retryDelay).Debug("output stream error, will retry")
+		if !f.sleepWithCancel(ctx, retryDelay) {
+			return
+		}
+		retryDelay = min(retryDelay*2, outputRetryMaxDelay)
 	}
 }
 
@@ -411,7 +409,9 @@ func (f *RPCIOForwarder) streamOutput(ctx context.Context, logger *log.Entry, st
 			n, err := fifoWriter.Write(chunk.Data)
 			if err != nil {
 				logger.WithError(err).Warn("error writing to output fifo")
-				// FIFO write errors are terminal - don't retry
+				// FIFO write errors are terminal - don't retry.
+				// Return nil (not err) because the stream itself is fine; containerd
+				// closed the FIFO, so there's no point retrying.
 				return nil
 			}
 			if n != len(chunk.Data) {
@@ -434,29 +434,6 @@ func (f *RPCIOForwarder) sleepWithCancel(ctx context.Context, d time.Duration) b
 	case <-timer.C:
 		return true
 	}
-}
-
-func (f *RPCIOForwarder) retryWait(ctx context.Context, logger *log.Entry, state *retryState, err error, msg string) bool {
-	state.attempts++
-	if outputRetryMaxAttempts > 0 && state.attempts >= outputRetryMaxAttempts {
-		logger.WithError(err).WithField("attempts", state.attempts).Error("retry limit reached")
-		return false
-	}
-	logger.WithError(err).WithField("retryDelay", state.delay).Debug(msg)
-	if !f.sleepWithCancel(ctx, state.delay) {
-		return false
-	}
-	state.delay = f.nextRetryDelay(state.delay)
-	return true
-}
-
-// nextRetryDelay calculates the next retry delay with exponential backoff.
-func (f *RPCIOForwarder) nextRetryDelay(current time.Duration) time.Duration {
-	next := current * 2
-	if next > outputRetryMaxDelay {
-		next = outputRetryMaxDelay
-	}
-	return next
 }
 
 // getStdIOClient returns a StdIO client connected to the guest.

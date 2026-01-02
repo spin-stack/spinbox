@@ -124,21 +124,21 @@ func (m *Manager) Register(containerID, execID string, stdin io.WriteCloser, std
 
 // streamConfig holds configuration for a single output stream (stdout or stderr).
 type streamConfig struct {
-	name    string
-	getSubs func(*processIO) *[]*subscriber
-	buffer  func(*Manager, *processIO, OutputData)
+	name      string
+	getSubs   func(*processIO) *[]*subscriber
+	getBuffer func(*processIO) (*[]OutputData, *int)
 }
 
 var (
 	stdoutConfig = streamConfig{
-		name:    "stdout",
-		getSubs: func(p *processIO) *[]*subscriber { return &p.stdoutSubs },
-		buffer:  (*Manager).bufferStdout,
+		name:      "stdout",
+		getSubs:   func(p *processIO) *[]*subscriber { return &p.stdoutSubs },
+		getBuffer: func(p *processIO) (*[]OutputData, *int) { return &p.stdoutBuf, &p.stdoutBufBytes },
 	}
 	stderrConfig = streamConfig{
-		name:    "stderr",
-		getSubs: func(p *processIO) *[]*subscriber { return &p.stderrSubs },
-		buffer:  (*Manager).bufferStderr,
+		name:      "stderr",
+		getSubs:   func(p *processIO) *[]*subscriber { return &p.stderrSubs },
+		getBuffer: func(p *processIO) (*[]OutputData, *int) { return &p.stderrBuf, &p.stderrBufBytes },
 	}
 )
 
@@ -156,7 +156,7 @@ func (m *Manager) fanOutReader(containerID, execID string, reader io.Reader, pio
 			pio.mu.Lock()
 			subs := *cfg.getSubs(pio)
 			if len(subs) == 0 {
-				cfg.buffer(m, pio, OutputData{Data: data})
+				appendBounded(cfg.getBuffer, pio, OutputData{Data: data}, maxBufferedBytes)
 			} else {
 				for _, sub := range subs {
 					select {
@@ -178,7 +178,7 @@ func (m *Manager) fanOutReader(containerID, execID string, reader io.Reader, pio
 			pio.mu.Lock()
 			subs := *cfg.getSubs(pio)
 			if len(subs) == 0 {
-				cfg.buffer(m, pio, OutputData{EOF: true})
+				appendBounded(cfg.getBuffer, pio, OutputData{EOF: true}, maxBufferedBytes)
 			} else {
 				for _, sub := range subs {
 					select {
@@ -476,20 +476,14 @@ func (m *Manager) WaitForIOComplete(containerID, execID string) {
 	log.L.WithField("container", containerID).WithField("exec", execID).Debug("I/O complete (all subscribers finished)")
 }
 
-func (m *Manager) bufferStdout(pio *processIO, data OutputData) {
-	pio.stdoutBuf = append(pio.stdoutBuf, data)
-	pio.stdoutBufBytes += len(data.Data)
-	for pio.stdoutBufBytes > maxBufferedBytes && len(pio.stdoutBuf) > 0 {
-		pio.stdoutBufBytes -= len(pio.stdoutBuf[0].Data)
-		pio.stdoutBuf = pio.stdoutBuf[1:]
-	}
-}
-
-func (m *Manager) bufferStderr(pio *processIO, data OutputData) {
-	pio.stderrBuf = append(pio.stderrBuf, data)
-	pio.stderrBufBytes += len(data.Data)
-	for pio.stderrBufBytes > maxBufferedBytes && len(pio.stderrBuf) > 0 {
-		pio.stderrBufBytes -= len(pio.stderrBuf[0].Data)
-		pio.stderrBuf = pio.stderrBuf[1:]
+// appendBounded appends data to a buffer while enforcing a maximum size.
+// When the buffer exceeds maxBytes, older entries are removed from the front.
+func appendBounded(getBufAndSize func(*processIO) (*[]OutputData, *int), pio *processIO, data OutputData, maxBytes int) {
+	buf, size := getBufAndSize(pio)
+	*buf = append(*buf, data)
+	*size += len(data.Data)
+	for *size > maxBytes && len(*buf) > 0 {
+		*size -= len((*buf)[0].Data)
+		*buf = (*buf)[1:]
 	}
 }

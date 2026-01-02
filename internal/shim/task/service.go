@@ -1233,12 +1233,29 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 		"exec":      execID,
 	}).Debug("waiting for I/O forwarder to complete before forwarding TaskExit")
 
-	forwarder.WaitForComplete()
+	// Wait for I/O with a timeout to prevent blocking the event loop indefinitely.
+	// If the timeout is reached, we proceed anyway - it's better to deliver the exit
+	// event late than to block forever.
+	const ioWaitTimeout = 30 * time.Second
+	done := make(chan struct{})
+	go func() {
+		forwarder.WaitForComplete()
+		close(done)
+	}()
 
-	log.G(ctx).WithFields(log.Fields{
-		"container": taskExit.ContainerID,
-		"exec":      execID,
-	}).Debug("I/O forwarder complete, forwarding TaskExit")
+	select {
+	case <-done:
+		log.G(ctx).WithFields(log.Fields{
+			"container": taskExit.ContainerID,
+			"exec":      execID,
+		}).Debug("I/O forwarder complete, forwarding TaskExit")
+	case <-time.After(ioWaitTimeout):
+		log.G(ctx).WithFields(log.Fields{
+			"container": taskExit.ContainerID,
+			"exec":      execID,
+			"timeout":   ioWaitTimeout,
+		}).Warn("timeout waiting for I/O forwarder, proceeding with TaskExit")
+	}
 }
 
 func (s *service) send(evt interface{}) {
