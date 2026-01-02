@@ -323,8 +323,13 @@ func TestNullStdio(t *testing.T) {
 		t.Error("expected null stdio to remain null")
 	}
 
-	if forwarder != nil {
-		t.Error("expected nil forwarder for null stdio")
+	// IOForwarder uses Null Object Pattern - always returns non-nil forwarder
+	// to eliminate nil checks at call sites (see IOForwarder interface docs)
+	if forwarder == nil {
+		t.Error("expected noopForwarder for null stdio (Null Object Pattern)")
+	}
+	if _, ok := forwarder.(*noopForwarder); !ok {
+		t.Errorf("expected noopForwarder type, got %T", forwarder)
 	}
 }
 
