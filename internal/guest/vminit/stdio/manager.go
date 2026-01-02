@@ -184,12 +184,19 @@ func (m *Manager) Unregister(containerID, execID string) {
 	delete(m.processes, key)
 	m.mu.Unlock()
 
-	// Mark as exited and close exit channel.
+	// Mark as exited first (prevents new subscribers).
 	pio.mu.Lock()
 	pio.exited = true
 	close(pio.exitChan)
+	pio.mu.Unlock()
 
-	// Cancel all subscribers.
+	// Wait for fan-out goroutines to finish FIRST.
+	// This ensures all output data and EOF are delivered to subscribers
+	// before we close their channels.
+	pio.wg.Wait()
+
+	// Now safe to cancel and close subscriber channels.
+	pio.mu.Lock()
 	for _, sub := range pio.stdoutSubs {
 		sub.cancel()
 		close(sub.ch)
@@ -201,9 +208,6 @@ func (m *Manager) Unregister(containerID, execID string) {
 	pio.stdoutSubs = nil
 	pio.stderrSubs = nil
 	pio.mu.Unlock()
-
-	// Wait for fan-out goroutines to finish.
-	pio.wg.Wait()
 
 	// Close stdin if not already closed.
 	if pio.stdin != nil && !pio.stdinClosed {
