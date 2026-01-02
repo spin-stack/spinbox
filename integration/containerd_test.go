@@ -231,6 +231,14 @@ func runContainer(t *testing.T, client *containerd.Client, cfg testConfig, conta
 		t.Fatalf("get task result for %s: %v", containerName, err)
 	}
 
+	// Wait for I/O copy goroutines to complete.
+	// containerd's cio.WithStreams creates io.Copy goroutines that copy from FIFO to file.
+	// We must wait for these to finish before reading the output files, otherwise we
+	// may read before all data is flushed.
+	if io := task.IO(); io != nil {
+		io.Close()
+	}
+
 	// Ensure files are flushed
 	stdoutFile.Sync()
 	stderrFile.Sync()
