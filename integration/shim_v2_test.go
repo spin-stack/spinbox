@@ -227,7 +227,22 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	defer cancel()
 	ctx = namespaces.WithNamespace(ctx, cfg.Namespace)
 
-	containerID := fmt.Sprintf("shim-validate-%d", time.Now().UnixNano())
+	// Use CI test ID if available, otherwise generate one
+	containerID := os.Getenv("QEMUBOX_TEST_ID")
+	if containerID == "" {
+		containerID = fmt.Sprintf("shim-validate-%d", time.Now().UnixNano())
+	} else {
+		containerID = fmt.Sprintf("%s-shim-%d", containerID, time.Now().UnixNano()%10000)
+	}
+
+	// Set up log collector to capture logs specific to this container
+	logCollector := newTestLogCollector(t, containerID)
+	defer func() {
+		if t.Failed() {
+			logCollector.dumpLogs()
+		}
+	}()
+
 	execID := "exec1"
 	expectedInitExit := uint32(0)
 	expectedExecExit := uint32(0)

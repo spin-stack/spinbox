@@ -63,9 +63,11 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,6 +78,69 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 )
+
+// testLogCollector helps collect logs for a specific test/container.
+// It captures logs from journald filtered by the container ID and time range.
+type testLogCollector struct {
+	t           *testing.T
+	containerID string
+	startTime   time.Time
+}
+
+// newTestLogCollector creates a log collector that will capture logs from now onwards.
+func newTestLogCollector(t *testing.T, containerID string) *testLogCollector {
+	return &testLogCollector{
+		t:           t,
+		containerID: containerID,
+		startTime:   time.Now(),
+	}
+}
+
+// dumpLogs collects and logs all relevant logs for this test.
+// Call this in a defer or when the test fails.
+func (c *testLogCollector) dumpLogs() {
+	c.t.Helper()
+
+	// Format start time for journalctl
+	since := c.startTime.Format("2006-01-02 15:04:05")
+
+	c.t.Logf("=== Logs for container %s (since %s) ===", c.containerID, since)
+
+	// Collect journald logs filtered by container ID
+	cmd := exec.Command("journalctl",
+		"-u", "qemubox-containerd",
+		"--since", since,
+		"--no-pager",
+		"-o", "short-precise",
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		c.t.Logf("Failed to collect journald logs: %v (stderr: %s)", err, stderr.String())
+	} else {
+		// Filter logs to only show those containing our container ID
+		lines := strings.Split(stdout.String(), "\n")
+		var filtered []string
+		for _, line := range lines {
+			if strings.Contains(line, c.containerID) {
+				filtered = append(filtered, line)
+			}
+		}
+		if len(filtered) > 0 {
+			c.t.Logf("Containerd logs for %s:\n%s", c.containerID, strings.Join(filtered, "\n"))
+		} else {
+			c.t.Logf("No containerd logs found for container %s", c.containerID)
+		}
+	}
+
+	// Collect VM console log if it exists
+	consoleLogPath := filepath.Join("/var/log/qemubox", c.containerID, "console.log")
+	if data, err := os.ReadFile(consoleLogPath); err == nil {
+		c.t.Logf("VM console log (%s):\n%s", consoleLogPath, string(data))
+	}
+}
 
 // testConfig holds the configuration for containerd integration tests.
 type testConfig struct {
