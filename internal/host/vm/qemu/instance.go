@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/containerd/log"
 
@@ -32,12 +33,21 @@ const (
 
 	// cidLockDir is the subdirectory for CID lock files.
 	cidLockDir = "cid"
+
+	// cidCooldownPeriod is the minimum time to wait before reusing a CID.
+	// This allows the kernel's vsock routing table to clean up stale entries
+	// after a VM exits. Without this cooldown, a new VM using the same CID
+	// might experience vsock connection issues due to stale kernel state.
+	cidCooldownPeriod = 2 * time.Second
 )
 
 // allocateGuestCID allocates a unique vsock CID using lock files.
 // Each CID has a corresponding lock file; the caller holds an exclusive flock
 // for the lifetime of the VM. When the shim process exits (normally or crashes),
 // the kernel automatically releases the lock, making the CID available for reuse.
+//
+// To prevent vsock routing issues from stale kernel state, CIDs that were recently
+// released are skipped for a cooldown period (cidCooldownPeriod).
 //
 // Returns the allocated CID and the lock file handle. The caller must keep the
 // file open for the duration of the VM and close it on shutdown.
@@ -51,6 +61,8 @@ func allocateGuestCID() (uint32, *os.File, error) {
 	if err := os.MkdirAll(lockDir, 0750); err != nil {
 		return 0, nil, fmt.Errorf("failed to create CID lock directory: %w", err)
 	}
+
+	now := time.Now()
 
 	// Scan for first available CID
 	for cid := minGuestCID; cid <= maxGuestCID; cid++ {
@@ -70,7 +82,21 @@ func allocateGuestCID() (uint32, *os.File, error) {
 			continue
 		}
 
-		// Successfully acquired lock - this CID is ours
+		// Check if this CID was recently released (cooldown period)
+		// The file's mtime indicates when it was last used
+		if info, statErr := f.Stat(); statErr == nil {
+			if now.Sub(info.ModTime()) < cidCooldownPeriod {
+				// CID was recently used, skip it to avoid vsock routing issues
+				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+				_ = f.Close()
+				continue
+			}
+		}
+
+		// Successfully acquired lock and passed cooldown check
+		// Update mtime to mark this CID as in use
+		_, _ = f.WriteString(now.Format(time.RFC3339))
+
 		return cid, f, nil
 	}
 
