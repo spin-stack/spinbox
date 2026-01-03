@@ -144,6 +144,12 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 		}
 		return []*types.Mount{mnt}, nil, nil
 	default:
+		// Mount types with mkfs/ or format/ prefixes require processing by the
+		// mount manager to create backing files. Return ErrNotImplemented to
+		// trigger the fallback path that uses mountutil.All().
+		if strings.HasPrefix(mnt.Type, "mkfs/") || strings.HasPrefix(mnt.Type, "format/") {
+			return nil, nil, fmt.Errorf("mount type %q requires mount manager: %w", mnt.Type, errdefs.ErrNotImplemented)
+		}
 		return []*types.Mount{mnt}, nil, nil
 	}
 }
