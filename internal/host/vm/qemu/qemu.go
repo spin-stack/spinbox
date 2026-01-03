@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	vsockalloc "github.com/aledbf/qemubox/containerd/internal/vsock"
 	"github.com/containerd/ttrpc"
 )
 
@@ -73,8 +74,8 @@ type Instance struct {
 	kernelPath  string
 	initrdPath  string
 	resourceCfg *vm.VMResourceConfig
-	guestCID    uint32   // Unique vsock CID for this VM (3+)
-	cidLockFile *os.File // Lock file holding CID reservation (released on close)
+	guestCID    uint32            // Unique vsock CID for this VM (3+)
+	cidLease    *vsockalloc.Lease // CID reservation (released on close)
 
 	// Runtime paths
 	qmpSocketPath   string   // QMP control socket

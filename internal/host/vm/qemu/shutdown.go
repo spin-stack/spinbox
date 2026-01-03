@@ -197,14 +197,12 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 	// Close TAP file descriptors
 	q.closeTAPFiles()
 
-	// Release CID lock (allows CID reuse by other VMs)
-	if q.cidLockFile != nil {
-		now := time.Now()
-		if err := os.Chtimes(q.cidLockFile.Name(), now, now); err != nil {
-			logger.WithError(err).Debug("qemu: failed to update CID lock mtime")
+	// Release CID lease (allows CID reuse by other VMs)
+	if q.cidLease != nil {
+		if err := q.cidLease.Release(); err != nil {
+			logger.WithError(err).Debug("qemu: failed to release CID lease")
 		}
-		closeAndLog(logger, "cid-lock", q.cidLockFile)
-		q.cidLockFile = nil
+		q.cidLease = nil
 	}
 }
 

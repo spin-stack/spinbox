@@ -314,10 +314,10 @@ func (q *Instance) rollbackStart(success *bool) {
 	// Close any opened TAP FDs on failure
 	q.closeTAPFiles()
 
-	// Release CID lock on failure (allows CID reuse)
-	if q.cidLockFile != nil {
-		_ = q.cidLockFile.Close()
-		q.cidLockFile = nil
+	// Release CID lease on failure (allows CID reuse)
+	if q.cidLease != nil {
+		_ = q.cidLease.Release()
+		q.cidLease = nil
 	}
 }
 
