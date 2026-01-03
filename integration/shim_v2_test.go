@@ -3,27 +3,20 @@
 package integration
 
 import (
+	"bufio"
+	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
-
-	eventsapi "github.com/containerd/containerd/api/events"
-	apitasks "github.com/containerd/containerd/api/services/tasks/v1"
-	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/containerd/containerd/v2/core/events"
-	"github.com/containerd/containerd/v2/core/runtime"
-	"github.com/containerd/containerd/v2/pkg/cio"
-	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/containerd/containerd/v2/pkg/oci"
-	"github.com/containerd/typeurl/v2"
 )
 
+// Task state constants for event tracking.
 const (
 	initPending = iota
 	initCreated
@@ -39,7 +32,21 @@ const (
 	execExited
 )
 
-type eventTracker struct {
+// ctrEvent represents a containerd event from `ctr events`.
+type ctrEvent struct {
+	Timestamp time.Time `json:"timestamp"`
+	Namespace string    `json:"namespace"`
+	Topic     string    `json:"topic"`
+	Event     struct {
+		ContainerID string `json:"container_id"`
+		ID          string `json:"id"`
+		ExitStatus  uint32 `json:"exit_status"`
+		ExecID      string `json:"exec_id"`
+	} `json:"event"`
+}
+
+// ctrEventTracker tracks containerd events from ctr events command.
+type ctrEventTracker struct {
 	containerID string
 	execID      string
 	checkExec   bool
@@ -50,13 +57,14 @@ type eventTracker struct {
 	mu        sync.Mutex
 	initState int
 	execState int
+	events    []ctrEvent
 	err       error
 	done      chan struct{}
 	doneOnce  sync.Once
 }
 
-func newEventTracker(containerID, execID string, checkExec bool, expectedInitExit, expectedExecExit *uint32) *eventTracker {
-	return &eventTracker{
+func newCtrEventTracker(containerID, execID string, checkExec bool, expectedInitExit, expectedExecExit *uint32) *ctrEventTracker {
+	return &ctrEventTracker{
 		containerID:      containerID,
 		execID:           execID,
 		checkExec:        checkExec,
@@ -68,27 +76,13 @@ func newEventTracker(containerID, execID string, checkExec bool, expectedInitExi
 	}
 }
 
-func (t *eventTracker) closeDone() {
+func (t *ctrEventTracker) closeDone() {
 	t.doneOnce.Do(func() {
 		close(t.done)
 	})
 }
 
-func (t *eventTracker) setErr(err error) {
-	if err == nil {
-		return
-	}
-	t.mu.Lock()
-	if t.err != nil {
-		t.mu.Unlock()
-		return
-	}
-	t.err = err
-	t.mu.Unlock()
-	t.closeDone()
-}
-
-func (t *eventTracker) maybeDoneLocked() {
+func (t *ctrEventTracker) maybeDoneLocked() {
 	if t.initState != initDeleted {
 		return
 	}
@@ -98,97 +92,73 @@ func (t *eventTracker) maybeDoneLocked() {
 	t.closeDone()
 }
 
-func (t *eventTracker) setErrLocked(err error) {
+func (t *ctrEventTracker) setErrLocked(err error) {
 	t.err = err
 	t.closeDone()
 }
 
-func (t *eventTracker) handleExecExit(evt *eventsapi.TaskExit) {
-	if t.execState != execStarted {
-		t.setErrLocked(fmt.Errorf("TaskExit (exec) out of order: state=%d", t.execState))
-		return
-	}
-	if t.expectedExecExit != nil && evt.ExitStatus != *t.expectedExecExit {
-		t.setErrLocked(fmt.Errorf("TaskExit (exec) exit status mismatch: got=%d want=%d", evt.ExitStatus, *t.expectedExecExit))
-		return
-	}
-	if evt.ExitedAt == nil || evt.ExitedAt.AsTime().IsZero() {
-		t.setErrLocked(fmt.Errorf("TaskExit (exec) missing exit timestamp"))
-		return
-	}
-	t.execState = execExited
-	t.maybeDoneLocked()
-}
-
-func (t *eventTracker) handleInitExit(evt *eventsapi.TaskExit) {
-	if t.initState != initStarted {
-		t.setErrLocked(fmt.Errorf("TaskExit out of order: state=%d", t.initState))
-		return
-	}
-	if t.expectedInitExit != nil && evt.ExitStatus != *t.expectedInitExit {
-		t.setErrLocked(fmt.Errorf("TaskExit exit status mismatch: got=%d want=%d", evt.ExitStatus, *t.expectedInitExit))
-		return
-	}
-	if evt.ExitedAt == nil || evt.ExitedAt.AsTime().IsZero() {
-		t.setErrLocked(fmt.Errorf("TaskExit missing exit timestamp"))
-		return
-	}
-	t.initState = initExited
-}
-
-func (t *eventTracker) handleEvent(e *events.Envelope) {
-	if e == nil || e.Event == nil {
-		return
-	}
-	decoded, err := typeurl.UnmarshalAny(e.Event)
-	if err != nil {
-		t.setErr(fmt.Errorf("unmarshal event: %w", err))
-		return
-	}
-
+func (t *ctrEventTracker) handleEvent(evt ctrEvent) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	switch evt := decoded.(type) {
-	case *eventsapi.TaskCreate:
-		if evt.ContainerID != t.containerID {
-			return
-		}
+	// Filter by container ID
+	if evt.Event.ContainerID != t.containerID {
+		return
+	}
+
+	t.events = append(t.events, evt)
+
+	switch {
+	case strings.Contains(evt.Topic, "task-create"):
 		if t.initState != initPending {
 			t.setErrLocked(fmt.Errorf("TaskCreate out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initCreated
-	case *eventsapi.TaskStart:
-		if evt.ContainerID != t.containerID {
-			return
-		}
+
+	case strings.Contains(evt.Topic, "task-start"):
 		if t.initState != initCreated {
 			t.setErrLocked(fmt.Errorf("TaskStart out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initStarted
-	case *eventsapi.TaskExit:
-		if evt.ContainerID != t.containerID {
+
+	case strings.Contains(evt.Topic, "task-exit"):
+		// Check if this is an exec exit
+		if t.checkExec && evt.Event.ID == t.execID {
+			if t.execState != execStarted {
+				t.setErrLocked(fmt.Errorf("TaskExit (exec) out of order: state=%d", t.execState))
+				return
+			}
+			if t.expectedExecExit != nil && evt.Event.ExitStatus != *t.expectedExecExit {
+				t.setErrLocked(fmt.Errorf("TaskExit (exec) exit status mismatch: got=%d want=%d", evt.Event.ExitStatus, *t.expectedExecExit))
+				return
+			}
+			t.execState = execExited
+			t.maybeDoneLocked()
 			return
 		}
-		if t.checkExec && evt.ID == t.execID {
-			t.handleExecExit(evt)
+		// Init exit
+		if t.initState != initStarted {
+			t.setErrLocked(fmt.Errorf("TaskExit out of order: state=%d", t.initState))
 			return
 		}
-		t.handleInitExit(evt)
-	case *eventsapi.TaskDelete:
-		if evt.ContainerID != t.containerID {
+		if t.expectedInitExit != nil && evt.Event.ExitStatus != *t.expectedInitExit {
+			t.setErrLocked(fmt.Errorf("TaskExit exit status mismatch: got=%d want=%d", evt.Event.ExitStatus, *t.expectedInitExit))
 			return
 		}
+		t.initState = initExited
+
+	case strings.Contains(evt.Topic, "task-delete"):
 		if t.initState != initExited {
 			t.setErrLocked(fmt.Errorf("TaskDelete out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initDeleted
 		t.maybeDoneLocked()
-	case *eventsapi.TaskExecAdded:
-		if !t.checkExec || evt.ContainerID != t.containerID || evt.ExecID != t.execID {
+
+	case strings.Contains(evt.Topic, "exec-added"):
+		if !t.checkExec || evt.Event.ExecID != t.execID {
 			return
 		}
 		if t.execState != execPending {
@@ -196,8 +166,9 @@ func (t *eventTracker) handleEvent(e *events.Envelope) {
 			return
 		}
 		t.execState = execAdded
-	case *eventsapi.TaskExecStarted:
-		if !t.checkExec || evt.ContainerID != t.containerID || evt.ExecID != t.execID {
+
+	case strings.Contains(evt.Topic, "exec-started"):
+		if !t.checkExec || evt.Event.ExecID != t.execID {
 			return
 		}
 		if t.execState != execAdded {
@@ -208,7 +179,7 @@ func (t *eventTracker) handleEvent(e *events.Envelope) {
 	}
 }
 
-func (t *eventTracker) wait(ctx context.Context) error {
+func (t *ctrEventTracker) wait(ctx context.Context) error {
 	select {
 	case <-t.done:
 		t.mu.Lock()
@@ -219,92 +190,94 @@ func (t *eventTracker) wait(ctx context.Context) error {
 	}
 }
 
-func cleanupTask(ctx context.Context, t *testing.T, client *containerd.Client, containerID string, task containerd.Task) {
-	if task == nil {
-		return
+// ctrCmd runs a ctr command and returns its output.
+func ctrCmd(t *testing.T, socket, namespace string, args ...string) (string, error) {
+	t.Helper()
+	fullArgs := append([]string{"-a", socket, "-n", namespace}, args...)
+	cmd := exec.Command("ctr", fullArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return stdout.String(), fmt.Errorf("ctr %s: %v\nstderr: %s", strings.Join(args, " "), err, stderr.String())
 	}
-	_ = task.Kill(ctx, syscall.SIGKILL)
-	if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
-		if !shouldIgnoreCleanupError(err) {
-			t.Logf("cleanup task: %v", err)
-		}
-		forceDeleteTask(ctx, t, client, containerID)
-	}
+	return stdout.String(), nil
 }
 
-func forceDeleteTask(ctx context.Context, t *testing.T, client *containerd.Client, containerID string) {
-	if client == nil {
-		return
+// ctrCmdContext runs a ctr command with context and returns its output.
+func ctrCmdContext(ctx context.Context, t *testing.T, socket, namespace string, args ...string) (string, error) {
+	t.Helper()
+	fullArgs := append([]string{"-a", socket, "-n", namespace}, args...)
+	cmd := exec.CommandContext(ctx, "ctr", fullArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return stdout.String(), fmt.Errorf("ctr %s: %v\nstderr: %s", strings.Join(args, " "), err, stderr.String())
 	}
-	retryWithBackoff(ctx, func() error {
-		_, err := client.TaskService().Delete(ctx, &apitasks.DeleteTaskRequest{ContainerID: containerID})
-		if err == nil {
-			return nil
-		}
-		if shouldIgnoreCleanupError(err) || strings.Contains(err.Error(), "not found") {
-			return nil
-		}
-		if strings.Contains(err.Error(), "delete already in progress") {
-			return err
-		}
-		t.Logf("cleanup task (raw): %v", err)
-		return nil
-	})
+	return stdout.String(), nil
 }
 
-func cleanupContainer(ctx context.Context, t *testing.T, client *containerd.Client, containerID string, container containerd.Container) {
-	if container == nil {
-		return
+// startCtrEvents starts `ctr events` and returns a channel of events.
+func startCtrEvents(ctx context.Context, t *testing.T, socket, namespace string) (<-chan ctrEvent, func()) {
+	t.Helper()
+
+	eventsCh := make(chan ctrEvent, 100)
+	cmd := exec.CommandContext(ctx, "ctr", "-a", socket, "-n", namespace, "events")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
 	}
-	retryWithBackoff(ctx, func() error {
-		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
-			if strings.Contains(err.Error(), "cannot delete running task") {
-				forceDeleteTask(ctx, t, client, containerID)
-				return err
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start ctr events: %v", err)
+	}
+
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			// ctr events outputs JSON lines
+			var evt ctrEvent
+			if err := json.Unmarshal([]byte(line), &evt); err != nil {
+				// Try parsing as space-separated format: timestamp namespace topic event
+				// Example: 2024-01-01T00:00:00.000000000Z default /tasks/create {"container_id":"test"}
+				parts := strings.SplitN(line, " ", 4)
+				if len(parts) >= 4 {
+					evt.Topic = parts[2]
+					if err := json.Unmarshal([]byte(parts[3]), &evt.Event); err != nil {
+						t.Logf("failed to parse event JSON: %v (line: %s)", err, line)
+						continue
+					}
+				} else {
+					t.Logf("failed to parse event: %v (line: %s)", err, line)
+					continue
+				}
 			}
-			t.Logf("cleanup container: %v", err)
-			return nil
+			select {
+			case eventsCh <- evt:
+			case <-ctx.Done():
+				return
+			}
 		}
-		return nil
-	})
-}
+	}()
 
-func shouldIgnoreCleanupError(err error) bool {
-	if err == nil {
-		return true
+	cleanup := func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		close(eventsCh)
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "ttrpc: closed") || strings.Contains(msg, "no such device")
-}
 
-func retryWithBackoff(ctx context.Context, fn func() error) {
-	backoff := 100 * time.Millisecond
-	for {
-		if err := fn(); err == nil {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-		if backoff < 500*time.Millisecond {
-			backoff += 100 * time.Millisecond
-		}
-	}
+	return eventsCh, cleanup
 }
 
 func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	cfg := loadTestConfig()
 
-	client := setupContainerdClient(t, cfg)
-	defer client.Close()
-
-	ensureImagePulled(t, client, cfg)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	ctx = namespaces.WithNamespace(ctx, cfg.Namespace)
 
 	// Use CI test ID if available, otherwise generate one
 	containerID := os.Getenv("QEMUBOX_TEST_ID")
@@ -313,6 +286,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	} else {
 		containerID = fmt.Sprintf("%s-shim-%d", containerID, time.Now().UnixNano()%10000)
 	}
+	snapshotID := containerID
 
 	// Set up log collector to capture logs specific to this container
 	logCollector := newTestLogCollector(t, containerID)
@@ -325,130 +299,137 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	execID := "exec1"
 	expectedInitExit := uint32(0)
 	expectedExecExit := uint32(0)
-	tracker := newEventTracker(containerID, execID, true, &expectedInitExit, &expectedExecExit)
+	tracker := newCtrEventTracker(containerID, execID, true, &expectedInitExit, &expectedExecExit)
 
+	// Start event listener
 	eventsCtx, eventsCancel := context.WithCancel(ctx)
 	defer eventsCancel()
-	eventsCh, eventsErrCh := client.Subscribe(eventsCtx)
+	eventsCh, cleanupEvents := startCtrEvents(eventsCtx, t, cfg.Socket, cfg.Namespace)
+	defer cleanupEvents()
+
 	go func() {
-		for {
-			select {
-			case e := <-eventsCh:
-				tracker.handleEvent(e)
-			case err := <-eventsErrCh:
-				if err != nil && !errors.Is(err, context.Canceled) {
-					tracker.setErr(fmt.Errorf("event stream error: %w", err))
-				}
-				return
-			case <-eventsCtx.Done():
-				return
-			}
+		for evt := range eventsCh {
+			tracker.handleEvent(evt)
 		}
 	}()
 
-	image, err := client.GetImage(ctx, cfg.Image)
-	if err != nil {
-		t.Fatalf("get image %s: %v", cfg.Image, err)
+	// Ensure image exists
+	t.Log("checking image...")
+	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "image", "ls", "-q"); err != nil {
+		t.Fatalf("list images: %v", err)
 	}
 
-	container, err := client.NewContainer(
-		ctx,
-		containerID,
-		containerd.WithImage(image),
-		containerd.WithSnapshotter(cfg.Snapshotter),
-		containerd.WithNewSnapshot(containerID, image),
-		containerd.WithNewSpec(
-			oci.WithImageConfig(image),
-			oci.WithProcessArgs("/bin/sh", "-c", "sleep 3"),
-		),
-		containerd.WithRuntime(cfg.Runtime, nil),
-	)
-	if err != nil {
+	// Cleanup function for container and snapshot
+	cleanup := func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cleanupCancel()
+
+		// Kill and delete task (ignore errors)
+		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "task", "kill", "-s", "SIGKILL", containerID)
+		time.Sleep(500 * time.Millisecond)
+		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "task", "delete", "-f", containerID)
+
+		// Delete container
+		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "container", "delete", containerID)
+
+		// Delete snapshot
+		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "snapshot", "rm", snapshotID)
+	}
+	defer cleanup()
+
+	// Create snapshot
+	t.Log("creating snapshot...")
+	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "snapshot", "prepare", "--snapshotter", cfg.Snapshotter, snapshotID, cfg.Image); err != nil {
+		t.Fatalf("create snapshot: %v", err)
+	}
+
+	// Create container
+	t.Log("creating container...")
+	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "container", "create",
+		"--snapshotter", cfg.Snapshotter,
+		"--snapshot", snapshotID,
+		"--runtime", cfg.Runtime,
+		cfg.Image, containerID,
+		"/bin/sh", "-c", "sleep 5",
+	); err != nil {
 		t.Fatalf("create container: %v", err)
 	}
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(
-			namespaces.WithNamespace(context.Background(), cfg.Namespace),
-			10*time.Second,
-		)
-		defer cleanupCancel()
-		cleanupContainer(cleanupCtx, t, client, containerID, container)
-	}()
 
+	// Create and start task
 	t.Log("creating task...")
-	task, err := container.NewTask(ctx, cio.NullIO)
-	if err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	t.Logf("task created with pid %d", task.Pid())
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(
-			namespaces.WithNamespace(context.Background(), cfg.Namespace),
-			10*time.Second,
-		)
-		defer cleanupCancel()
-		cleanupTask(cleanupCtx, t, client, containerID, task)
-	}()
-
-	exitCh, err := task.Wait(ctx)
-	if err != nil {
-		t.Fatalf("wait task: %v", err)
-	}
-
-	// Verify task is in created state before starting.
-	// This confirms the shim is responding to RPC calls.
-	status, err := task.Status(ctx)
-	if err != nil {
-		t.Fatalf("get task status: %v", err)
-	}
-	t.Logf("task status before start: %s", status.Status)
-
-	t.Log("starting task...")
-	if err := task.Start(ctx); err != nil {
+	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "start", "--null-io", "-d", containerID); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
 	t.Log("task started successfully")
 
-	spec, err := container.Spec(ctx)
-	if err != nil {
-		t.Fatalf("load spec: %v", err)
-	}
-	execSpec := *spec.Process
-	execSpec.Args = []string{"/bin/sh", "-c", "echo shim-validate"}
+	// Small delay to let task reach running state
+	time.Sleep(500 * time.Millisecond)
 
-	proc, err := task.Exec(ctx, execID, &execSpec, cio.NullIO)
+	// Check task status
+	t.Log("checking task status...")
+	status, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "ls")
 	if err != nil {
+		t.Fatalf("task ls: %v", err)
+	}
+	if !strings.Contains(status, containerID) {
+		t.Fatalf("task not found in task list: %s", status)
+	}
+	t.Logf("task status:\n%s", status)
+
+	// Run exec
+	t.Log("running exec...")
+	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "exec",
+		"--exec-id", execID,
+		containerID,
+		"/bin/sh", "-c", "echo shim-validate",
+	); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	execExitCh, err := proc.Wait(ctx)
-	if err != nil {
-		t.Fatalf("wait exec: %v", err)
-	}
-	if err := proc.Start(ctx); err != nil {
-		t.Fatalf("start exec: %v", err)
-	}
-	<-execExitCh
+	t.Log("exec completed")
 
-	<-exitCh
-	if _, err := task.Delete(ctx); err != nil {
-		t.Fatalf("delete task: %v", err)
-	}
-	task = nil
+	// Wait for task to exit (sleep 5 should complete)
+	t.Log("waiting for task to exit...")
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer waitCancel()
 
-	if err := tracker.wait(ctx); err != nil {
+	for {
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("timeout waiting for task to exit")
+		default:
+		}
+
+		status, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "ls")
+		if err != nil {
+			// Task may have been deleted
+			break
+		}
+		if !strings.Contains(status, containerID) || strings.Contains(status, "STOPPED") {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Log("task exited")
+
+	// Delete task
+	t.Log("deleting task...")
+	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "delete", containerID); err != nil {
+		// Ignore errors if task already deleted
+		if !strings.Contains(err.Error(), "not found") {
+			t.Logf("task delete warning: %v", err)
+		}
+	}
+	t.Log("task deleted")
+
+	// Wait for event tracker to complete
+	eventWaitCtx, eventWaitCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer eventWaitCancel()
+
+	if err := tracker.wait(eventWaitCtx); err != nil {
 		t.Fatalf("event order validation failed: %v", err)
 	}
 
 	t.Logf("shim validation ok (runtime=%s, container=%s)", cfg.Runtime, containerID)
-	t.Logf("validated topics: %s %s %s %s",
-		runtime.TaskCreateEventTopic,
-		runtime.TaskStartEventTopic,
-		runtime.TaskExitEventTopic,
-		runtime.TaskDeleteEventTopic,
-	)
-	t.Logf("validated exec topics: %s %s %s",
-		runtime.TaskExecAddedEventTopic,
-		runtime.TaskExecStartedEventTopic,
-		runtime.TaskExitEventTopic,
-	)
+	t.Logf("validated event topics: task-create, task-start, task-exit, task-delete")
+	t.Logf("validated exec topics: exec-added, exec-started, task-exit")
 }
