@@ -71,8 +71,14 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 
 // Start a process
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
+	log.G(ctx).WithFields(log.Fields{
+		"id":   r.ID,
+		"exec": r.ExecID,
+	}).Info("Start: request received")
+
 	container, err := s.getContainer(r.ID)
 	if err != nil {
+		log.G(ctx).WithError(err).WithField("id", r.ID).Error("Start: container not found")
 		return nil, err
 	}
 
@@ -167,12 +173,22 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 
 // State returns runtime state information for a process
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
+	log.G(ctx).WithFields(log.Fields{
+		"id":   r.ID,
+		"exec": r.ExecID,
+	}).Info("State: request received")
+
 	container, err := s.getContainer(r.ID)
 	if err != nil {
+		log.G(ctx).WithError(err).WithField("id", r.ID).Error("State: container not found")
 		return nil, err
 	}
 	p, err := container.Process(r.ExecID)
 	if err != nil {
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"id":   r.ID,
+			"exec": r.ExecID,
+		}).Error("State: process not found")
 		return nil, errgrpc.ToGRPC(err)
 	}
 	st, err := p.Status(ctx)
@@ -188,7 +204,7 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		"exec":        r.ExecID,
 		"status_str":  st,
 		"process_pid": p.Pid(),
-	}).Debug("State: process status retrieved")
+	}).Info("State: process status retrieved")
 	status := task.Status_UNKNOWN
 	switch st {
 	case "created":

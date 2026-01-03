@@ -685,6 +685,8 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 
 // Start a process.
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: request received")
+
 	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, 30*time.Second)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
@@ -695,13 +697,15 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
 		}
 	}()
+
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: calling guest")
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Start(ctx, r)
 	if err != nil {
-		log.G(ctx).WithError(err).Error("start: guest start failed")
+		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("start: guest start failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Debug("task start completed")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "pid": resp.Pid}).Info("task start completed")
 	return resp, nil
 }
 
@@ -975,17 +979,27 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 
 // State returns runtime state information for a process.
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("state: request received")
+
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("state: failed to get client")
 		return nil, err
 	}
 	defer cleanup()
+
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("state: calling guest")
 	st, err := taskAPI.NewTTRPCTaskClient(vmc).State(ctx, r)
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("state: guest state failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
+	log.G(ctx).WithFields(log.Fields{
+		"id":     r.ID,
+		"exec":   r.ExecID,
+		"status": st.Status,
+		"pid":    st.Pid,
+	}).Info("state: guest response received")
 
 	// Replace guest's I/O paths (rpcio:// URIs) with host FIFO paths for attach support.
 	// The guest uses rpcio:// URIs internally, but containerd's attach expects host FIFOs.
