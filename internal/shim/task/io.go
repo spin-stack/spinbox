@@ -38,13 +38,13 @@ type fifoKeepalive struct {
 func (k *fifoKeepalive) Close(ctx context.Context) {
 	if k.stdout != nil {
 		if err := k.stdout.Close(); err != nil {
-			log.G(ctx).WithError(err).Debug("error closing stdout closer")
+			log.G(ctx).WithError(err).Debug("failed to close stdout closer")
 		}
 		k.stdout = nil
 	}
 	if k.stderr != nil {
 		if err := k.stderr.Close(); err != nil {
-			log.G(ctx).WithError(err).Debug("error closing stderr closer")
+			log.G(ctx).WithError(err).Debug("failed to close stderr closer")
 		}
 		k.stderr = nil
 	}
@@ -460,8 +460,9 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 		if err != nil {
 			log.G(ctx).WithError(err).WithFields(log.Fields{
 				"stream": target.stream,
+				"label":  target.label,
 				"bytes":  n,
-			}).Warn("error copying " + target.label)
+			}).Warn("output stream copy failed")
 		} else {
 			log.G(ctx).WithFields(log.Fields{
 				"target": target.name,

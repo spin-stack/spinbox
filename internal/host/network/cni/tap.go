@@ -25,7 +25,7 @@ func ExtractTAPDeviceInfo(result *current.Result) (string, string, error) {
 		return "", "", fmt.Errorf("CNI result is nil")
 	}
 
-	log.L.WithField("count", len(result.Interfaces)).Debug("CNI result interfaces")
+	log.L.WithField("count", len(result.Interfaces)).Debug("CNI result interface count")
 
 	// Detect TAP device reported by tc-redirect-tap.
 	tapDevice, tapMAC, err := detectTCRedirectTAP(result)
@@ -58,7 +58,7 @@ func detectTCRedirectTAP(result *current.Result) (string, string, error) {
 				"name":    iface.Name,
 				"sandbox": iface.Sandbox,
 				"mac":     iface.Mac,
-			}).Debug("Found tap-prefixed interface")
+			}).Debug("tap-prefixed interface candidate")
 
 			// Validate that the interface is in a sandbox (container netns).
 			// TAP devices created by tc-redirect-tap for VM use will have

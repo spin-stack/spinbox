@@ -138,7 +138,7 @@ func closeAndLog(logger *log.Entry, name string, closer io.Closer) {
 		return
 	}
 	if err := closer.Close(); err != nil {
-		logger.WithError(err).WithField("resource", name).Debug("error closing resource")
+		logger.WithError(err).WithField("resource", name).Debug("failed to close resource")
 	}
 }
 

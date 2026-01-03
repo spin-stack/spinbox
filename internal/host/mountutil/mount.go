@@ -151,7 +151,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 			"source":  am.Source,
 			"target":  target,
 			"options": am.Options,
-		}).Info("mounted")
+		}).Info("mounted rootfs component")
 		active = append(active, am)
 
 	}

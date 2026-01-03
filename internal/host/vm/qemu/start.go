@@ -387,7 +387,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	log.G(ctx).WithFields(log.Fields{
 		"binary":  q.binaryPath,
 		"cmdline": strings.Join(qemuArgs, " "),
-	}).Debug("qemu: starting vm")
+	}).Debug("qemu: starting VM process")
 
 	if err := q.startQemuProcess(ctx, qemuArgs); err != nil {
 		return err

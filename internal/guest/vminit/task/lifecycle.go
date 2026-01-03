@@ -27,7 +27,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 
 	ctx = log.WithLogger(ctx, log.G(ctx).WithField("id", r.ID))
 
-	log.G(ctx).WithField("bundle", r.Bundle).Infof("Create task")
+	log.G(ctx).WithField("bundle", r.Bundle).Info("create task request")
 
 	handleStarted, cleanup := s.preStart(nil)
 	defer cleanup()
@@ -38,7 +38,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).Infof("new container %s", container.ID)
+	log.G(ctx).WithField("container_id", container.ID).Info("created container")
 
 	s.containers[r.ID] = container
 

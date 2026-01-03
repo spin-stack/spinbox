@@ -439,7 +439,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 	bootTime := time.Since(prestart)
-	log.G(ctx).WithField("bootTime", bootTime).Debug("VM started")
+	log.G(ctx).WithField("bootTime", bootTime).Debug("VM boot completed")
 	s.intentionalShutdown.Store(false)
 
 	// Get VM client
@@ -631,6 +631,8 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 
 // reconnectEventStream attempts to reconnect the event stream within a deadline.
 // Returns the new client, stream, and whether reconnection succeeded.
+// Note: The caller is responsible for closing the old client if needed. We don't close
+// it here because it might be the cached client from the VM instance, which is shared.
 func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEvents_StreamClient, bool) {
 	reconnectDeadline := time.Now().Add(eventStreamReconnectTimeout)
 
@@ -655,10 +657,9 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 			continue
 		}
 
-		// Success! Close old client and return new connection
-		if oldClient != nil {
-			_ = oldClient.Close()
-		}
+		// Success! Don't close the old client here - it might be the cached client
+		// from the VM instance which is shared. The event forwarder will track
+		// which clients it owns and can close them when appropriate.
 		return newClient, newStream, true
 	}
 
