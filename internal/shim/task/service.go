@@ -496,23 +496,16 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Dial TTRPC client and cache it in the connection manager.
-	// The connection manager owns the client lifecycle from this point.
-	// We cache this connection because closing it can cause the VM to exit.
+	// Dial TTRPC client for Create RPCs.
+	// NOTE: We intentionally do NOT cache this connection because vsock connections
+	// can become stale between Create completing and Start being called.
+	// We also do NOT close it because that can cause the VM to exit unexpectedly.
+	// Subsequent operations (Start, State, etc.) will dial fresh via the connection manager.
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	s.connManager.SetClient(rpcClient)
-	log.G(ctx).Debug("create: cached task client in connection manager")
-	defer func() {
-		if retErr != nil {
-			// On failure, close the connection manager to clean up
-			if err := s.connManager.Close(); err != nil {
-				log.G(ctx).WithError(err).Warn("failed to close connection manager after create failure")
-			}
-		}
-	}()
+	// rpcClient will be garbage collected - we don't close it to avoid killing the VM
 
 	// Create bundle in VM
 	bundleFiles, err := b.Files()
