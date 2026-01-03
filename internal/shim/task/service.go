@@ -261,6 +261,9 @@ type service struct {
 	shutdownSvc         shutdown.Service
 	inflight            atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
 	exitFunc            func(code int) // Exit function (default: os.Exit), injectable for testing
+
+	taskClientMu sync.Mutex    // Protects taskClient
+	taskClient   *ttrpc.Client // Reused for unary task RPCs to avoid repeated vsock dials
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -304,6 +307,16 @@ func (s *service) shutdown(ctx context.Context) error {
 		mountCleanup = s.container.mountCleanup
 		s.container.mountCleanup = nil
 	}
+
+	// Close the cached task client before shutting down the VM.
+	s.taskClientMu.Lock()
+	if s.taskClient != nil {
+		if err := s.taskClient.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("task client close: %w", err))
+		}
+		s.taskClient = nil
+	}
+	s.taskClientMu.Unlock()
 
 	// Shutdown VM (idempotent)
 	// IMPORTANT: This must happen BEFORE network cleanup so QEMU can exit cleanly
@@ -351,6 +364,14 @@ func (s *service) shutdown(ctx context.Context) error {
 //
 // The caller must call the cleanup function when done to close the connection.
 func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
+	s.taskClientMu.Lock()
+	if s.taskClient != nil {
+		vmc := s.taskClient
+		s.taskClientMu.Unlock()
+		return vmc, func() {}, nil
+	}
+	s.taskClientMu.Unlock()
+
 	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, taskClientRetryTimeout)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to dial task client")
@@ -362,6 +383,16 @@ func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), err
 		}
 	}
 	return vmc, cleanup, nil
+}
+
+func (s *service) storeTaskClient(vmc *ttrpc.Client) bool {
+	s.taskClientMu.Lock()
+	defer s.taskClientMu.Unlock()
+	if s.taskClient != nil {
+		return false
+	}
+	s.taskClient = vmc
+	return true
 }
 
 // Create a new initial process and container with the underlying OCI runtime.
@@ -493,6 +524,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
+		if rpcClient == nil {
+			return
+		}
 		if err := rpcClient.Close(); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
 		}
@@ -584,6 +618,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		"t_setup":  setupTime - bootTime,
 		"t_create": time.Since(preCreate),
 	}).Info("task successfully created")
+
+	if s.storeTaskClient(rpcClient) {
+		rpcClient = nil
+	}
 
 	c.pid = resp.Pid
 	s.containerMu.Lock()
