@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	eventsapi "github.com/containerd/containerd/api/events"
+	apitasks "github.com/containerd/containerd/api/services/tasks/v1"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/events"
 	"github.com/containerd/containerd/v2/core/runtime"
@@ -217,6 +219,47 @@ func (t *eventTracker) wait(ctx context.Context) error {
 	}
 }
 
+func cleanupTask(ctx context.Context, t *testing.T, client *containerd.Client, containerID string, task containerd.Task) {
+	if task == nil {
+		return
+	}
+	_ = task.Kill(ctx, syscall.SIGKILL)
+	if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
+		if !strings.Contains(err.Error(), "ttrpc: closed") {
+			t.Logf("cleanup task: %v", err)
+		}
+		forceDeleteTask(ctx, t, client, containerID)
+	}
+}
+
+func forceDeleteTask(ctx context.Context, t *testing.T, client *containerd.Client, containerID string) {
+	if client == nil {
+		return
+	}
+	if _, err := client.TaskService().Delete(ctx, &apitasks.DeleteTaskRequest{ContainerID: containerID}); err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "ttrpc: closed") {
+			return
+		}
+		t.Logf("cleanup task (raw): %v", err)
+	}
+}
+
+func cleanupContainer(ctx context.Context, t *testing.T, client *containerd.Client, containerID string, container containerd.Container) {
+	if container == nil {
+		return
+	}
+	if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+		if strings.Contains(err.Error(), "cannot delete running task") {
+			forceDeleteTask(ctx, t, client, containerID)
+			if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+				t.Logf("cleanup container: %v", err)
+			}
+			return
+		}
+		t.Logf("cleanup container: %v", err)
+	}
+}
+
 func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	cfg := loadTestConfig()
 
@@ -290,9 +333,12 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		t.Fatalf("create container: %v", err)
 	}
 	defer func() {
-		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
-			t.Logf("cleanup container: %v", err)
-		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			namespaces.WithNamespace(context.Background(), cfg.Namespace),
+			10*time.Second,
+		)
+		defer cleanupCancel()
+		cleanupContainer(cleanupCtx, t, client, containerID, container)
 	}()
 
 	t.Log("creating task...")
@@ -302,14 +348,12 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	}
 	t.Logf("task created with pid %d", task.Pid())
 	defer func() {
-		// Try to kill the task first (may fail if not started, that's ok)
-		_ = task.Kill(ctx, syscall.SIGKILL)
-		// Wait briefly for kill to take effect
-		time.Sleep(100 * time.Millisecond)
-		// Delete with force kill option
-		if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
-			t.Logf("cleanup task: %v", err)
-		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			namespaces.WithNamespace(context.Background(), cfg.Namespace),
+			10*time.Second,
+		)
+		defer cleanupCancel()
+		cleanupTask(cleanupCtx, t, client, containerID, task)
 	}()
 
 	exitCh, err := task.Wait(ctx)
@@ -355,6 +399,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	if _, err := task.Delete(ctx); err != nil {
 		t.Fatalf("delete task: %v", err)
 	}
+	task = nil
 
 	if err := tracker.wait(ctx); err != nil {
 		t.Fatalf("event order validation failed: %v", err)
