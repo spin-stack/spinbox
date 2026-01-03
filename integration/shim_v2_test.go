@@ -239,23 +239,36 @@ func startCtrEvents(ctx context.Context, t *testing.T, socket, namespace string)
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
-			// ctr events outputs JSON lines
+			// ctr events output format:
+			// 2026-01-03 19:15:51.035266231 +0000 UTC default /tasks/create {"container_id":"test"}
+			// Fields: date time tz_offset tz_name namespace topic json_event
+
 			var evt ctrEvent
-			if err := json.Unmarshal([]byte(line), &evt); err != nil {
-				// Try parsing as space-separated format: timestamp namespace topic event
-				// Example: 2024-01-01T00:00:00.000000000Z default /tasks/create {"container_id":"test"}
-				parts := strings.SplitN(line, " ", 4)
-				if len(parts) >= 4 {
-					evt.Topic = parts[2]
-					if err := json.Unmarshal([]byte(parts[3]), &evt.Event); err != nil {
-						t.Logf("failed to parse event JSON: %v (line: %s)", err, line)
-						continue
-					}
-				} else {
-					t.Logf("failed to parse event: %v (line: %s)", err, line)
-					continue
-				}
+
+			// Find the JSON object (starts with '{')
+			jsonStart := strings.Index(line, "{")
+			if jsonStart == -1 {
+				continue
 			}
+
+			// Parse the prefix to extract topic
+			prefix := strings.TrimSpace(line[:jsonStart])
+			parts := strings.Fields(prefix)
+			if len(parts) < 6 {
+				t.Logf("failed to parse event prefix: %s", line)
+				continue
+			}
+
+			// Topic is the 6th field (0-indexed: 5)
+			evt.Topic = parts[5]
+
+			// Parse the JSON event
+			jsonStr := line[jsonStart:]
+			if err := json.Unmarshal([]byte(jsonStr), &evt.Event); err != nil {
+				t.Logf("failed to parse event JSON: %v (json: %s)", err, jsonStr)
+				continue
+			}
+
 			select {
 			case eventsCh <- evt:
 			case <-ctx.Done():
