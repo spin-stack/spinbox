@@ -76,6 +76,7 @@ import (
 	eventstypes "github.com/containerd/containerd/api/events"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types"
+	tasktypes "github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/v2/core/runtime"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
@@ -262,7 +263,8 @@ type service struct {
 	inflight            atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
 	exitFunc            func(code int) // Exit function (default: os.Exit), injectable for testing
 
-	taskClientMu sync.Mutex    // Protects taskClient
+	initStarted  atomic.Bool // True once the init process has been started
+	taskClientMu sync.Mutex  // Protects taskClient
 	taskClient   *ttrpc.Client // Reused for unary task RPCs to avoid repeated vsock dials
 }
 
@@ -323,6 +325,7 @@ func (s *service) shutdown(ctx context.Context) error {
 	if err := s.vmLifecycle.Shutdown(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("vm shutdown: %w", err))
 	}
+	s.initStarted.Store(false)
 
 	// Release network resources AFTER VM shutdown
 	if s.containerID != "" {
@@ -366,12 +369,14 @@ func (s *service) shutdown(ctx context.Context) error {
 func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
 	s.taskClientMu.Lock()
 	if s.taskClient != nil {
+		log.G(ctx).Debug("getTaskClient: using cached task client")
 		vmc := s.taskClient
 		s.taskClientMu.Unlock()
 		return vmc, func() {}, nil
 	}
 	s.taskClientMu.Unlock()
 
+	log.G(ctx).Debug("getTaskClient: dialing new task client")
 	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, taskClientRetryTimeout)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to dial task client")
@@ -389,8 +394,10 @@ func (s *service) storeTaskClient(vmc *ttrpc.Client) bool {
 	s.taskClientMu.Lock()
 	defer s.taskClientMu.Unlock()
 	if s.taskClient != nil {
+		log.L.Debug("storeTaskClient: cached task client already set")
 		return false
 	}
+	log.L.Debug("storeTaskClient: caching task client")
 	s.taskClient = vmc
 	return true
 }
@@ -523,9 +530,20 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	storedClient := s.storeTaskClient(rpcClient)
+	if storedClient {
+		log.G(ctx).Debug("create: cached task client for unary RPCs")
+	}
 	defer func() {
 		if rpcClient == nil {
 			return
+		}
+		if retErr != nil && storedClient {
+			s.taskClientMu.Lock()
+			if s.taskClient == rpcClient {
+				s.taskClient = nil
+			}
+			s.taskClientMu.Unlock()
 		}
 		if err := rpcClient.Close(); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
@@ -619,7 +637,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		"t_create": time.Since(preCreate),
 	}).Info("task successfully created")
 
-	if s.storeTaskClient(rpcClient) {
+	if storedClient {
 		rpcClient = nil
 	}
 
@@ -765,6 +783,10 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, errgrpc.ToGRPC(err)
 	}
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "pid": resp.Pid}).Info("task start completed")
+	if r.ExecID == "" {
+		log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("start: init marked started")
+		s.initStarted.Store(true)
+	}
 	return resp, nil
 }
 
@@ -1063,6 +1085,26 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 // State returns runtime state information for a process.
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("state: request received")
+
+	if r.ExecID == "" && !s.initStarted.Load() {
+		s.containerMu.Lock()
+		c := s.container
+		s.containerMu.Unlock()
+		if c != nil {
+			log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("state: short-circuit created state (init not started)")
+			st := &taskAPI.StateResponse{
+				Status: tasktypes.Status_CREATED,
+				Pid:    c.pid,
+			}
+			if c.io != nil {
+				st.Stdin = c.io.init.host.stdin
+				st.Stdout = c.io.init.host.stdout
+				st.Stderr = c.io.init.host.stderr
+				st.Terminal = c.io.init.terminal
+			}
+			return st, nil
+		}
+	}
 
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
