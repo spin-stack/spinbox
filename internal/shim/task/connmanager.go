@@ -136,6 +136,22 @@ func (m *ConnectionManager) ClearClient() *ttrpc.Client {
 	return client
 }
 
+// Invalidate clears the cached client, forcing the next GetClient call
+// to establish a new connection. This should be called when the cached
+// connection is detected to be stale (e.g., write errors).
+//
+// The old client is closed before being cleared.
+func (m *ConnectionManager) Invalidate(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.client != nil {
+		log.G(ctx).Debug("connmanager: invalidating stale client")
+		m.client.Close()
+		m.client = nil
+	}
+}
+
 // Close shuts down the connection manager and closes the cached client.
 //
 // After Close is called, GetClient will return an error.
