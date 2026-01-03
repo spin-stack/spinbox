@@ -683,7 +683,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		log.G(ctx).WithError(err).Error("start: guest start failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Debug("task started")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Debug("task start completed")
 	return resp, nil
 }
 
@@ -701,7 +701,7 @@ func isProcessAlreadyFinished(err error) bool {
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("deleting task")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task request")
 
 	// Mark deletion in progress (only for container, not exec)
 	if r.ExecID == "" {
@@ -843,13 +843,13 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		go s.requestShutdownAndExit(ctx, "container deleted")
 	}
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("task deleted successfully")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task completed")
 	return resp, nil
 }
 
 // Exec an additional process inside the container.
 func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec container")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec request")
 
 	vmc, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
@@ -946,7 +946,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 // ResizePty of a process.
 func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -999,7 +999,7 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 
 // Pause the container.
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1010,7 +1010,7 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 
 // Resume the container.
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1021,7 +1021,7 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 
 // Kill a process with the provided signal.
 func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1032,7 +1032,7 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 
 // Pids returns all pids inside the container.
 func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pids")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pids request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1043,7 +1043,7 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 
 // CloseIO of a process.
 func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io request")
 
 	// If stdin is being closed and we have an RPC forwarder, signal it to close stdin.
 	// This allows the forwarder to stop waiting for FIFO writers and propagate the
@@ -1077,13 +1077,13 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 
 // Checkpoint the container.
 func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("checkpoint")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("checkpoint request")
 	return &ptypes.Empty{}, nil
 }
 
 // Update a running container.
 func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("update")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("update request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1094,7 +1094,7 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 
 // Wait for a process to exit.
 func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1105,7 +1105,6 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 
 // Connect returns shim information such as the shim's pid.
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("connect")
 	s.containerMu.Lock()
 	hasContainer := s.container != nil && s.containerID == r.ID
 	pid := uint32(0)
@@ -1113,6 +1112,11 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		pid = s.container.pid
 	}
 	s.containerMu.Unlock()
+	log.G(ctx).WithFields(log.Fields{
+		"id":            r.ID,
+		"has_container": hasContainer,
+		"task_pid":      pid,
+	}).Debug("connect request")
 	if hasContainer && pid != 0 {
 		return &taskAPI.ConnectResponse{
 			ShimPid: uint32(os.Getpid()),
@@ -1140,7 +1144,7 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*ptypes.Empty, error) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("shutdown")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("shutdown request")
 
 	s.intentionalShutdown.Store(true)
 
@@ -1155,7 +1159,7 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 }
 
 func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("stats")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("stats request")
 	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		return nil, err

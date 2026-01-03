@@ -132,7 +132,7 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 		"stdout":   pio.Stdout,
 		"stderr":   pio.Stderr,
 		"terminal": pio.Terminal,
-	}).Debug("setupForwardIO: entry")
+	}).Debug("configuring stdio forwarding")
 
 	u, err := url.Parse(pio.Stdout)
 	if err != nil {
@@ -141,7 +141,7 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 	if u.Scheme == "" {
 		u.Scheme = defaultScheme
 	}
-	log.G(ctx).WithField("scheme", u.Scheme).Debug("setupForwardIO: parsed scheme")
+	log.G(ctx).WithField("scheme", u.Scheme).Debug("resolved stdout scheme")
 
 	switch u.Scheme {
 	case "stream":
@@ -159,7 +159,7 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 // setupFileScheme handles the "file://" URI scheme.
 // It creates VM-side streams and saves the original file path for host-side copying.
 func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, stdoutFilePath string) (forwardIOSetup, error) {
-	log.G(ctx).WithField("stdoutFilePath", stdoutFilePath).Debug("file scheme: using file path for logging")
+	log.G(ctx).WithField("stdoutFilePath", stdoutFilePath).Debug("file scheme: using host file paths for logging")
 
 	// Validate parent directory can be created for stdout
 	if err := os.MkdirAll(filepath.Dir(stdoutFilePath), 0750); err != nil {
@@ -195,7 +195,7 @@ func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, stdo
 		"stderr":         streamPio.Stderr,
 		"stdoutFilePath": stdoutFilePath,
 		"stderrFilePath": stderrFilePath,
-	}).Debug("file scheme: created streams, will copy to file on host")
+	}).Debug("file scheme: created VM streams, copying to host files")
 
 	// Return setup with:
 	// - streamPio: Contains stream:// URIs for VM
