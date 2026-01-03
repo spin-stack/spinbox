@@ -25,7 +25,8 @@ const (
 
 	// minGuestCID is the minimum valid vsock guest CID.
 	// CIDs 0-2 are reserved (hypervisor, reserved, host).
-	minGuestCID uint32 = 3
+	// CID 3 is avoided due to observed transient routing issues in some environments.
+	minGuestCID uint32 = 4
 
 	// maxGuestCID is the maximum CID we'll scan to before wrapping.
 	// Using a reasonable limit to avoid scanning billions of files.

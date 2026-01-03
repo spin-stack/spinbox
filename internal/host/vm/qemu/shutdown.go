@@ -199,6 +199,10 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 
 	// Release CID lock (allows CID reuse by other VMs)
 	if q.cidLockFile != nil {
+		now := time.Now()
+		if err := os.Chtimes(q.cidLockFile.Name(), now, now); err != nil {
+			logger.WithError(err).Debug("qemu: failed to update CID lock mtime")
+		}
 		closeAndLog(logger, "cid-lock", q.cidLockFile)
 		q.cidLockFile = nil
 	}
