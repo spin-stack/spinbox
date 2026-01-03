@@ -5,6 +5,7 @@ package qemu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -88,7 +89,7 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 
 	eventCtx := context.WithoutCancel(ctx)
 	events, err := monitor.Events(eventCtx)
-	if err != nil && err != qmpapi.ErrEventsNotSupported {
+	if err != nil && !errors.Is(err, qmpapi.ErrEventsNotSupported) {
 		_ = monitor.Disconnect()
 		return nil, fmt.Errorf("failed to subscribe to QMP events: %w", err)
 	}
