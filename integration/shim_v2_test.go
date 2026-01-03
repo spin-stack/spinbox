@@ -265,7 +265,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		containerd.WithNewSnapshot(containerID, image),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(image),
-			oci.WithProcessArgs("/bin/sh", "-c", "sleep 5"),
+			oci.WithProcessArgs("/bin/sh", "-c", "sleep 3"),
 		),
 		containerd.WithRuntime(cfg.Runtime, nil),
 	)
@@ -273,15 +273,21 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		t.Fatalf("create container: %v", err)
 	}
 	defer func() {
-		_ = container.Delete(ctx, containerd.WithSnapshotCleanup)
+		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+			t.Logf("cleanup container: %v", err)
+		}
 	}()
 
+	t.Log("creating task...")
 	task, err := container.NewTask(ctx, cio.NullIO)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	t.Logf("task created with pid %d", task.Pid())
 	defer func() {
-		_, _ = task.Delete(ctx)
+		if _, err := task.Delete(ctx); err != nil {
+			t.Logf("cleanup task: %v", err)
+		}
 	}()
 
 	exitCh, err := task.Wait(ctx)
@@ -297,9 +303,11 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	}
 	t.Logf("task status before start: %s", status.Status)
 
+	t.Log("starting task...")
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
+	t.Log("task started successfully")
 
 	spec, err := container.Spec(ctx)
 	if err != nil {
