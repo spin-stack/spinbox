@@ -94,6 +94,44 @@ func (t *eventTracker) maybeDoneLocked() {
 	t.closeDone()
 }
 
+func (t *eventTracker) setErrLocked(err error) {
+	t.err = err
+	t.closeDone()
+}
+
+func (t *eventTracker) handleExecExit(evt *eventsapi.TaskExit) {
+	if t.execState != execStarted {
+		t.setErrLocked(fmt.Errorf("TaskExit (exec) out of order: state=%d", t.execState))
+		return
+	}
+	if t.expectedExecExit != nil && evt.ExitStatus != *t.expectedExecExit {
+		t.setErrLocked(fmt.Errorf("TaskExit (exec) exit status mismatch: got=%d want=%d", evt.ExitStatus, *t.expectedExecExit))
+		return
+	}
+	if evt.ExitedAt == nil || evt.ExitedAt.AsTime().IsZero() {
+		t.setErrLocked(fmt.Errorf("TaskExit (exec) missing exit timestamp"))
+		return
+	}
+	t.execState = execExited
+	t.maybeDoneLocked()
+}
+
+func (t *eventTracker) handleInitExit(evt *eventsapi.TaskExit) {
+	if t.initState != initStarted {
+		t.setErrLocked(fmt.Errorf("TaskExit out of order: state=%d", t.initState))
+		return
+	}
+	if t.expectedInitExit != nil && evt.ExitStatus != *t.expectedInitExit {
+		t.setErrLocked(fmt.Errorf("TaskExit exit status mismatch: got=%d want=%d", evt.ExitStatus, *t.expectedInitExit))
+		return
+	}
+	if evt.ExitedAt == nil || evt.ExitedAt.AsTime().IsZero() {
+		t.setErrLocked(fmt.Errorf("TaskExit missing exit timestamp"))
+		return
+	}
+	t.initState = initExited
+}
+
 func (t *eventTracker) handleEvent(e *events.Envelope) {
 	if e == nil || e.Event == nil {
 		return
@@ -113,8 +151,7 @@ func (t *eventTracker) handleEvent(e *events.Envelope) {
 			return
 		}
 		if t.initState != initPending {
-			t.err = fmt.Errorf("TaskCreate out of order: state=%d", t.initState)
-			t.closeDone()
+			t.setErrLocked(fmt.Errorf("TaskCreate out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initCreated
@@ -123,8 +160,7 @@ func (t *eventTracker) handleEvent(e *events.Envelope) {
 			return
 		}
 		if t.initState != initCreated {
-			t.err = fmt.Errorf("TaskStart out of order: state=%d", t.initState)
-			t.closeDone()
+			t.setErrLocked(fmt.Errorf("TaskStart out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initStarted
@@ -133,48 +169,16 @@ func (t *eventTracker) handleEvent(e *events.Envelope) {
 			return
 		}
 		if t.checkExec && evt.ID == t.execID {
-			if t.execState != execStarted {
-				t.err = fmt.Errorf("TaskExit (exec) out of order: state=%d", t.execState)
-				t.closeDone()
-				return
-			}
-			if t.expectedExecExit != nil && evt.ExitStatus != *t.expectedExecExit {
-				t.err = fmt.Errorf("TaskExit (exec) exit status mismatch: got=%d want=%d", evt.ExitStatus, *t.expectedExecExit)
-				t.closeDone()
-				return
-			}
-			if evt.ExitedAt == nil || evt.ExitedAt.AsTime().IsZero() {
-				t.err = fmt.Errorf("TaskExit (exec) missing exit timestamp")
-				t.closeDone()
-				return
-			}
-			t.execState = execExited
-			t.maybeDoneLocked()
+			t.handleExecExit(evt)
 			return
 		}
-		if t.initState != initStarted {
-			t.err = fmt.Errorf("TaskExit out of order: state=%d", t.initState)
-			t.closeDone()
-			return
-		}
-		if t.expectedInitExit != nil && evt.ExitStatus != *t.expectedInitExit {
-			t.err = fmt.Errorf("TaskExit exit status mismatch: got=%d want=%d", evt.ExitStatus, *t.expectedInitExit)
-			t.closeDone()
-			return
-		}
-		if evt.ExitedAt == nil || evt.ExitedAt.AsTime().IsZero() {
-			t.err = fmt.Errorf("TaskExit missing exit timestamp")
-			t.closeDone()
-			return
-		}
-		t.initState = initExited
+		t.handleInitExit(evt)
 	case *eventsapi.TaskDelete:
 		if evt.ContainerID != t.containerID {
 			return
 		}
 		if t.initState != initExited {
-			t.err = fmt.Errorf("TaskDelete out of order: state=%d", t.initState)
-			t.closeDone()
+			t.setErrLocked(fmt.Errorf("TaskDelete out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initDeleted
@@ -184,8 +188,7 @@ func (t *eventTracker) handleEvent(e *events.Envelope) {
 			return
 		}
 		if t.execState != execPending {
-			t.err = fmt.Errorf("TaskExecAdded out of order: state=%d", t.execState)
-			t.closeDone()
+			t.setErrLocked(fmt.Errorf("TaskExecAdded out of order: state=%d", t.execState))
 			return
 		}
 		t.execState = execAdded
@@ -194,8 +197,7 @@ func (t *eventTracker) handleEvent(e *events.Envelope) {
 			return
 		}
 		if t.execState != execAdded {
-			t.err = fmt.Errorf("TaskExecStarted out of order: state=%d", t.execState)
-			t.closeDone()
+			t.setErrLocked(fmt.Errorf("TaskExecStarted out of order: state=%d", t.execState))
 			return
 		}
 		t.execState = execStarted
