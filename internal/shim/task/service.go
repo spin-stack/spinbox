@@ -263,8 +263,8 @@ type service struct {
 	inflight            atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
 	exitFunc            func(code int) // Exit function (default: os.Exit), injectable for testing
 
-	initStarted  atomic.Bool // True once the init process has been started
-	taskClientMu sync.Mutex  // Protects taskClient
+	initStarted  atomic.Bool   // True once the init process has been started
+	taskClientMu sync.Mutex    // Protects taskClient
 	taskClient   *ttrpc.Client // Reused for unary task RPCs to avoid repeated vsock dials
 }
 
