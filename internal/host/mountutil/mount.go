@@ -49,9 +49,6 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 	info, err := mgr.Activate(ctx, activationName, mnts)
 	if err != nil {
 		if errdefs.IsNotImplemented(err) {
-			if err := mgr.Close(); err != nil {
-				log.G(ctx).WithError(err).Warn("failed to close mount manager")
-			}
 			if err := db.Close(); err != nil {
 				log.G(ctx).WithError(err).Warn("failed to close mount manager db")
 			}
@@ -63,7 +60,6 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 				return mount.UnmountMounts(mnts, rootfs, 0)
 			}, nil
 		}
-		_ = mgr.Close()
 		_ = db.Close()
 		return nil, err
 	}
@@ -74,9 +70,6 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 			errs = append(errs, err)
 		}
 		if err := mgr.Deactivate(cleanCtx, activationName); err != nil {
-			errs = append(errs, err)
-		}
-		if err := mgr.Close(); err != nil {
 			errs = append(errs, err)
 		}
 		if err := db.Close(); err != nil {
