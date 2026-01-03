@@ -338,22 +338,26 @@ func (s *service) shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// getTaskClient returns the cached TTRPC client for RPC calls.
-// This reuses the existing vsock connection instead of dialing new connections.
+// getTaskClient dials a fresh TTRPC client for RPC calls.
+// Each RPC gets its own vsock connection to avoid multiplexing issues.
 //
-// The cached client is established during VM start and is used for the event stream.
-// TTRPC supports multiplexing multiple RPCs on a single connection, so we can
-// reuse it for State, Start, Delete, and other RPC calls.
+// The cached client from vmLifecycle.Client() is dedicated to the event stream.
+// Sharing a TTRPC connection between streaming RPCs (event stream) and unary RPCs
+// (State, Start, Delete) causes vsock write errors ("no such device") because
+// the vsock layer doesn't handle mixed traffic well on a single connection.
 //
-// The cleanup function is a no-op since we don't want to close the shared connection.
+// The caller must call the cleanup function when done to close the connection.
 func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
-	vmc, err := s.vmLifecycle.Client()
+	vmc, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
-		log.G(ctx).WithError(err).Error("failed to get cached client")
+		log.G(ctx).WithError(err).Error("failed to dial task client")
 		return nil, nil, errgrpc.ToGRPC(err)
 	}
-	// No-op cleanup - we don't close the shared client
-	cleanup := func() {}
+	cleanup := func() {
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close task client")
+		}
+	}
 	return vmc, cleanup, nil
 }
 
