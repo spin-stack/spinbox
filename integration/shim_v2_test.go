@@ -225,7 +225,7 @@ func cleanupTask(ctx context.Context, t *testing.T, client *containerd.Client, c
 	}
 	_ = task.Kill(ctx, syscall.SIGKILL)
 	if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
-		if !strings.Contains(err.Error(), "ttrpc: closed") {
+		if !shouldIgnoreCleanupError(err) {
 			t.Logf("cleanup task: %v", err)
 		}
 		forceDeleteTask(ctx, t, client, containerID)
@@ -236,27 +236,61 @@ func forceDeleteTask(ctx context.Context, t *testing.T, client *containerd.Clien
 	if client == nil {
 		return
 	}
-	if _, err := client.TaskService().Delete(ctx, &apitasks.DeleteTaskRequest{ContainerID: containerID}); err != nil {
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "ttrpc: closed") {
-			return
+	retryWithBackoff(ctx, func() error {
+		_, err := client.TaskService().Delete(ctx, &apitasks.DeleteTaskRequest{ContainerID: containerID})
+		if err == nil {
+			return nil
+		}
+		if shouldIgnoreCleanupError(err) || strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		if strings.Contains(err.Error(), "delete already in progress") {
+			return err
 		}
 		t.Logf("cleanup task (raw): %v", err)
-	}
+		return nil
+	})
 }
 
 func cleanupContainer(ctx context.Context, t *testing.T, client *containerd.Client, containerID string, container containerd.Container) {
 	if container == nil {
 		return
 	}
-	if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
-		if strings.Contains(err.Error(), "cannot delete running task") {
-			forceDeleteTask(ctx, t, client, containerID)
-			if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
-				t.Logf("cleanup container: %v", err)
+	retryWithBackoff(ctx, func() error {
+		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+			if strings.Contains(err.Error(), "cannot delete running task") {
+				forceDeleteTask(ctx, t, client, containerID)
+				return err
 			}
+			t.Logf("cleanup container: %v", err)
+			return nil
+		}
+		return nil
+	})
+}
+
+func shouldIgnoreCleanupError(err error) bool {
+	if err == nil {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "ttrpc: closed") || strings.Contains(msg, "no such device")
+}
+
+func retryWithBackoff(ctx context.Context, fn func() error) {
+	backoff := 100 * time.Millisecond
+	for {
+		if err := fn(); err == nil {
 			return
 		}
-		t.Logf("cleanup container: %v", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 500*time.Millisecond {
+			backoff += 100 * time.Millisecond
+		}
 	}
 }
 
