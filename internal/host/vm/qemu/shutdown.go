@@ -4,6 +4,7 @@ package qemu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -133,11 +134,12 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 
 // closeAndLog is a helper to close a resource and log any errors.
 // It checks for nil before closing to avoid panics.
+// It silently ignores "file already closed" errors since these are expected during cleanup.
 func closeAndLog(logger *log.Entry, name string, closer io.Closer) {
 	if closer == nil {
 		return
 	}
-	if err := closer.Close(); err != nil {
+	if err := closer.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 		logger.WithError(err).WithField("resource", name).Debug("failed to close resource")
 	}
 }
