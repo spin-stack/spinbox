@@ -319,20 +319,32 @@ sudo usermod -aG kvm $USER
 - Check logs for initialization errors
 - Verify nftables is installed
 
-### "IP allocation failed"
+### "IP allocation failed" or Orphaned CNI Resources
+
+Use the cleanup script to remove orphaned CNI allocations and firewall rules:
 
 ```bash
-# Check CNI network metadata
-ls -la /var/lib/qemubox/cni-config.db
+# Check current state
+./deploy/cleanup-cni.sh --status
 
+# Clean orphaned IPAM allocations AND firewall rules
+sudo ./deploy/cleanup-cni.sh
+
+# Clean specific container resources
+sudo ./deploy/cleanup-cni.sh <container-name>
+
+# Restart containerd after cleanup
+systemctl restart qemubox-containerd
+```
+
+**Manual inspection** (if needed):
+```bash
 # Check CNI IPAM state
 ls -la /var/lib/cni/networks/qemubox-net/
 
-# Clear stale allocations
-sudo rm -rf /var/lib/cni/networks/qemubox-net/*
-
-# Restart containerd
-systemctl restart qemubox-containerd
+# Check orphaned firewall rules
+sudo iptables -t nat -S POSTROUTING | grep CNI | wc -l
+sudo iptables -S CNI-FORWARD 2>/dev/null | grep "10.88" | wc -l
 ```
 
 ### "CNI plugin not found"
