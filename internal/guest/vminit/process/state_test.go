@@ -43,12 +43,6 @@ func TestInitInvalidStateTransitions(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name:          "created: cannot checkpoint",
-			state:         &createdState{p: &Init{}},
-			operation:     func(s initState) error { return s.Checkpoint(context.Background(), nil) },
-			expectedError: "cannot checkpoint a task in created state",
-		},
-		{
 			name:          "stopped: cannot start",
 			state:         &stoppedState{p: &Init{}},
 			operation:     func(s initState) error { return s.Start(context.Background()) },
@@ -259,7 +253,6 @@ func TestDeletedStateAllOperationsFail(t *testing.T) {
 		{"Start", func() error { return state.Start(context.Background()) }},
 		{"Delete", func() error { return state.Delete(context.Background()) }},
 		{"Kill", func() error { return state.Kill(context.Background(), 9, false) }},
-		{"Checkpoint", func() error { return state.Checkpoint(context.Background(), nil) }},
 		{"Update", func() error { return state.Update(context.Background(), nil) }},
 	}
 
@@ -299,20 +292,6 @@ func TestExecStatusMethod(t *testing.T) {
 				t.Errorf("Expected status %s, got %s", tt.expectedStatus, status)
 			}
 		})
-	}
-}
-
-// TestCreatedCheckpointState tests the checkpoint restore state
-func TestCreatedCheckpointState(t *testing.T) {
-	state := &createdCheckpointState{p: &Init{}}
-
-	// Should be able to get status
-	status, err := state.Status(context.Background())
-	if err != nil {
-		t.Fatalf("Status() returned error: %v", err)
-	}
-	if status != stateCreated {
-		t.Errorf("Expected status %s, got %s", stateCreated, status)
 	}
 }
 

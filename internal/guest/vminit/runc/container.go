@@ -435,35 +435,6 @@ func (c *Container) CloseIO(ctx context.Context, r *task.CloseIORequest) error {
 	return nil
 }
 
-// Checkpoint the container
-func (c *Container) Checkpoint(ctx context.Context, r *task.CheckpointTaskRequest) error {
-	p, err := c.Process("")
-	if err != nil {
-		return err
-	}
-
-	var opts options.CheckpointOptions
-	if r.Options != nil {
-		if err := typeurl.UnmarshalTo(r.Options, &opts); err != nil {
-			return err
-		}
-	}
-	initProc, ok := p.(*process.Init)
-	if !ok {
-		return fmt.Errorf("expected init process, got %T", p)
-	}
-	return initProc.Checkpoint(ctx, &process.CheckpointConfig{
-		Path:                     r.Path,
-		Exit:                     opts.Exit,
-		AllowOpenTCP:             opts.OpenTcp,
-		AllowExternalUnixSockets: opts.ExternalUnixSockets,
-		AllowTerminal:            opts.Terminal,
-		FileLocks:                opts.FileLocks,
-		EmptyNamespaces:          opts.EmptyNamespaces,
-		WorkDir:                  opts.WorkPath,
-	})
-}
-
 // Update the resource information of a running container
 func (c *Container) Update(ctx context.Context, r *task.UpdateTaskRequest) error {
 	p, err := c.Process("")

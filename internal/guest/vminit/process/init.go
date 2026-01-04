@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -431,43 +430,6 @@ func (p *Init) exec(_ context.Context, path string, r *ExecConfig) (Process, err
 	}
 	e.execState = &execCreatedState{p: e}
 	return e, nil
-}
-
-// Checkpoint the init process
-func (p *Init) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	return p.initState.Checkpoint(ctx, r)
-}
-
-func (p *Init) checkpoint(ctx context.Context, r *CheckpointConfig) error {
-	var actions []runc.CheckpointAction
-	if !r.Exit {
-		actions = append(actions, runc.LeaveRunning)
-	}
-	// keep criu work directory if criu work dir is set
-	work := r.WorkDir
-	if work == "" {
-		work = filepath.Join(p.WorkDir, "criu-work")
-		defer func() { _ = os.RemoveAll(work) }()
-	}
-	if err := p.runtime.Checkpoint(ctx, p.id, &runc.CheckpointOpts{
-		WorkDir:                  work,
-		ImagePath:                r.Path,
-		AllowOpenTCP:             r.AllowOpenTCP,
-		AllowExternalUnixSockets: r.AllowExternalUnixSockets,
-		AllowTerminal:            r.AllowTerminal,
-		FileLocks:                r.FileLocks,
-		EmptyNamespaces:          r.EmptyNamespaces,
-	}, actions...); err != nil {
-		dumpLog := filepath.Join(p.Bundle, "criu-dump.log")
-		if cerr := copyFile(dumpLog, filepath.Join(work, "dump.log")); cerr != nil {
-			log.G(ctx).WithError(cerr).Error("failed to copy dump.log to criu-dump.log")
-		}
-		return fmt.Errorf("%s path= %s", criuError(err), dumpLog)
-	}
-	return nil
 }
 
 // Update the processes resource configuration

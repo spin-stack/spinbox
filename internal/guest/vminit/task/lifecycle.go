@@ -246,16 +246,9 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	return empty, nil
 }
 
-// Checkpoint the container
+// Checkpoint the container - not supported in VM-based runtime
 func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
-	container, err := s.getContainer(r.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := container.Checkpoint(ctx, r); err != nil {
-		return nil, errgrpc.ToGRPC(err)
-	}
-	return empty, nil
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "checkpoint is not supported")
 }
 
 // Update a running container

@@ -1208,7 +1208,9 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 // Checkpoint the container.
 func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("checkpoint request")
-	return &ptypes.Empty{}, nil
+	// Checkpoint is not supported in VM-based runtime.
+	// Would require CRIU or QEMU snapshot to save/restore process state.
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "checkpoint is not supported: VM-based runtime cannot snapshot process state")
 }
 
 // Update a running container.
