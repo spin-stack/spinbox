@@ -142,7 +142,11 @@ func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[st
 
 	cmd := qmpapi.Command{
 		Execute: command,
-		Args:    args,
+	}
+	// Only set Args when non-nil to avoid "arguments": null in JSON.
+	// QEMU requires arguments to be either absent or an object, not null.
+	if args != nil {
+		cmd.Args = args
 	}
 
 	payload, err := json.Marshal(cmd)
