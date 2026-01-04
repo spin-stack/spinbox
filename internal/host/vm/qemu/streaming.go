@@ -22,8 +22,17 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 	if q.getState() != vmStateRunning {
 		return 0, nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
 	}
-	const timeIncrement = 10 * time.Millisecond
-	for d := timeIncrement; d < time.Second; d += timeIncrement {
+
+	const (
+		initialBackoff = 5 * time.Millisecond
+		maxBackoff     = 100 * time.Millisecond
+		timeout        = time.Second
+	)
+
+	deadline := time.Now().Add(timeout)
+	backoff := initialBackoff
+
+	for time.Now().Before(deadline) {
 		// Generate unique stream ID
 		sid := atomic.AddUint32(&q.streamC, 1)
 		if sid == 0 {
@@ -62,23 +71,30 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 			return sid, conn, nil
 		}
 
-		time.Sleep(timeIncrement)
+		// Exponential backoff with cap
+		time.Sleep(backoff)
+		backoff = min(backoff*2, maxBackoff)
 	}
 
 	return 0, nil, fmt.Errorf("timeout waiting for stream server: %w", errdefs.ErrUnavailable)
 }
 
 // connectVsockRPC establishes a connection to the vsock RPC server (vminitd)
+// using exponential backoff. The connection is verified with a TTRPC ping
+// before being returned to ensure the server is ready to accept requests.
 func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 	log.G(ctx).WithFields(log.Fields{
 		"cid":  q.guestCID,
 		"port": vsockports.DefaultRPCPort,
 	}).Info("qemu: connecting to vsock RPC port")
 
-	// Wait a bit for vminitd to fully initialize
-	time.Sleep(500 * time.Millisecond)
+	const (
+		initialBackoff = 10 * time.Millisecond
+		maxBackoff     = 200 * time.Millisecond
+	)
 
 	retryStart := time.Now()
+	backoff := initialBackoff
 	pingDeadline := 50 * time.Millisecond
 
 	for {
@@ -96,7 +112,8 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		conn, err := vsock.Dial(q.guestCID, vsockports.DefaultRPCPort, nil)
 		if err != nil {
 			log.G(ctx).WithError(err).Debug("qemu: failed to dial vsock")
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
@@ -104,14 +121,16 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		if err := conn.SetReadDeadline(time.Now().Add(pingDeadline)); err != nil {
 			log.G(ctx).WithError(err).Debug("qemu: failed to set ping deadline")
 			_ = conn.Close()
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 		if err := pingTTRPC(conn); err != nil {
 			log.G(ctx).WithError(err).WithField("deadline", pingDeadline).Debug("qemu: TTRPC ping failed, retrying")
 			_ = conn.Close()
 			pingDeadline += 10 * time.Millisecond
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
@@ -119,13 +138,15 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		if err := conn.SetReadDeadline(time.Time{}); err != nil {
 			log.G(ctx).WithError(err).Debug("qemu: failed to clear ping deadline")
 			_ = conn.Close()
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 		if err := pingTTRPC(conn); err != nil {
 			log.G(ctx).WithError(err).Debug("qemu: TTRPC ping failed after clearing deadline, retrying")
 			_ = conn.Close()
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
