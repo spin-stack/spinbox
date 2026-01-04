@@ -32,6 +32,7 @@ grpc_histogram = false
 [plugins]
 "io.containerd.internal.v1.tracing" = { }
 "io.containerd.mount-handler.v1.erofs" = { }
+"io.containerd.mount-manager.v1.bolt" = { }
 "io.containerd.tracing.processor.v1.otlp" = { }
 
   [plugins."io.containerd.cri.v1.images"]

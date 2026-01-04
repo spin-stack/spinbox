@@ -159,7 +159,7 @@ RUN --mount=type=cache,sharing=locked,id=containerd-aptlib,target=/var/lib/apt \
 
 WORKDIR /go/src/github.com/containerd/containerd
 
-ARG CONTAINERD_BRANCH="aledbf/erofs-snapshot-narrow"
+ARG CONTAINERD_BRANCH="aledbf/snapshots-erofs"
 ARG CONTAINERD_REPO="https://github.com/aledbf/containerd.git"
 
 RUN git clone --depth 1 --branch ${CONTAINERD_BRANCH} ${CONTAINERD_REPO} .
