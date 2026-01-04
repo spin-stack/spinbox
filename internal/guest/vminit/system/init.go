@@ -107,6 +107,12 @@ func mountFilesystems() error {
 		return err
 	}
 
+	// Create /run/lock with sticky bit (replaces run-lock.mount)
+	// #nosec G301 -- /run/lock needs sticky bit like /tmp for lock files.
+	if err := os.MkdirAll("/run/lock", 0o1777); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("failed to create /run/lock: %w", err)
+	}
+
 	// Create /dev subdirectories after devtmpfs is mounted
 	// #nosec G301 -- /dev/pts and /dev/shm must be accessible inside the VM.
 	for _, dir := range []string{"/dev/pts", "/dev/shm"} {

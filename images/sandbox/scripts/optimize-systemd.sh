@@ -106,6 +106,16 @@ MASK_UNITS=(
 
     # tmp.mount - already have /tmp (24ms)
     tmp.mount
+
+    # tmpfiles-setup - vminitd already creates /tmp, /run, /dev nodes (19ms + 13ms + 11ms)
+    systemd-tmpfiles-setup.service
+    systemd-tmpfiles-setup-dev.service
+    systemd-tmpfiles-setup-dev-early.service
+
+    # Mounts already handled by vminitd or not needed (15ms + 15ms + 12ms)
+    dev-hugepages.mount
+    dev-mqueue.mount
+    run-lock.mount
 )
 
 log "Masking unnecessary systemd units..."
@@ -170,18 +180,43 @@ ShowStatus=no
 StatusUnitFormat=name
 EOF
 
-log "Configuring journald for volatile storage..."
+log "Configuring journald for minimal overhead..."
 mkdir -p /etc/systemd/journald.conf.d
 
 cat <<'EOF' >/etc/systemd/journald.conf.d/volatile.conf
 [Journal]
+# Use memory-only storage - no disk I/O
 Storage=volatile
-RuntimeMaxUse=8M
+RuntimeMaxUse=4M
+RuntimeMaxFileSize=1M
+
+# Disable compression for speed
+Compress=no
+
+# Disable sealing (cryptographic protection)
+Seal=no
+
+# Minimal sync - we don't care about journal persistence
 SyncIntervalSec=0
+
+# High rate limits to avoid blocking
 RateLimitBurst=10000
 RateLimitIntervalSec=30s
+
+# Disable forwarding
 ForwardToConsole=no
 ForwardToWall=no
+ForwardToSyslog=no
+ForwardToKMsg=no
+
+# Don't split by user
+SplitMode=none
+
+# Minimal audit
+Audit=no
+
+# Line max to avoid large allocations
+LineMax=48K
 EOF
 
 log "Configuring quiet console..."
