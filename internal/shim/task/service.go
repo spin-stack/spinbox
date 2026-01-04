@@ -67,6 +67,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"sync"
@@ -681,11 +682,19 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 }
 
 // reconnectEventStream attempts to reconnect the event stream within a deadline.
+// Uses exponential backoff with jitter to avoid thundering herd on reconnection.
 // Returns the new client, stream, and whether reconnection succeeded.
 // Note: The caller is responsible for closing the old client if needed. We don't close
 // it here because it might be the cached client from the VM instance, which is shared.
 func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEvents_StreamClient, bool) {
+	const (
+		initialBackoff = 50 * time.Millisecond
+		maxBackoff     = 500 * time.Millisecond
+		jitterFraction = 0.2 // 20% jitter
+	)
+
 	reconnectDeadline := time.Now().Add(eventStreamReconnectTimeout)
+	backoff := initialBackoff
 
 	for time.Now().Before(reconnectDeadline) {
 		if s.intentionalShutdown.Load() {
@@ -696,7 +705,8 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 		newClient, dialErr := s.vmLifecycle.DialClientWithRetry(ctx, eventStreamReconnectTimeout)
 		if dialErr != nil {
 			log.G(ctx).WithError(dialErr).Debug("event stream reconnect: dial failed")
-			time.Sleep(200 * time.Millisecond)
+			sleepWithJitter(backoff, jitterFraction)
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
@@ -704,7 +714,8 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 		if streamErr != nil {
 			_ = newClient.Close()
 			log.G(ctx).WithError(streamErr).Debug("event stream reconnect: stream failed")
-			time.Sleep(200 * time.Millisecond)
+			sleepWithJitter(backoff, jitterFraction)
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
@@ -717,6 +728,14 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 
 	log.G(ctx).WithField("timeout", eventStreamReconnectTimeout).Warn("event stream reconnect: timeout expired")
 	return nil, nil, false
+}
+
+// sleepWithJitter sleeps for the base duration plus/minus a random jitter.
+// jitterFraction is the maximum fraction of base to add/subtract (e.g., 0.2 = ±20%).
+func sleepWithJitter(base time.Duration, jitterFraction float64) {
+	// #nosec G404 -- weak RNG is acceptable for jitter timing (not security-critical)
+	jitter := time.Duration(float64(base) * jitterFraction * (2*rand.Float64() - 1))
+	time.Sleep(base + jitter)
 }
 
 // Start a process.
@@ -1422,16 +1441,27 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 	}
 
 	s.shutdownSvc.Shutdown()
-	deadline := time.Now().Add(5 * time.Second)
-	for s.inflight.Load() > 0 && time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
+
+	// Wait for in-flight requests to complete using a ticker (avoids Sleep anti-pattern)
+	inflightTimeout := time.NewTimer(5 * time.Second)
+	inflightTicker := time.NewTicker(10 * time.Millisecond)
+	defer inflightTimeout.Stop()
+	defer inflightTicker.Stop()
+
+inflightWait:
+	for s.inflight.Load() > 0 {
+		select {
+		case <-inflightTimeout.C:
+			log.G(ctx).WithFields(log.Fields{
+				"reason":   reason,
+				"inflight": s.inflight.Load(),
+			}).Warn("shutdown waiting for in-flight requests timed out")
+			break inflightWait
+		case <-inflightTicker.C:
+			// Check again
+		}
 	}
-	if s.inflight.Load() > 0 {
-		log.G(ctx).WithFields(log.Fields{
-			"reason":   reason,
-			"inflight": s.inflight.Load(),
-		}).Warn("shutdown waiting for in-flight requests timed out")
-	}
+
 	select {
 	case <-s.shutdownSvc.Done():
 	case <-time.After(5 * time.Second):

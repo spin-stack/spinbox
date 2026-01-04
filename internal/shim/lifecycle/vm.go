@@ -26,10 +26,11 @@ const (
 	ioctlKVMGetAPIVersion = 0xAE00
 	expectedKVMAPIVersion = 12
 
-	// vsockRetryInterval is the delay between vsock connection attempts.
-	// 200ms balances quick recovery (for transient errors) against
-	// wasted CPU cycles (when VM is genuinely down).
-	vsockRetryInterval = 200 * time.Millisecond
+	// vsockRetryInitialBackoff is the initial delay between vsock connection attempts.
+	vsockRetryInitialBackoff = 20 * time.Millisecond
+
+	// vsockRetryMaxBackoff caps the exponential backoff delay.
+	vsockRetryMaxBackoff = 500 * time.Millisecond
 )
 
 // Manager manages VM instances and their lifecycle.
@@ -102,9 +103,12 @@ func (m *Manager) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 }
 
 // DialClientWithRetry attempts to dial the VM with retries for transient errors.
-// Retries for up to maxWait duration before giving up.
+// Uses exponential backoff starting at vsockRetryInitialBackoff and capped at
+// vsockRetryMaxBackoff. Retries for up to maxWait duration before giving up.
 func (m *Manager) DialClientWithRetry(ctx context.Context, maxWait time.Duration) (*ttrpc.Client, error) {
 	deadline := time.Now().Add(maxWait)
+	backoff := vsockRetryInitialBackoff
+
 	for {
 		vmc, err := m.DialClient(ctx)
 		if err == nil {
@@ -116,7 +120,8 @@ func (m *Manager) DialClientWithRetry(ctx context.Context, maxWait time.Duration
 		if time.Now().After(deadline) {
 			return nil, err
 		}
-		time.Sleep(vsockRetryInterval)
+		time.Sleep(backoff)
+		backoff = min(backoff*2, vsockRetryMaxBackoff)
 	}
 }
 

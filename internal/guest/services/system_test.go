@@ -108,23 +108,22 @@ func TestWriteSysfsValue(t *testing.T) {
 	}
 }
 
-func TestRetrySysfsOperation(t *testing.T) {
-	t.Run("succeeds immediately", func(t *testing.T) {
-		callCount := 0
-		err := retrySysfsOperation(context.Background(), "test", func() error {
-			callCount++
-			return nil
-		})
-
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+func TestWaitForSysfsFile(t *testing.T) {
+	t.Run("file already exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		tmpFile := filepath.Join(tmpDir, "test")
+		if err := os.WriteFile(tmpFile, []byte("1"), 0600); err != nil {
+			t.Fatalf("failed to create test file: %v", err)
 		}
-		if callCount != 1 {
-			t.Errorf("callCount = %d, want 1", callCount)
+
+		ctx := context.Background()
+		err := waitForSysfsFile(ctx, tmpFile, 100*time.Millisecond)
+		if err != nil {
+			t.Errorf("unexpected error for existing file: %v", err)
 		}
 	})
 
-	t.Run("succeeds after retries", func(t *testing.T) {
+	t.Run("file appears during wait", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		tmpFile := filepath.Join(tmpDir, "test")
 
@@ -134,54 +133,34 @@ func TestRetrySysfsOperation(t *testing.T) {
 			_ = os.WriteFile(tmpFile, []byte("1"), 0600)
 		}()
 
-		callCount := 0
-		err := retrySysfsOperation(context.Background(), "test", func() error {
-			callCount++
-			_, err := os.Stat(tmpFile)
-			return err
-		})
-
+		ctx := context.Background()
+		err := waitForSysfsFile(ctx, tmpFile, 500*time.Millisecond)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-		if callCount < 2 {
-			t.Errorf("expected at least 2 retries, got %d", callCount)
-		}
 	})
 
-	t.Run("fails after max retries", func(t *testing.T) {
-		// Skip by default: exponential backoff takes ~5s to exhaust all retries
-		if testing.Short() {
-			t.Skip("skipping slow retry test in short mode (~5s)")
-		}
+	t.Run("timeout when file never appears", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		tmpFile := filepath.Join(tmpDir, "nonexistent")
 
-		callCount := 0
-		err := retrySysfsOperation(context.Background(), "test", func() error {
-			callCount++
-			return os.ErrNotExist
-		})
-
+		ctx := context.Background()
+		err := waitForSysfsFile(ctx, tmpFile, 100*time.Millisecond)
 		if err == nil {
-			t.Fatalf("expected error after max retries, got nil")
-		}
-		if callCount != sysfsRetryMax {
-			t.Errorf("callCount = %d, want %d", callCount, sysfsRetryMax)
+			t.Fatalf("expected timeout error, got nil")
 		}
 	})
 
-	t.Run("fails immediately on non-retryable error", func(t *testing.T) {
-		testErr := os.ErrPermission
-		callCount := 0
-		err := retrySysfsOperation(context.Background(), "test", func() error {
-			callCount++
-			return testErr
-		})
+	t.Run("respects context cancellation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		tmpFile := filepath.Join(tmpDir, "nonexistent")
 
-		if err != testErr {
-			t.Errorf("error = %v, want %v", err, testErr)
-		}
-		if callCount != 1 {
-			t.Errorf("callCount = %d, want 1 (should fail immediately)", callCount)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		err := waitForSysfsFile(ctx, tmpFile, 1*time.Second)
+		if err == nil {
+			t.Fatalf("expected context error, got nil")
 		}
 	})
 }
@@ -302,25 +281,13 @@ func TestSystemServiceOnlineCPU(t *testing.T) {
 			t.Fatalf("failed to write test file: %v", err)
 		}
 
-		// Test the retry logic handles already-online case
-		callCount := 0
-		err := retrySysfsOperation(context.Background(), "test", func() error {
-			callCount++
-			value, err := readSysfsValue(cpuPath)
-			if err != nil {
-				return err
-			}
-			if value == sysfsOnline {
-				return nil // Already online
-			}
-			return writeSysfsValue(cpuPath, sysfsOnline)
-		})
-
+		// Verify the read behavior for already-online case
+		value, err := readSysfsValue(cpuPath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if callCount != 1 {
-			t.Errorf("expected 1 call (already online), got %d", callCount)
+		if value != sysfsOnline {
+			t.Errorf("expected CPU already online (value=1), got %q", value)
 		}
 	})
 }
@@ -394,25 +361,13 @@ func TestSystemServiceOnlineMemory(t *testing.T) {
 			t.Fatalf("failed to write test file: %v", err)
 		}
 
-		// Test the retry logic handles already-online case
-		callCount := 0
-		err := retrySysfsOperation(context.Background(), "test", func() error {
-			callCount++
-			value, err := readSysfsValue(memoryPath)
-			if err != nil {
-				return err
-			}
-			if value == sysfsOnline {
-				return nil // Already online
-			}
-			return writeSysfsValue(memoryPath, sysfsOnline)
-		})
-
+		// Verify the read behavior for already-online case
+		value, err := readSysfsValue(memoryPath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if callCount != 1 {
-			t.Errorf("expected 1 call (already online), got %d", callCount)
+		if value != sysfsOnline {
+			t.Errorf("expected memory already online (value=1), got %q", value)
 		}
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 
 	cplugins "github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/errdefs"
@@ -16,6 +17,7 @@ import (
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
+	"golang.org/x/sys/unix"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
 	api "github.com/aledbf/qemubox/containerd/api/services/system/v1"
@@ -26,10 +28,8 @@ const (
 	sysfsOnline  = "1"
 	sysfsOffline = "0"
 
-	// Retry configuration for sysfs operations
-	sysfsRetryMax        = 10
-	sysfsRetryBaseDelay  = 10 * time.Millisecond
-	autoOnlineCheckDelay = 100 * time.Millisecond
+	// Timeout for waiting for sysfs files to appear after hotplug
+	sysfsWaitTimeout = 2 * time.Second
 
 	// File permissions
 	sysfsFilePerms    = 0600
@@ -78,35 +78,128 @@ func writeSysfsValue(path, value string) error {
 	return os.WriteFile(path, []byte(value), sysfsFilePerms)
 }
 
-// retrySysfsOperation retries a sysfs operation with exponential backoff.
-// It calls checkFn repeatedly until it returns nil or a non-retryable error.
-// The checkFn should return os.ErrNotExist if the file doesn't exist yet (will retry).
-func retrySysfsOperation(ctx context.Context, name string, checkFn func() error) error {
-	var lastErr error
-	for retry := range sysfsRetryMax {
-		if retry > 0 {
-			delay := sysfsRetryBaseDelay * time.Duration(1<<uint(retry-1))
-			time.Sleep(delay)
+// waitForSysfsFile waits for a sysfs file to appear using inotify.
+// This is more efficient than polling - the kernel notifies us when the file is created.
+// Returns nil if the file exists or appears within the timeout.
+func waitForSysfsFile(ctx context.Context, path string, timeout time.Duration) error {
+	// Fast path: check if file already exists
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	// Create inotify instance
+	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
+	if err != nil {
+		// Fall back to polling if inotify fails
+		return waitForSysfsFilePoll(ctx, path, timeout)
+	}
+	defer unix.Close(fd)
+
+	// Watch parent directory for CREATE events
+	_, err = unix.InotifyAddWatch(fd, dir, unix.IN_CREATE|unix.IN_MOVED_TO)
+	if err != nil {
+		// Directory might not exist yet - fall back to polling
+		return waitForSysfsFilePoll(ctx, path, timeout)
+	}
+
+	// Check again after setting up watch (file might have appeared between first check and watch setup)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+
+	// Wait for inotify events with timeout
+	deadline := time.Now().Add(timeout)
+	buf := make([]byte, 4096)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
-		err := checkFn()
-		if err == nil {
-			if retry > 0 {
-				log.G(ctx).WithField("retry", retry).Debugf("%s succeeded after retry", name)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+
+		// Use poll to wait for events with timeout
+		pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+		pollTimeout := int(remaining.Milliseconds())
+		if pollTimeout > 100 {
+			pollTimeout = 100 // Check context every 100ms
+		}
+
+		n, err := unix.Poll(pollFds, pollTimeout)
+		if err != nil {
+			if err == unix.EINTR {
+				continue
 			}
+			return fmt.Errorf("poll failed: %w", err)
+		}
+
+		if n == 0 {
+			// Timeout on this poll iteration, check file and continue
+			if _, err := os.Stat(path); err == nil {
+				return nil
+			}
+			continue
+		}
+
+		// Read inotify events
+		nread, err := unix.Read(fd, buf)
+		if err != nil {
+			if err == unix.EAGAIN || err == unix.EINTR {
+				continue
+			}
+			return fmt.Errorf("read inotify: %w", err)
+		}
+
+		// Parse events
+		for offset := 0; offset < nread; {
+			// #nosec G103 -- unsafe.Pointer is required to parse inotify events from the kernel
+			event := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+			nameLen := int(event.Len)
+			if nameLen > 0 {
+				name := string(buf[offset+unix.SizeofInotifyEvent : offset+unix.SizeofInotifyEvent+nameLen])
+				name = strings.TrimRight(name, "\x00")
+				if name == base {
+					// Our file was created
+					return nil
+				}
+			}
+			offset += unix.SizeofInotifyEvent + nameLen
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for %s", path)
+}
+
+// waitForSysfsFilePoll is a fallback polling implementation when inotify is unavailable.
+func waitForSysfsFilePoll(ctx context.Context, path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	backoff := 5 * time.Millisecond
+	maxBackoff := 100 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if _, err := os.Stat(path); err == nil {
 			return nil
 		}
 
-		if os.IsNotExist(err) {
-			lastErr = err
-			continue // Retry on not exist
-		}
-
-		// Non-retryable error
-		return err
+		time.Sleep(backoff)
+		backoff = min(backoff*2, maxBackoff)
 	}
 
-	return fmt.Errorf("%s failed after %d retries: %w", name, sysfsRetryMax, lastErr)
+	return fmt.Errorf("timeout waiting for %s", path)
 }
 
 func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoResponse, error) {
@@ -162,28 +255,23 @@ func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest
 
 	path := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/online", cpuID)
 
-	// Retry with exponential backoff - kernel may need time to create sysfs files after hotplug
-	err := retrySysfsOperation(ctx, fmt.Sprintf("online CPU %d", cpuID), func() error {
-		// Check if file exists
-		if _, err := os.Stat(path); err != nil {
-			return err // Returns os.ErrNotExist if not ready yet
-		}
-
-		// Check if already online
-		value, err := readSysfsValue(path)
-		if err != nil {
-			return err
-		}
-		if value == sysfsOnline {
-			return nil // Already online
-		}
-
-		// Write "1" to online the CPU
-		return writeSysfsValue(path, sysfsOnline)
-	})
-
-	if err != nil {
+	// Wait for sysfs file to appear (kernel may need time after hotplug)
+	if err := waitForSysfsFile(ctx, path, sysfsWaitTimeout); err != nil {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cpu %d: %v", cpuID, err)
+	}
+
+	// Check if already online
+	value, err := readSysfsValue(path)
+	if err != nil {
+		return nil, errgrpc.ToGRPC(err)
+	}
+	if value == sysfsOnline {
+		return &emptypb.Empty{}, nil // Already online
+	}
+
+	// Write "1" to online the CPU
+	if err := writeSysfsValue(path, sysfsOnline); err != nil {
+		return nil, errgrpc.ToGRPC(err)
 	}
 
 	log.G(ctx).WithField("cpu_id", cpuID).Debug("CPU onlined successfully")
@@ -242,44 +330,38 @@ func (s *systemService) OfflineMemory(ctx context.Context, req *api.OfflineMemor
 
 func (s *systemService) OnlineMemory(ctx context.Context, req *api.OnlineMemoryRequest) (*emptypb.Empty, error) {
 	memoryID := req.GetMemoryID()
+	path := fmt.Sprintf("/sys/devices/system/memory/memory%d/online", memoryID)
 
 	// Check auto_online setting
 	if autoOnline, err := readSysfsValue("/sys/devices/system/memory/auto_online_blocks"); err == nil {
 		if autoOnline == "online" {
-			// Memory will auto-online, verify it happened using retry logic
-			path := fmt.Sprintf("/sys/devices/system/memory/memory%d/online", memoryID)
-			time.Sleep(autoOnlineCheckDelay)
-			if value, err := readSysfsValue(path); err == nil && value == sysfsOnline {
-				log.G(ctx).WithField("memory_id", memoryID).Debug("memory auto-onlined")
-				return &emptypb.Empty{}, nil
+			// Memory will auto-online, wait for it using inotify
+			if err := waitForSysfsFile(ctx, path, sysfsWaitTimeout); err == nil {
+				if value, err := readSysfsValue(path); err == nil && value == sysfsOnline {
+					log.G(ctx).WithField("memory_id", memoryID).Debug("memory auto-onlined")
+					return &emptypb.Empty{}, nil
+				}
 			}
 		}
 	}
 
-	// Explicit online with retry logic - kernel may need time to create sysfs files after hotplug
-	path := fmt.Sprintf("/sys/devices/system/memory/memory%d/online", memoryID)
-
-	err := retrySysfsOperation(ctx, fmt.Sprintf("online memory %d", memoryID), func() error {
-		// Check if file exists
-		if _, err := os.Stat(path); err != nil {
-			return err // Returns os.ErrNotExist if not ready yet
-		}
-
-		// Check if already online
-		value, err := readSysfsValue(path)
-		if err != nil {
-			return err
-		}
-		if value == sysfsOnline {
-			return nil // Already online
-		}
-
-		// Write "1" to online the memory
-		return writeSysfsValue(path, sysfsOnline)
-	})
-
-	if err != nil {
+	// Wait for sysfs file to appear (kernel may need time after hotplug)
+	if err := waitForSysfsFile(ctx, path, sysfsWaitTimeout); err != nil {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "memory block %d: %v", memoryID, err)
+	}
+
+	// Check if already online
+	value, err := readSysfsValue(path)
+	if err != nil {
+		return nil, errgrpc.ToGRPC(err)
+	}
+	if value == sysfsOnline {
+		return &emptypb.Empty{}, nil // Already online
+	}
+
+	// Write "1" to online the memory
+	if err := writeSysfsValue(path, sysfsOnline); err != nil {
+		return nil, errgrpc.ToGRPC(err)
 	}
 
 	log.G(ctx).WithField("memory_id", memoryID).Debug("memory onlined successfully")
