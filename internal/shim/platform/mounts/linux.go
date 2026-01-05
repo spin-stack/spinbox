@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/containerd/containerd/api/types"
@@ -139,10 +141,7 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 	case "ext4":
 		return m.handleExt4(id, disks, mnt)
 	case "overlay", "format/overlay", "format/mkdir/overlay":
-		if err := m.validateOverlay(ctx, mnt); err != nil {
-			return nil, nil, err
-		}
-		return []*types.Mount{mnt}, nil, nil
+		return m.handleOverlay(ctx, id, mnt)
 	default:
 		// Mount types with mkfs/ or format/ prefixes require processing by the
 		// mount manager to create backing files. Return ErrNotImplemented to
@@ -229,35 +228,130 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 	return []*types.Mount{out}, addDisks, nil
 }
 
-func (m *linuxManager) validateOverlay(ctx context.Context, mnt *types.Mount) error {
+// handleOverlay transforms an overlay mount for VM use.
+//
+// For VMs without virtiofs support (e.g., QEMU), the overlay's upperdir/workdir
+// paths (which are host paths) need to be transformed to use VM-accessible storage.
+// This function transforms them to use tmpfs-based paths inside the guest.
+//
+// The lowerdir template (e.g., {{ overlay 0 4 }}) is preserved and will be
+// expanded by the guest's mountutil to reference the EROFS mount points.
+//
+// The transformation works by:
+// 1. Parsing the lowerdir template to find the mount indices (e.g., "0 4" from "{{ overlay 0 4 }}")
+// 2. Adding a tmpfs mount as the next mount after the EROFS layers
+// 3. Using templates to reference the tmpfs mount for upperdir/workdir
+func (m *linuxManager) handleOverlay(ctx context.Context, id string, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	var (
-		wdi = -1
-		udi = -1
+		wdi           = -1
+		udi           = -1
+		hasLowerTmpl  = false
+		needTransform = false
+		overlayEnd    = -1
 	)
+
+	// Regex to extract overlay range from lowerdir template
+	overlayRe := regexp.MustCompile(`\{\{\s*overlay\s+(\d+)\s+(\d+)\s*\}\}`)
+
+	// Find option indices and check for templates
 	for i, opt := range mnt.Options {
-		if strings.HasPrefix(opt, "upperdir=") {
+		switch {
+		case strings.HasPrefix(opt, "upperdir="):
 			udi = i
-		} else if strings.HasPrefix(opt, "workdir=") {
+			if !strings.Contains(opt, "{{") {
+				needTransform = true
+			}
+		case strings.HasPrefix(opt, "workdir="):
 			wdi = i
+			if !strings.Contains(opt, "{{") {
+				needTransform = true
+			}
+		case strings.HasPrefix(opt, "lowerdir="):
+			if strings.Contains(opt, "{{") {
+				hasLowerTmpl = true
+				// Extract the end index from overlay template
+				if matches := overlayRe.FindStringSubmatch(opt); len(matches) == 3 {
+					start, _ := strconv.Atoi(matches[1])
+					end, _ := strconv.Atoi(matches[2])
+					if end > start {
+						overlayEnd = end
+					} else {
+						overlayEnd = start
+					}
+				}
+			}
 		}
-		// Note: virtiofs for lowerdir is not handled here.
 	}
-	if wdi > -1 && udi > -1 {
-		//
-		// If any upperdir or workdir isn't transformed, they both
-		// should fall back to virtiofs passthroughfs.  But...
-		//
-		if !strings.Contains(mnt.Options[wdi], "{{") ||
-			!strings.Contains(mnt.Options[udi], "{{") {
-			// Having the upper as virtiofs may return invalid argument, avoid
-			// transforming and attempt to perform the mounts on the host if
-			// supported.
-			return fmt.Errorf("cannot use virtiofs for upper dir in overlay: %w", errdefs.ErrNotImplemented)
+
+	// If lowerdir has a template but upperdir/workdir are host paths,
+	// transform them to use tmpfs inside the guest.
+	// This enables running containers with EROFS layers in VMs without virtiofs.
+	if hasLowerTmpl && needTransform && udi >= 0 && wdi >= 0 && overlayEnd >= 0 {
+		// The tmpfs mount will be at index overlayEnd+1
+		// We use templates to reference it for upperdir/workdir
+		tmpfsIndex := overlayEnd + 1
+
+		log.G(ctx).WithFields(log.Fields{
+			"id":         id,
+			"overlayEnd": overlayEnd,
+			"tmpfsIndex": tmpfsIndex,
+			"needsUpper": needTransform,
+		}).Debug("transforming overlay for VM use with tmpfs upper/work dirs")
+
+		// Create a copy of options with transformed paths using templates
+		// Pre-allocate capacity for original options + 2 mkdir paths
+		newOpts := make([]string, 0, len(mnt.Options)+2)
+		for i, opt := range mnt.Options {
+			switch i {
+			case udi:
+				// Transform upperdir to use tmpfs mount point via template
+				newOpts = append(newOpts, fmt.Sprintf("upperdir={{ mount %d }}/upper", tmpfsIndex))
+			case wdi:
+				// Transform workdir to use tmpfs mount point via template
+				newOpts = append(newOpts, fmt.Sprintf("workdir={{ mount %d }}/work", tmpfsIndex))
+			default:
+				newOpts = append(newOpts, opt)
+			}
 		}
-	} else {
-		log.G(ctx).WithField("options", mnt.Options).Warnf("overlayfs missing workdir or upperdir")
+
+		// Add X-containerd.mkdir.path options to create the directories
+		// These are processed by the mkdir/ prefix handler before mounting
+		// The templates are expanded by format/ prefix first
+		newOpts = append(newOpts,
+			fmt.Sprintf("X-containerd.mkdir.path={{ mount %d }}/upper", tmpfsIndex),
+			fmt.Sprintf("X-containerd.mkdir.path={{ mount %d }}/work", tmpfsIndex),
+		)
+
+		// Create a tmpfs mount that will be mounted at index tmpfsIndex
+		// This provides ephemeral storage for overlay's upper/work directories
+		tmpfsMount := &types.Mount{
+			Type:   "tmpfs",
+			Source: "tmpfs",
+			Options: []string{
+				"mode=0755",
+			},
+		}
+
+		// The overlay mount with transformed options
+		// Use format/mkdir/ prefix to:
+		// 1. format/ - expand templates (lowerdir, upperdir, workdir, mkdir paths)
+		// 2. mkdir/ - create upper/work directories inside tmpfs
+		overlayMount := &types.Mount{
+			Type:    "format/mkdir/overlay",
+			Source:  mnt.Source,
+			Target:  mnt.Target,
+			Options: newOpts,
+		}
+
+		return []*types.Mount{tmpfsMount, overlayMount}, nil, nil
 	}
-	return nil
+
+	// No transformation needed - pass through as-is
+	if wdi < 0 || udi < 0 {
+		log.G(ctx).WithField("options", mnt.Options).Warn("overlayfs missing workdir or upperdir")
+	}
+
+	return []*types.Mount{mnt}, nil, nil
 }
 
 func (m *linuxManager) addDisksToVM(ctx context.Context, vmi vm.Instance, disks []diskOptions) error {
