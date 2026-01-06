@@ -141,7 +141,10 @@ func (m *linuxManager) transformMounts(ctx context.Context, vmi vm.Instance, id 
 
 func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	switch mnt.Type {
-	case "erofs":
+	case "erofs", "format/erofs":
+		// format/erofs is used by nexus-erofs for multi-device EROFS mounts (fsmeta with device= options).
+		// The format/ prefix signals that containerd's standard mount manager cannot handle this type,
+		// but qemubox can - it extracts file paths and converts them to virtio-blk devices.
 		return m.handleEROFS(ctx, id, disks, mnt)
 	case "ext4":
 		return m.handleExt4(id, disks, mnt)
