@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/erofs"
 	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
@@ -153,48 +151,46 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 	}
 }
 
-func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
+func (m *linuxManager) handleEROFS(_ context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	disk := truncateID(fmt.Sprintf("disk-%d", *disks), id)
 
-	var options []string
-	devices := []string{mnt.Source}
+	source := mnt.Source
+	isVMDK := false
 
-	// Extract device= options which specify additional EROFS layers
-	for _, o := range mnt.Options {
-		if d, found := strings.CutPrefix(o, "device="); found {
-			devices = append(devices, d)
-			continue
+	// Check if this is an fsmeta.erofs with device= options (from nexuserofs).
+	// If so, look for merged.vmdk which allows using a single QEMU device.
+	if strings.HasSuffix(source, "fsmeta.erofs") {
+		// Check for merged.vmdk in same directory
+		vmdkPath := strings.TrimSuffix(source, "fsmeta.erofs") + "merged.vmdk"
+		if fi, err := os.Stat(vmdkPath); err == nil && fi.Size() > 0 {
+			source = vmdkPath
+			isVMDK = true
 		}
-		options = append(options, o)
+	} else if strings.HasSuffix(source, ".vmdk") {
+		isVMDK = true
 	}
 
 	addDisks := []diskOptions{{
 		name:     disk,
-		source:   mnt.Source,
+		source:   source,
 		readOnly: true,
-		vmdk:     false,
+		vmdk:     isVMDK,
 	}}
 
-	// If multiple layers, generate VMDK descriptor to merge them
-	if len(devices) > 1 {
-		mergedfsPath := filepath.Dir(mnt.Source) + "/merged_fs.vmdk"
-		if _, err := os.Stat(mergedfsPath); err != nil {
-			if !os.IsNotExist(err) {
-				return nil, nil, fmt.Errorf("failed to stat merged EROFS descriptor %s: %w", mergedfsPath, err)
-			}
-			if err := erofs.DumpVMDKDescriptorToFile(mergedfsPath, 0xfffffffe, devices); err != nil {
-				return nil, nil, fmt.Errorf("failed to generate merged EROFS descriptor %s: %w", mergedfsPath, err)
-			}
+	// When using VMDK, the guest doesn't need device= options - it's a single device.
+	// Filter out device= options from guest mount.
+	var guestOptions []string
+	for _, opt := range mnt.Options {
+		if !strings.HasPrefix(opt, "device=") {
+			guestOptions = append(guestOptions, opt)
 		}
-		addDisks[0].source = mergedfsPath
-		addDisks[0].vmdk = true
 	}
 
 	out := &types.Mount{
 		Type:    "erofs",
 		Source:  fmt.Sprintf("/dev/vd%c", *disks),
 		Target:  mnt.Target,
-		Options: filterOptions(options),
+		Options: filterOptions(guestOptions),
 	}
 	*disks++
 	return []*types.Mount{out}, addDisks, nil
