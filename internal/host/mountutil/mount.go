@@ -25,8 +25,9 @@ import (
 // It returns an optional cleanup function that should be called on container
 // delete to unmount any mounted filesystems.
 //
-//nolint:gocognit,cyclop // The mount pipeline is kept inline to match containerd semantics:
 // https://github.com/containerd/containerd/blob/main/core/mount/mount.go
+//
+//nolint:gocognit,cyclop // The mount pipeline is kept inline to match containerd semantics:
 func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (cleanup func(context.Context) error, retErr error) {
 	if len(mounts) == 0 {
 		return nil, nil
