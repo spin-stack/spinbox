@@ -130,7 +130,9 @@ func TestStateMachine_TryStartCreating(t *testing.T) {
 	}
 
 	// After marking created, should still fail (not idle)
-	sm.MarkCreated()
+	if err := sm.MarkCreated(); err != nil {
+		t.Errorf("MarkCreated failed: %v", err)
+	}
 	if sm.TryStartCreating() {
 		t.Error("TryStartCreating should fail when running")
 	}
@@ -146,7 +148,9 @@ func TestStateMachine_TryStartDeleting(t *testing.T) {
 
 	// Transition to running
 	sm.TryStartCreating()
-	sm.MarkCreated()
+	if err := sm.MarkCreated(); err != nil {
+		t.Errorf("MarkCreated failed: %v", err)
+	}
 
 	// Now should succeed
 	if !sm.TryStartDeleting() {
@@ -163,10 +167,25 @@ func TestStateMachine_MarkCreated(t *testing.T) {
 	sm := NewStateMachine()
 	sm.TryStartCreating()
 
-	sm.MarkCreated()
+	if err := sm.MarkCreated(); err != nil {
+		t.Errorf("MarkCreated failed: %v", err)
+	}
 
 	if sm.State() != StateRunning {
 		t.Errorf("expected Running after MarkCreated, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_MarkCreated_InvalidState(t *testing.T) {
+	sm := NewStateMachine()
+	// Don't transition to Creating first
+
+	err := sm.MarkCreated()
+	if err == nil {
+		t.Error("MarkCreated should fail when not in Creating state")
+	}
+	if !errors.Is(err, ErrInvalidStateTransition) {
+		t.Errorf("expected ErrInvalidStateTransition, got %T", err)
 	}
 }
 
@@ -174,17 +193,34 @@ func TestStateMachine_MarkCreationFailed(t *testing.T) {
 	sm := NewStateMachine()
 	sm.TryStartCreating()
 
-	sm.MarkCreationFailed()
+	if err := sm.MarkCreationFailed(); err != nil {
+		t.Errorf("MarkCreationFailed failed: %v", err)
+	}
 
 	if sm.State() != StateIdle {
 		t.Errorf("expected Idle after MarkCreationFailed, got %s", sm.State())
 	}
 }
 
+func TestStateMachine_MarkCreationFailed_InvalidState(t *testing.T) {
+	sm := NewStateMachine()
+	// Don't transition to Creating first
+
+	err := sm.MarkCreationFailed()
+	if err == nil {
+		t.Error("MarkCreationFailed should fail when not in Creating state")
+	}
+	if !errors.Is(err, ErrInvalidStateTransition) {
+		t.Errorf("expected ErrInvalidStateTransition, got %T", err)
+	}
+}
+
 func TestStateMachine_ForceTransition(t *testing.T) {
 	sm := NewStateMachine()
 	sm.TryStartCreating()
-	sm.MarkCreated()
+	if err := sm.MarkCreated(); err != nil {
+		t.Errorf("MarkCreated failed: %v", err)
+	}
 
 	old := sm.ForceTransition(StateShuttingDown)
 
@@ -228,7 +264,9 @@ func TestStateMachine_StatePredicates(t *testing.T) {
 	}
 
 	// Running
-	sm.MarkCreated()
+	if err := sm.MarkCreated(); err != nil {
+		t.Errorf("MarkCreated failed: %v", err)
+	}
 	if !sm.IsRunning() {
 		t.Error("should be running")
 	}
@@ -255,7 +293,9 @@ func TestStateMachine_StatePredicates(t *testing.T) {
 func TestStateMachine_Snapshot(t *testing.T) {
 	sm := NewStateMachine()
 	sm.TryStartCreating()
-	sm.MarkCreated()
+	if err := sm.MarkCreated(); err != nil {
+		t.Errorf("MarkCreated failed: %v", err)
+	}
 	sm.SetIntentionalShutdown(true)
 
 	snap := sm.Snapshot()

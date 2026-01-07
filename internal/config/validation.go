@@ -109,31 +109,31 @@ func (c *Config) validateRuntime() error {
 	return nil
 }
 
-// validateTimeouts validates timeout configuration
+// validateTimeouts validates timeout configuration and caches parsed durations.
 func (c *Config) validateTimeouts() error {
-	// All timeouts must be valid duration strings
-	timeouts := map[string]string{
-		"vm_start":          c.Timeouts.VMStart,
-		"device_detection":  c.Timeouts.DeviceDetection,
-		"shutdown_grace":    c.Timeouts.ShutdownGrace,
-		"event_reconnect":   c.Timeouts.EventReconnect,
-		"task_client_retry": c.Timeouts.TaskClientRetry,
-		"io_wait":           c.Timeouts.IOWait,
-		"qmp_command":       c.Timeouts.QMPCommand,
+	// Parse and cache all durations
+	if err := c.Timeouts.parseAndCache(); err != nil {
+		return fmt.Errorf("invalid duration: %w", err)
 	}
 
-	for name, value := range timeouts {
-		d, err := time.ParseDuration(value)
-		if err != nil {
-			return fmt.Errorf("%s must be a valid duration (e.g., \"5s\", \"2m\"): %w", name, err)
-		}
-		// Timeouts must be positive
+	// Validate bounds on cached durations
+	durations := map[string]time.Duration{
+		"vm_start":          c.Timeouts.vmStart,
+		"device_detection":  c.Timeouts.deviceDetection,
+		"shutdown_grace":    c.Timeouts.shutdownGrace,
+		"event_reconnect":   c.Timeouts.eventReconnect,
+		"task_client_retry": c.Timeouts.taskClientRetry,
+		"io_wait":           c.Timeouts.ioWait,
+		"qmp_command":       c.Timeouts.qmpCommand,
+	}
+
+	for name, d := range durations {
 		if d <= 0 {
-			return fmt.Errorf("%s must be a positive duration, got %s", name, value)
+			return fmt.Errorf("%s must be a positive duration, got %s", name, d)
 		}
 		// Reasonable upper bound to catch configuration errors (1 hour)
 		if d > time.Hour {
-			return fmt.Errorf("%s is unusually large (%s), maximum is 1h", name, value)
+			return fmt.Errorf("%s is unusually large (%s), maximum is 1h", name, d)
 		}
 	}
 

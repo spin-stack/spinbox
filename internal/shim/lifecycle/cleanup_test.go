@@ -21,14 +21,15 @@ func TestCleanupOrchestrator_ExecuteOrder(t *testing.T) {
 		}
 	}
 
-	c := NewCleanupOrchestrator()
-	c.SetHotplugStop(record("hotplug"))
-	c.SetIOShutdown(record("io"))
-	c.SetConnectionClose(record("conn"))
-	c.SetVMShutdown(record("vm"))
-	c.SetNetworkCleanup(record("network"))
-	c.SetMountCleanup(record("mount"))
-	c.SetEventClose(record("event"))
+	c := NewCleanupOrchestrator(CleanupPhases{
+		HotplugStop:    record("hotplug"),
+		IOShutdown:     record("io"),
+		ConnClose:      record("conn"),
+		VMShutdown:     record("vm"),
+		NetworkCleanup: record("network"),
+		MountCleanup:   record("mount"),
+		EventClose:     record("event"),
+	})
 
 	result := c.Execute(context.Background())
 
@@ -54,14 +55,15 @@ func TestCleanupOrchestrator_CollectsAllErrors(t *testing.T) {
 	errVM := errors.New("vm error")
 	errNetwork := errors.New("network error")
 
-	c := NewCleanupOrchestrator()
-	c.SetHotplugStop(func(ctx context.Context) error { return errHotplug })
-	c.SetIOShutdown(func(ctx context.Context) error { return nil })
-	c.SetConnectionClose(func(ctx context.Context) error { return nil })
-	c.SetVMShutdown(func(ctx context.Context) error { return errVM })
-	c.SetNetworkCleanup(func(ctx context.Context) error { return errNetwork })
-	c.SetMountCleanup(func(ctx context.Context) error { return nil })
-	c.SetEventClose(func(ctx context.Context) error { return nil })
+	c := NewCleanupOrchestrator(CleanupPhases{
+		HotplugStop:    func(ctx context.Context) error { return errHotplug },
+		IOShutdown:     func(ctx context.Context) error { return nil },
+		ConnClose:      func(ctx context.Context) error { return nil },
+		VMShutdown:     func(ctx context.Context) error { return errVM },
+		NetworkCleanup: func(ctx context.Context) error { return errNetwork },
+		MountCleanup:   func(ctx context.Context) error { return nil },
+		EventClose:     func(ctx context.Context) error { return nil },
+	})
 
 	result := c.Execute(context.Background())
 
@@ -89,10 +91,11 @@ func TestCleanupOrchestrator_CollectsAllErrors(t *testing.T) {
 
 func TestCleanupOrchestrator_Idempotent(t *testing.T) {
 	callCount := 0
-	c := NewCleanupOrchestrator()
-	c.SetHotplugStop(func(ctx context.Context) error {
-		callCount++
-		return nil
+	c := NewCleanupOrchestrator(CleanupPhases{
+		HotplugStop: func(ctx context.Context) error {
+			callCount++
+			return nil
+		},
 	})
 
 	// Execute twice
@@ -106,8 +109,7 @@ func TestCleanupOrchestrator_Idempotent(t *testing.T) {
 }
 
 func TestCleanupOrchestrator_NilFunctionsSkipped(t *testing.T) {
-	c := NewCleanupOrchestrator()
-	// Don't set any cleanup functions
+	c := NewCleanupOrchestrator(CleanupPhases{})
 
 	result := c.Execute(context.Background())
 
@@ -129,14 +131,15 @@ func TestCleanupOrchestrator_PartialCleanup(t *testing.T) {
 		}
 	}
 
-	c := NewCleanupOrchestrator()
-	c.SetHotplugStop(record("hotplug"))
-	c.SetIOShutdown(record("io"))
-	c.SetConnectionClose(record("conn"))
-	c.SetVMShutdown(record("vm"))
-	c.SetNetworkCleanup(record("network"))
-	c.SetMountCleanup(record("mount"))
-	c.SetEventClose(record("event"))
+	c := NewCleanupOrchestrator(CleanupPhases{
+		HotplugStop:    record("hotplug"),
+		IOShutdown:     record("io"),
+		ConnClose:      record("conn"),
+		VMShutdown:     record("vm"),
+		NetworkCleanup: record("network"),
+		MountCleanup:   record("mount"),
+		EventClose:     record("event"),
+	})
 
 	// Start from VM shutdown phase
 	result := c.ExecutePartial(context.Background(), PhaseVMShutdown)
@@ -160,10 +163,11 @@ func TestCleanupOrchestrator_PartialCleanup(t *testing.T) {
 
 func TestCleanupOrchestrator_Reset(t *testing.T) {
 	callCount := 0
-	c := NewCleanupOrchestrator()
-	c.SetHotplugStop(func(ctx context.Context) error {
-		callCount++
-		return nil
+	c := NewCleanupOrchestrator(CleanupPhases{
+		HotplugStop: func(ctx context.Context) error {
+			callCount++
+			return nil
+		},
 	})
 
 	c.Execute(context.Background())
@@ -176,9 +180,10 @@ func TestCleanupOrchestrator_Reset(t *testing.T) {
 }
 
 func TestCleanupOrchestrator_CompletedPhases(t *testing.T) {
-	c := NewCleanupOrchestrator()
-	c.SetHotplugStop(func(ctx context.Context) error { return nil })
-	c.SetVMShutdown(func(ctx context.Context) error { return nil })
+	c := NewCleanupOrchestrator(CleanupPhases{
+		HotplugStop: func(ctx context.Context) error { return nil },
+		VMShutdown:  func(ctx context.Context) error { return nil },
+	})
 
 	c.Execute(context.Background())
 
@@ -208,22 +213,23 @@ func TestCleanupOrchestrator_CompletedPhases(t *testing.T) {
 func TestCleanupOrchestrator_ContinuesAfterError(t *testing.T) {
 	var called []string
 
-	c := NewCleanupOrchestrator()
-	c.SetHotplugStop(func(ctx context.Context) error {
-		called = append(called, "hotplug")
-		return errors.New("hotplug failed")
-	})
-	c.SetIOShutdown(func(ctx context.Context) error {
-		called = append(called, "io")
-		return nil
-	})
-	c.SetVMShutdown(func(ctx context.Context) error {
-		called = append(called, "vm")
-		return errors.New("vm failed")
-	})
-	c.SetNetworkCleanup(func(ctx context.Context) error {
-		called = append(called, "network")
-		return nil
+	c := NewCleanupOrchestrator(CleanupPhases{
+		HotplugStop: func(ctx context.Context) error {
+			called = append(called, "hotplug")
+			return errors.New("hotplug failed")
+		},
+		IOShutdown: func(ctx context.Context) error {
+			called = append(called, "io")
+			return nil
+		},
+		VMShutdown: func(ctx context.Context) error {
+			called = append(called, "vm")
+			return errors.New("vm failed")
+		},
+		NetworkCleanup: func(ctx context.Context) error {
+			called = append(called, "network")
+			return nil
+		},
 	})
 
 	result := c.Execute(context.Background())

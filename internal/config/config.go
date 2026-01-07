@@ -45,6 +45,8 @@ type RuntimeConfig struct {
 // TimeoutsConfig defines timeout durations for various lifecycle operations.
 // All values are duration strings (e.g., "5s", "2m", "500ms").
 // These timeouts can be tuned based on hardware performance and workload characteristics.
+//
+// After validation, use the getter methods (GetVMStart, etc.) to access parsed durations.
 type TimeoutsConfig struct {
 	// VMStart is the timeout for VM boot (QEMU process start to vsock connection).
 	// Default: 10s. Increase for slow storage or complex configurations.
@@ -73,52 +75,93 @@ type TimeoutsConfig struct {
 	// QMPCommand is the default timeout for QMP commands to QEMU.
 	// Default: 5s. Increase for complex QMP operations or slow hosts.
 	QMPCommand string `json:"qmp_command"`
+
+	// Cached parsed durations (populated by parseAndCache, called during validation)
+	vmStart         time.Duration
+	deviceDetection time.Duration
+	shutdownGrace   time.Duration
+	eventReconnect  time.Duration
+	taskClientRetry time.Duration
+	ioWait          time.Duration
+	qmpCommand      time.Duration
+}
+
+// parseAndCache parses all duration strings and caches the results.
+// Returns an error if any duration is invalid.
+func (t *TimeoutsConfig) parseAndCache() error {
+	var err error
+
+	t.vmStart, err = time.ParseDuration(t.VMStart)
+	if err != nil {
+		return fmt.Errorf("vm_start: %w", err)
+	}
+
+	t.deviceDetection, err = time.ParseDuration(t.DeviceDetection)
+	if err != nil {
+		return fmt.Errorf("device_detection: %w", err)
+	}
+
+	t.shutdownGrace, err = time.ParseDuration(t.ShutdownGrace)
+	if err != nil {
+		return fmt.Errorf("shutdown_grace: %w", err)
+	}
+
+	t.eventReconnect, err = time.ParseDuration(t.EventReconnect)
+	if err != nil {
+		return fmt.Errorf("event_reconnect: %w", err)
+	}
+
+	t.taskClientRetry, err = time.ParseDuration(t.TaskClientRetry)
+	if err != nil {
+		return fmt.Errorf("task_client_retry: %w", err)
+	}
+
+	t.ioWait, err = time.ParseDuration(t.IOWait)
+	if err != nil {
+		return fmt.Errorf("io_wait: %w", err)
+	}
+
+	t.qmpCommand, err = time.ParseDuration(t.QMPCommand)
+	if err != nil {
+		return fmt.Errorf("qmp_command: %w", err)
+	}
+
+	return nil
 }
 
 // GetVMStart returns the VM start timeout as a time.Duration.
-// Panics if the configuration is invalid (should be caught by validation).
 func (t *TimeoutsConfig) GetVMStart() time.Duration {
-	return mustParseDuration(t.VMStart)
+	return t.vmStart
 }
 
 // GetDeviceDetection returns the device detection timeout as a time.Duration.
 func (t *TimeoutsConfig) GetDeviceDetection() time.Duration {
-	return mustParseDuration(t.DeviceDetection)
+	return t.deviceDetection
 }
 
 // GetShutdownGrace returns the shutdown grace period as a time.Duration.
 func (t *TimeoutsConfig) GetShutdownGrace() time.Duration {
-	return mustParseDuration(t.ShutdownGrace)
+	return t.shutdownGrace
 }
 
 // GetEventReconnect returns the event reconnect timeout as a time.Duration.
 func (t *TimeoutsConfig) GetEventReconnect() time.Duration {
-	return mustParseDuration(t.EventReconnect)
+	return t.eventReconnect
 }
 
 // GetTaskClientRetry returns the task client retry timeout as a time.Duration.
 func (t *TimeoutsConfig) GetTaskClientRetry() time.Duration {
-	return mustParseDuration(t.TaskClientRetry)
+	return t.taskClientRetry
 }
 
 // GetIOWait returns the I/O wait timeout as a time.Duration.
 func (t *TimeoutsConfig) GetIOWait() time.Duration {
-	return mustParseDuration(t.IOWait)
+	return t.ioWait
 }
 
 // GetQMPCommand returns the QMP command timeout as a time.Duration.
 func (t *TimeoutsConfig) GetQMPCommand() time.Duration {
-	return mustParseDuration(t.QMPCommand)
-}
-
-// mustParseDuration parses a duration string, panicking on error.
-// This is safe because validation should have already verified the format.
-func mustParseDuration(s string) time.Duration {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		panic(fmt.Sprintf("invalid duration %q: %v (config validation should have caught this)", s, err))
-	}
-	return d
+	return t.qmpCommand
 }
 
 // CPUHotplugConfig defines CPU hotplug controller settings

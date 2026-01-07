@@ -130,21 +130,23 @@ func (sm *StateMachine) TryStartDeleting() bool {
 }
 
 // MarkCreated transitions from Creating to Running.
-// Panics if not in Creating state (programming error).
-func (sm *StateMachine) MarkCreated() {
+// Returns an error if not in Creating state.
+func (sm *StateMachine) MarkCreated() error {
 	if !sm.state.CompareAndSwap(int32(StateCreating), int32(StateRunning)) {
-		panic(fmt.Sprintf("MarkCreated called in invalid state: %s", sm.State()))
+		return NewStateTransitionError(StateCreating.String(), StateRunning.String(), sm.State().String())
 	}
 	log.L.Debug("state: creating -> running")
+	return nil
 }
 
 // MarkCreationFailed transitions from Creating back to Idle.
-// Panics if not in Creating state (programming error).
-func (sm *StateMachine) MarkCreationFailed() {
+// Returns an error if not in Creating state.
+func (sm *StateMachine) MarkCreationFailed() error {
 	if !sm.state.CompareAndSwap(int32(StateCreating), int32(StateIdle)) {
-		panic(fmt.Sprintf("MarkCreationFailed called in invalid state: %s", sm.State()))
+		return NewStateTransitionError(StateCreating.String(), StateIdle.String(), sm.State().String())
 	}
 	log.L.Debug("state: creating -> idle (failed)")
+	return nil
 }
 
 // IsCreating returns true if container creation is in progress.
