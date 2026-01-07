@@ -95,7 +95,6 @@ func TestFilterOptions(t *testing.T) {
 	}
 }
 
-
 func TestHandleOverlay(t *testing.T) {
 	ctx := context.Background()
 	m := &linuxManager{}

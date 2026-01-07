@@ -72,7 +72,7 @@ qemubox is inspired by [nerdbox](https://github.com/containerd/nerdbox), which p
 
 1. **QEMU's maturity** - Battle-tested VMM with extensive device support, debugging tools (QMP, gdbstub), and broad kernel compatibility
 2. **Standard CNI networking** - Reuse existing CNI plugins (Calico, Cilium, etc.) instead of custom networking
-3. **KVM-specific features** - CPU/memory hotplug, vhost-net, virtio-fs, and other Linux-specific optimizations
+3. **KVM-specific features** - CPU/memory hotplug, vhost-net, virtio-blk, and other Linux-specific optimizations
 4. **Simpler deployment** - Single static binary VMM without Rust runtime dependencies
 
 If you need cross-platform support or rootless containers, check out [nerdbox](https://github.com/containerd/nerdbox).

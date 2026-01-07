@@ -414,4 +414,3 @@ func (m *linuxManager) maybeGenerateOverlay(ctx context.Context, mounts []*types
 
 	return newMounts
 }
-
