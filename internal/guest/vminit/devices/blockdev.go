@@ -19,6 +19,9 @@ const (
 	// BlockDeviceTimeout is how long to wait for virtio block devices.
 	// 5 seconds is sufficient for QEMU virtio device initialization.
 	BlockDeviceTimeout = 5 * time.Second
+
+	// inotifyPollInterval is how often to check context while waiting for inotify events.
+	inotifyPollInterval = 100 // milliseconds
 )
 
 // findVirtioBlockDevices finds virtio block devices in /sys/block.
@@ -37,6 +40,63 @@ func findVirtioBlockDevices() ([]string, error) {
 	return devices, nil
 }
 
+// inotifyEventHandler is a callback for processing inotify events.
+// Returns true to stop watching (goal achieved), false to continue.
+type inotifyEventHandler func(name string) (done bool)
+
+// parseInotifyEvents parses inotify events from a buffer and calls handler for each.
+// Returns true if handler signaled done for any event.
+func parseInotifyEvents(buf []byte, nread int, handler inotifyEventHandler) bool {
+	for offset := 0; offset < nread; {
+		// #nosec G103 -- unsafe.Pointer is required to parse inotify events from the kernel
+		event := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+		nameLen := int(event.Len)
+		if nameLen > 0 {
+			name := string(buf[offset+unix.SizeofInotifyEvent : offset+unix.SizeofInotifyEvent+nameLen])
+			name = strings.TrimRight(name, "\x00")
+			if handler(name) {
+				return true
+			}
+		}
+		offset += unix.SizeofInotifyEvent + nameLen
+	}
+	return false
+}
+
+// pollInotifyFd polls an inotify fd for events with context support.
+// Returns: (hasData, shouldContinue, error)
+func pollInotifyFd(ctx context.Context, fd int, timeoutMs int) (bool, bool, error) {
+	select {
+	case <-ctx.Done():
+		return false, false, nil
+	default:
+	}
+
+	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	n, err := unix.Poll(pollFds, timeoutMs)
+	if err != nil {
+		if errors.Is(err, unix.EINTR) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+
+	return n > 0, true, nil
+}
+
+// readInotifyEvents reads events from an inotify fd into buf.
+// Returns: (bytesRead, shouldContinue, error)
+func readInotifyEvents(fd int, buf []byte) (int, bool, error) {
+	nread, err := unix.Read(fd, buf)
+	if err != nil {
+		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
+			return 0, true, nil
+		}
+		return 0, false, err
+	}
+	return nread, true, nil
+}
+
 // waitForDevNodesInotify waits for device nodes to appear in /dev using inotify.
 // This is more efficient than polling - the kernel notifies us when devices are created.
 func waitForDevNodesInotify(ctx context.Context, devices []string, timeout time.Duration) bool {
@@ -47,16 +107,12 @@ func waitForDevNodesInotify(ctx context.Context, devices []string, timeout time.
 	// Build set of devices we're waiting for
 	waiting := make(map[string]bool)
 	for _, dev := range devices {
-		devPath := "/dev/" + dev
-		// Check if already exists
-		if _, err := os.Stat(devPath); err == nil {
-			continue
+		if _, err := os.Stat("/dev/" + dev); err != nil {
+			waiting[dev] = true
 		}
-		waiting[dev] = true
 	}
 
 	if len(waiting) == 0 {
-		// All devices already exist
 		return true
 	}
 
@@ -69,8 +125,7 @@ func waitForDevNodesInotify(ctx context.Context, devices []string, timeout time.
 	defer unix.Close(fd)
 
 	// Watch /dev for CREATE events
-	_, err = unix.InotifyAddWatch(fd, "/dev", unix.IN_CREATE)
-	if err != nil {
+	if _, err = unix.InotifyAddWatch(fd, "/dev", unix.IN_CREATE); err != nil {
 		log.G(ctx).WithError(err).Debug("inotify watch failed, falling back to polling")
 		return waitForDevNodesPoll(ctx, devices, timeout)
 	}
@@ -89,62 +144,41 @@ func waitForDevNodesInotify(ctx context.Context, devices []string, timeout time.
 	buf := make([]byte, 4096)
 
 	for time.Now().Before(deadline) && len(waiting) > 0 {
-		select {
-		case <-ctx.Done():
-			return false
-		default:
-		}
-
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
 
-		// Use poll to wait for events with timeout
-		pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-		pollTimeout := int(remaining.Milliseconds())
-		if pollTimeout > 100 {
-			pollTimeout = 100 // Check context every 100ms
-		}
-
-		n, err := unix.Poll(pollFds, pollTimeout)
-		if err != nil {
-			if errors.Is(err, unix.EINTR) {
-				continue
+		pollTimeout := min(int(remaining.Milliseconds()), inotifyPollInterval)
+		hasData, shouldContinue, err := pollInotifyFd(ctx, fd, pollTimeout)
+		if !shouldContinue {
+			if err != nil {
+				log.G(ctx).WithError(err).Debug("poll failed")
 			}
-			log.G(ctx).WithError(err).Debug("poll failed")
 			return false
 		}
-
-		if n == 0 {
+		if !hasData {
 			continue
 		}
 
-		// Read inotify events
-		nread, err := unix.Read(fd, buf)
-		if err != nil {
-			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
-				continue
+		nread, shouldContinue, err := readInotifyEvents(fd, buf)
+		if !shouldContinue {
+			if err != nil {
+				log.G(ctx).WithError(err).Debug("read inotify failed")
 			}
-			log.G(ctx).WithError(err).Debug("read inotify failed")
 			return false
 		}
-
-		// Parse events
-		for offset := 0; offset < nread; {
-			// #nosec G103 -- unsafe.Pointer is required to parse inotify events from the kernel
-			event := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
-			nameLen := int(event.Len)
-			if nameLen > 0 {
-				name := string(buf[offset+unix.SizeofInotifyEvent : offset+unix.SizeofInotifyEvent+nameLen])
-				name = strings.TrimRight(name, "\x00")
-				if waiting[name] {
-					delete(waiting, name)
-					log.G(ctx).WithField("device", name).Debug("device node created")
-				}
-			}
-			offset += unix.SizeofInotifyEvent + nameLen
+		if nread == 0 {
+			continue
 		}
+
+		parseInotifyEvents(buf, nread, func(name string) bool {
+			if waiting[name] {
+				delete(waiting, name)
+				log.G(ctx).WithField("device", name).Debug("device node created")
+			}
+			return false // keep watching
+		})
 	}
 
 	return len(waiting) == 0
@@ -216,88 +250,62 @@ func WaitForBlockDevices(ctx context.Context) {
 // waitForSysBlockDevices waits for virtio block devices to appear in /sys/block using inotify.
 func waitForSysBlockDevices(ctx context.Context) []string {
 	// Fast path: check if devices already exist
-	devices, err := findVirtioBlockDevices()
-	if err == nil && len(devices) > 0 {
+	if devices, err := findVirtioBlockDevices(); err == nil && len(devices) > 0 {
 		return devices
 	}
 
 	// Create inotify instance to watch /sys/block
 	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
-		// Fall back to simple polling
 		return waitForSysBlockDevicesPoll(ctx)
 	}
 	defer unix.Close(fd)
 
-	_, err = unix.InotifyAddWatch(fd, "/sys/block", unix.IN_CREATE)
-	if err != nil {
+	if _, err = unix.InotifyAddWatch(fd, "/sys/block", unix.IN_CREATE); err != nil {
 		return waitForSysBlockDevicesPoll(ctx)
 	}
 
 	// Check again after setting up watch
-	devices, err = findVirtioBlockDevices()
-	if err == nil && len(devices) > 0 {
+	if devices, err := findVirtioBlockDevices(); err == nil && len(devices) > 0 {
 		return devices
 	}
 
 	buf := make([]byte, 4096)
 
 	for {
-		select {
-		case <-ctx.Done():
-			// Return whatever we have
-			devices, _ = findVirtioBlockDevices()
+		hasData, shouldContinue, _ := pollInotifyFd(ctx, fd, inotifyPollInterval)
+		if !shouldContinue {
+			devices, _ := findVirtioBlockDevices()
 			return devices
-		default:
 		}
 
-		// Use poll with timeout
-		pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-		n, err := unix.Poll(pollFds, 100) // 100ms poll
-		if err != nil {
-			if errors.Is(err, unix.EINTR) {
-				continue
-			}
-			break
-		}
-
-		if n == 0 {
+		if !hasData {
 			// Timeout, check if any devices appeared
-			devices, err = findVirtioBlockDevices()
-			if err == nil && len(devices) > 0 {
+			if devices, err := findVirtioBlockDevices(); err == nil && len(devices) > 0 {
 				return devices
 			}
 			continue
 		}
 
-		// Read events
-		nread, err := unix.Read(fd, buf)
-		if err != nil {
-			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
-				continue
-			}
+		nread, shouldContinue, _ := readInotifyEvents(fd, buf)
+		if !shouldContinue {
 			break
 		}
+		if nread == 0 {
+			continue
+		}
 
-		// Parse events looking for vd* devices
-		for offset := 0; offset < nread; {
-			// #nosec G103 -- unsafe.Pointer is required to parse inotify events from the kernel
-			event := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
-			nameLen := int(event.Len)
-			if nameLen > 0 {
-				name := string(buf[offset+unix.SizeofInotifyEvent : offset+unix.SizeofInotifyEvent+nameLen])
-				name = strings.TrimRight(name, "\x00")
-				if strings.HasPrefix(name, "vd") {
-					// Found a virtio device, now get all of them
-					devices, _ = findVirtioBlockDevices()
-					return devices
-				}
-			}
-			offset += unix.SizeofInotifyEvent + nameLen
+		// Check if any event is for a virtio device
+		foundVirtio := parseInotifyEvents(buf, nread, func(name string) bool {
+			return strings.HasPrefix(name, "vd")
+		})
+		if foundVirtio {
+			devices, _ := findVirtioBlockDevices()
+			return devices
 		}
 	}
 
-	devices, _ = findVirtioBlockDevices()
+	devices, _ := findVirtioBlockDevices()
 	return devices
 }
 

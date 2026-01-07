@@ -12,6 +12,7 @@ import (
 	api "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
 )
 
+//nolint:cyclop // Table-driven test with many cases - clarity over complexity metrics.
 func TestServiceCreate(t *testing.T) {
 	tests := []struct {
 		name         string

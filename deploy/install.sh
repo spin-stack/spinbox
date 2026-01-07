@@ -338,12 +338,20 @@ check_ubuntu_packages() {
         if dpkg -s "$pkg" &> /dev/null; then
             echo -e "  ${GREEN}✓${NC} $pkg"
         else
-            # Handle libaio package name change in Ubuntu 24.04+
-            if [[ "$pkg" == "libaio1t64" ]]; then
-                if dpkg -s "libaio1" &> /dev/null; then
-                    echo -e "  ${GREEN}✓${NC} libaio1 (legacy name)"
-                    continue
-                fi
+            # Handle t64 suffix package name changes (Ubuntu 24.04+ time_t transition)
+            # Try both directions: pkg -> pkg + t64, and pkg -> pkg - t64
+            local alt_pkg=""
+            if [[ "$pkg" == *t64 ]]; then
+                # Try without t64 suffix (e.g., libaio1t64 -> libaio1)
+                alt_pkg="${pkg%t64}"
+            else
+                # Try with t64 suffix (e.g., librdmacm1 -> librdmacm1t64)
+                alt_pkg="${pkg}t64"
+            fi
+
+            if [[ -n "$alt_pkg" ]] && dpkg -s "$alt_pkg" &> /dev/null; then
+                echo -e "  ${GREEN}✓${NC} $alt_pkg (provides $pkg)"
+                continue
             fi
             missing_required+=("$pkg")
         fi

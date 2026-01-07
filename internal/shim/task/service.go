@@ -375,6 +375,10 @@ func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), err
 }
 
 // Create a new initial process and container with the underlying OCI runtime.
+//
+// Breaking it further would obscure the critical cleanup/error paths that use defer.
+//
+//nolint:cyclop // Create is the main container creation entry point with sequential setup stages.
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, retErr error) {
 	log.G(ctx).WithFields(log.Fields{
 		"id":     r.ID,
