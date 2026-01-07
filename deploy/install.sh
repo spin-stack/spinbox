@@ -315,13 +315,8 @@ check_ubuntu_packages() {
         libseccomp2        # libseccomp.so.2
         zlib1g             # libz.so.1
         libzstd1           # libzstd.so.1
-        libglib2.0-0       # libglib-2.0.so.0, libgmodule-2.0.so.0
         libaio1t64         # libaio.so.1t64 (Ubuntu 24.04+)
         liburing2          # liburing.so.2
-    )
-
-    # Optional packages (some features may work without these)
-    local optional_packages=(
         libpmem1           # libpmem.so.1 (persistent memory)
         librdmacm1         # librdmacm.so.1 (RDMA)
         libibverbs1        # libibverbs.so.1 (InfiniBand)
@@ -351,15 +346,6 @@ check_ubuntu_packages() {
                 fi
             fi
             missing_required+=("$pkg")
-        fi
-    done
-
-    # Check optional packages
-    for pkg in "${optional_packages[@]}"; do
-        if dpkg -s "$pkg" &> /dev/null; then
-            echo -e "  ${GREEN}✓${NC} $pkg (optional)"
-        else
-            missing_optional+=("$pkg")
         fi
     done
 
