@@ -52,66 +52,63 @@ func TestShutdownError(t *testing.T) {
 }
 
 func TestShutdownResult(t *testing.T) {
-	result := &ShutdownResult{}
+	t.Run("empty result", func(t *testing.T) {
+		result := &ShutdownResult{}
 
-	// Empty result
-	if result.HasErrors() {
-		t.Error("empty result should not have errors")
-	}
-	if result.Error() != "" {
-		t.Error("empty result should have empty error string")
-	}
-	if result.AsError() != nil {
-		t.Error("empty result AsError should return nil")
-	}
+		if result.HasErrors() {
+			t.Error("empty result should not have errors")
+		}
+		if result.Error() != "" {
+			t.Error("empty result should have empty error string")
+		}
+		if result.AsError() != nil {
+			t.Error("empty result AsError should return nil")
+		}
+	})
 
-	// Add errors
-	result.Add(PhaseHotplugStop, errors.New("hotplug error"))
-	result.Add(PhaseVMShutdown, nil) // nil should be ignored
-	result.Add(PhaseNetworkCleanup, errors.New("network error"))
+	t.Run("with errors", func(t *testing.T) {
+		result := &ShutdownResult{}
+		result.Add(PhaseHotplugStop, errors.New("hotplug error"))
+		result.Add(PhaseVMShutdown, nil) // nil should be ignored
+		result.Add(PhaseNetworkCleanup, errors.New("network error"))
 
-	if !result.HasErrors() {
-		t.Error("result should have errors")
-	}
-	if len(result.Errors) != 2 {
-		t.Errorf("expected 2 errors, got %d", len(result.Errors))
-	}
+		if !result.HasErrors() {
+			t.Error("result should have errors")
+		}
+		if len(result.Errors) != 2 {
+			t.Errorf("expected 2 errors, got %d", len(result.Errors))
+		}
 
-	// Check FailedPhases()
-	phases := result.FailedPhases()
-	if len(phases) != 2 {
-		t.Errorf("expected 2 failed phases, got %d", len(phases))
-	}
-	if phases[0] != PhaseHotplugStop || phases[1] != PhaseNetworkCleanup {
-		t.Errorf("unexpected failed phases: %v", phases)
-	}
+		phases := result.FailedPhases()
+		if len(phases) != 2 {
+			t.Errorf("expected 2 failed phases, got %d", len(phases))
+		}
+		if phases[0] != PhaseHotplugStop || phases[1] != PhaseNetworkCleanup {
+			t.Errorf("unexpected failed phases: %v", phases)
+		}
 
-	// Check error message
-	errStr := result.Error()
-	if !strings.Contains(errStr, "hotplug_stop") {
-		t.Errorf("error should mention hotplug_stop: %s", errStr)
-	}
-	if !strings.Contains(errStr, "network_cleanup") {
-		t.Errorf("error should mention network_cleanup: %s", errStr)
-	}
+		errStr := result.Error()
+		if !strings.Contains(errStr, "hotplug_stop") {
+			t.Errorf("error should mention hotplug_stop: %s", errStr)
+		}
+		if !strings.Contains(errStr, "network_cleanup") {
+			t.Errorf("error should mention network_cleanup: %s", errStr)
+		}
+		if result.AsError() == nil {
+			t.Error("AsError should return non-nil for result with errors")
+		}
+	})
 
-	// Check AsError()
-	if result.AsError() == nil {
-		t.Error("AsError should return non-nil for result with errors")
-	}
-}
+	t.Run("multiple adds", func(t *testing.T) {
+		result := &ShutdownResult{}
+		result.Add(PhaseHotplugStop, errors.New("err1"))
+		result.Add(PhaseIOShutdown, errors.New("err2"))
+		result.Add(PhaseVMShutdown, errors.New("err3"))
 
-func TestShutdownResult_MultipleAdds(t *testing.T) {
-	result := &ShutdownResult{}
-
-	// Test adding multiple errors
-	result.Add(PhaseHotplugStop, errors.New("err1"))
-	result.Add(PhaseIOShutdown, errors.New("err2"))
-	result.Add(PhaseVMShutdown, errors.New("err3"))
-
-	if len(result.Errors) != 3 {
-		t.Errorf("expected 3 errors, got %d", len(result.Errors))
-	}
+		if len(result.Errors) != 3 {
+			t.Errorf("expected 3 errors, got %d", len(result.Errors))
+		}
+	})
 }
 
 func TestVMStartError(t *testing.T) {
@@ -133,26 +130,27 @@ func TestVMStartError(t *testing.T) {
 	}
 }
 
-func TestStateTransitionError_Is(t *testing.T) {
+func TestStateTransitionErrorType(t *testing.T) {
 	err := NewStateTransitionError("idle", "running", "creating")
 
-	if !errors.Is(err, ErrInvalidStateTransition) {
-		t.Error("StateTransitionError should match ErrInvalidStateTransition")
-	}
+	t.Run("matches ErrInvalidStateTransition", func(t *testing.T) {
+		if !errors.Is(err, ErrInvalidStateTransition) {
+			t.Error("should match ErrInvalidStateTransition")
+		}
+	})
 
-	// Should not match other sentinel errors
-	if errors.Is(err, ErrVMNotRunning) {
-		t.Error("StateTransitionError should not match ErrVMNotRunning")
-	}
-}
+	t.Run("does not match other sentinels", func(t *testing.T) {
+		if errors.Is(err, ErrVMNotRunning) {
+			t.Error("should not match ErrVMNotRunning")
+		}
+	})
 
-func TestStateTransitionError_Message(t *testing.T) {
-	err := NewStateTransitionError("idle", "running", "creating")
-
-	expected := "invalid state transition from idle to running (current state: creating)"
-	if err.Error() != expected {
-		t.Errorf("error message = %q, want %q", err.Error(), expected)
-	}
+	t.Run("error message format", func(t *testing.T) {
+		expected := "invalid state transition from idle to running (current state: creating)"
+		if err.Error() != expected {
+			t.Errorf("error message = %q, want %q", err.Error(), expected)
+		}
+	})
 }
 
 func TestShutdownPhase_Values(t *testing.T) {
