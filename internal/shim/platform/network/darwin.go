@@ -16,7 +16,7 @@ func newManager() Manager {
 	return &darwinManager{}
 }
 
-func (m *darwinManager) InitNetworkManager(ctx context.Context) (network.NetworkManager, error) {
+func (m *darwinManager) InitNetworkManager(ctx context.Context, stateStore network.NetworkStateStore) (network.NetworkManager, error) {
 	return nil, fmt.Errorf("network manager not supported on darwin")
 }
 

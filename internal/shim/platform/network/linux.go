@@ -22,14 +22,14 @@ func newManager() Manager {
 
 // InitNetworkManager creates and initializes a new NetworkManager instance.
 // Qemubox uses CNI (Container Network Interface) for all network management.
-// Network state is managed in-memory (cniResults map) and by CNI IPAM plugins
-// (state stored in /var/lib/cni/networks/).
-func (m *linuxManager) InitNetworkManager(ctx context.Context) (network.NetworkManager, error) {
+// Network state is persisted via the provided NetworkStateStore (e.g., containerd labels)
+// and by CNI IPAM plugins (state stored in /var/lib/cni/networks/).
+func (m *linuxManager) InitNetworkManager(ctx context.Context, stateStore network.NetworkStateStore) (network.NetworkManager, error) {
 	// Load CNI network configuration from environment
 	netCfg := network.LoadNetworkConfig()
 
-	// Create CNI-based NetworkManager
-	nm, err := network.NewNetworkManager(ctx, netCfg)
+	// Create CNI-based NetworkManager with state persistence
+	nm, err := network.NewNetworkManager(ctx, netCfg, stateStore)
 	if err != nil {
 		return nil, fmt.Errorf("create CNI network manager: %w", err)
 	}

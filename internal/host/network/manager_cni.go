@@ -70,7 +70,7 @@ type teardownInFlight struct {
 }
 
 // newCNINetworkManager creates a cniNetworkManager configured for CNI mode.
-func newCNINetworkManager(config NetworkConfig) (*cniNetworkManager, error) {
+func newCNINetworkManager(config NetworkConfig, stateStore NetworkStateStore) (*cniNetworkManager, error) {
 	// Create CNI manager
 	cniMgr, err := cni.NewCNIManager(
 		config.CNIConfDir,
@@ -80,10 +80,15 @@ func newCNINetworkManager(config NetworkConfig) (*cniNetworkManager, error) {
 		return nil, fmt.Errorf("failed to create CNI manager: %w", err)
 	}
 
+	// Use no-op store if none provided
+	if stateStore == nil {
+		stateStore = &noopStateStore{}
+	}
+
 	nm := &cniNetworkManager{
 		config:           config,
 		cniManager:       cniMgr,
-		cniResults:       make(map[string]*cni.CNIResult),
+		stateStore:       stateStore,
 		inFlight:         make(map[string]*setupInFlight),
 		teardownInFlight: make(map[string]*teardownInFlight),
 		metrics:          &Metrics{},
@@ -98,18 +103,15 @@ func newCNINetworkManager(config NetworkConfig) (*cniNetworkManager, error) {
 // perform the actual CNI setup. The others will block until setup completes, then return
 // the same result or error.
 func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env *Environment) error {
-	// Fast path: check if already configured
-	nm.cniMu.RLock()
-	if result, exists := nm.cniResults[env.ID]; exists {
-		nm.cniMu.RUnlock()
+	// Fast path: check if already configured in state store
+	if info, err := nm.stateStore.GetNetworkInfo(ctx, env.ID); err == nil && info != nil {
 		log.G(ctx).WithFields(log.Fields{
 			"vmID": env.ID,
-			"tap":  result.TAPDevice,
-		}).Debug("CNI resources already allocated")
-		nm.updateEnvironment(env, result)
+			"tap":  info.TapName,
+		}).Debug("CNI resources already allocated (from store)")
+		env.NetworkInfo = info
 		return nil
 	}
-	nm.cniMu.RUnlock()
 
 	// Check if another goroutine is already setting up this container
 	nm.inflightMu.Lock()
@@ -163,10 +165,12 @@ func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env 
 
 	nm.metrics.RecordSetup(true, false, duration)
 
-	// Store result
-	nm.cniMu.Lock()
-	nm.cniResults[env.ID] = result
-	nm.cniMu.Unlock()
+	// Persist result to state store
+	networkInfo := cniResultToNetworkInfo(result)
+	if err := nm.stateStore.SetNetworkInfo(ctx, env.ID, networkInfo); err != nil {
+		log.G(ctx).WithError(err).WithField("vmID", env.ID).
+			Warn("failed to persist network state; cleanup may fail after restart")
+	}
 
 	inflight.result = result
 	nm.updateEnvironment(env, result)
@@ -180,6 +184,17 @@ func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env 
 	}).Info("CNI network configured")
 
 	return nil
+}
+
+// cniResultToNetworkInfo converts a CNI result to NetworkInfo for storage.
+func cniResultToNetworkInfo(result *cni.CNIResult) *NetworkInfo {
+	return &NetworkInfo{
+		TapName: result.TAPDevice,
+		MAC:     result.TAPMAC,
+		IP:      result.IPAddress,
+		Netmask: result.Netmask,
+		Gateway: result.Gateway,
+	}
 }
 
 // performCNISetup executes the actual CNI plugin chain setup.
@@ -319,16 +334,15 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 func (nm *cniNetworkManager) performCNITeardown(ctx context.Context, env *Environment) CleanupResult {
 	result := CleanupResult{}
 
-	// Get CNI result for this VM
-	nm.cniMu.RLock()
-	cniResult, exists := nm.cniResults[env.ID]
-	nm.cniMu.RUnlock()
-
-	if !exists {
+	// Get network info from state store (survives restarts)
+	storedInfo, err := nm.stateStore.GetNetworkInfo(ctx, env.ID)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("vmID", env.ID).
+			Warn("Failed to read network state from store")
+	}
+	if storedInfo == nil {
 		log.G(ctx).WithField("vmID", env.ID).
-			Warn("No CNI result found for VM, attempting cleanup anyway")
-		// Even if we don't have the result in memory, try to clean up
-		// This handles the case where the shim restarted and lost the in-memory state
+			Warn("No network state found in store, attempting cleanup anyway")
 	}
 
 	// Get the netns path that was created during setup
@@ -384,17 +398,18 @@ func (nm *cniNetworkManager) performCNITeardown(ctx context.Context, env *Enviro
 		result.NetNSDelete = err
 	}
 
-	// Remove from CNI results map
-	nm.cniMu.Lock()
-	delete(nm.cniResults, env.ID)
-	nm.cniMu.Unlock()
+	// Clear state from store
+	if err := nm.stateStore.ClearNetworkInfo(ctx, env.ID); err != nil {
+		log.G(ctx).WithError(err).WithField("vmID", env.ID).
+			Warn("Failed to clear network state from store")
+	}
 	result.InMemoryClear = true
 
 	// Log final status
-	if exists {
+	if storedInfo != nil {
 		fields := log.Fields{
 			"vmID": env.ID,
-			"tap":  cniResult.TAPDevice,
+			"tap":  storedInfo.TapName,
 		}
 		if err := result.Err(); err != nil {
 			log.G(ctx).WithFields(fields).WithError(err).

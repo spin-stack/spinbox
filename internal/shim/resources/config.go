@@ -15,18 +15,24 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/aledbf/qemubox/containerd/internal/shim/metadata"
 )
 
 // ConfigInfo provides additional context about resource configuration decisions.
 type ConfigInfo struct {
 	HasExplicitCPULimit    bool
 	HasExplicitMemoryLimit bool
+	HasAnnotationOverrides bool
 	HostCPUs               int
 	HostMemory             int64
 }
 
 // ComputeConfig calculates VM resource configuration from an OCI spec.
 // It returns the resource config and additional context about the decisions made.
+//
+// The function first extracts resource requests from the OCI spec's Linux resources,
+// then applies any qemubox-specific annotation overrides from spec.Annotations.
+// Annotation overrides take precedence over OCI resource limits.
 func ComputeConfig(ctx context.Context, spec *specs.Spec) (*vm.VMResourceConfig, ConfigInfo) {
 	// Extract resource requests from OCI spec
 	cpuRequest := extractCPURequest(spec)
@@ -95,7 +101,84 @@ func ComputeConfig(ctx context.Context, spec *specs.Spec) (*vm.VMResourceConfig,
 		HostMemory:             hostMemory,
 	}
 
+	// Apply qemubox annotation overrides (take precedence over OCI limits)
+	if spec != nil && spec.Annotations != nil {
+		annoCfg, err := metadata.ParseAnnotations(spec.Annotations)
+		if err != nil {
+			log.G(ctx).WithError(err).Warn("failed to parse qemubox annotations, ignoring overrides")
+		} else if annoCfg.HasOverrides() {
+			info.HasAnnotationOverrides = true
+			applyAnnotationOverrides(ctx, resourceCfg, annoCfg, hostCPUs, hostMemory, virtioMemAlignment)
+		}
+	}
+
 	return resourceCfg, info
+}
+
+// applyAnnotationOverrides applies qemubox annotation configuration to the resource config.
+// All values are validated and capped to host limits.
+func applyAnnotationOverrides(ctx context.Context, cfg *vm.VMResourceConfig, anno *metadata.AnnotationConfig, hostCPUs int, hostMemory, memAlignment int64) {
+	if anno.BootCPUs != nil {
+		newVal := min(*anno.BootCPUs, hostCPUs)
+		if newVal > 0 {
+			log.G(ctx).WithFields(log.Fields{
+				"original": cfg.BootCPUs,
+				"override": newVal,
+			}).Debug("applying boot-cpus annotation override")
+			cfg.BootCPUs = newVal
+		}
+	}
+
+	if anno.MaxCPUs != nil {
+		newVal := min(*anno.MaxCPUs, hostCPUs)
+		if newVal > 0 {
+			log.G(ctx).WithFields(log.Fields{
+				"original": cfg.MaxCPUs,
+				"override": newVal,
+			}).Debug("applying max-cpus annotation override")
+			cfg.MaxCPUs = newVal
+		}
+	}
+
+	if anno.MemorySize != nil {
+		newVal := alignMemory(min(*anno.MemorySize, hostMemory), memAlignment)
+		if newVal > 0 {
+			log.G(ctx).WithFields(log.Fields{
+				"original": cfg.MemorySize,
+				"override": newVal,
+			}).Debug("applying memory-size annotation override")
+			cfg.MemorySize = newVal
+		}
+	}
+
+	if anno.MemoryHotplugSize != nil {
+		newVal := alignMemory(min(*anno.MemoryHotplugSize, hostMemory), memAlignment)
+		if newVal > 0 {
+			log.G(ctx).WithFields(log.Fields{
+				"original": cfg.MemoryHotplugSize,
+				"override": newVal,
+			}).Debug("applying memory-hotplug-size annotation override")
+			cfg.MemoryHotplugSize = newVal
+		}
+	}
+
+	if anno.MemorySlots != nil && *anno.MemorySlots > 0 {
+		log.G(ctx).WithFields(log.Fields{
+			"original": cfg.MemorySlots,
+			"override": *anno.MemorySlots,
+		}).Debug("applying memory-slots annotation override")
+		cfg.MemorySlots = *anno.MemorySlots
+	}
+
+	// Ensure consistency: BootCPUs <= MaxCPUs
+	if cfg.BootCPUs > cfg.MaxCPUs {
+		cfg.MaxCPUs = cfg.BootCPUs
+	}
+
+	// Ensure consistency: MemorySize <= MemoryHotplugSize
+	if cfg.MemorySize > cfg.MemoryHotplugSize {
+		cfg.MemoryHotplugSize = cfg.MemorySize
+	}
 }
 
 // extractCPURequest extracts the CPU request from the OCI spec.

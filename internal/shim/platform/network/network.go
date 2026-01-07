@@ -12,7 +12,9 @@ import (
 // Manager handles platform-specific network operations.
 type Manager interface {
 	// InitNetworkManager creates and initializes a NetworkManager for the platform.
-	InitNetworkManager(ctx context.Context) (network.NetworkManager, error)
+	// The stateStore is used to persist network state across shim restarts.
+	// If stateStore is nil, network state will not be persisted.
+	InitNetworkManager(ctx context.Context, stateStore network.NetworkStateStore) (network.NetworkManager, error)
 
 	// Setup configures networking for a VM instance.
 	// Returns the network configuration and an error if setup fails.

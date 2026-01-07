@@ -6,6 +6,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/lifecycle"
+	"github.com/aledbf/qemubox/containerd/internal/shim/metadata"
 	"github.com/aledbf/qemubox/containerd/internal/shim/resources"
 	"github.com/aledbf/qemubox/containerd/internal/shim/transform"
 )
@@ -305,6 +307,10 @@ func (s *service) finalizeCreate(ctx context.Context, state *createState, resp *
 	s.containerID = r.ID
 	s.containerMu.Unlock()
 
+	// Persist state to containerd labels for recovery and debugging.
+	// Failures here are logged but don't fail container creation.
+	s.persistContainerMetadata(ctx, r.ID, state, resp)
+
 	// Start hotplug controllers
 	callbacks := resources.CreateVMClientCallbacks(s.connManager.GetClient)
 	if cpuCtrl := resources.StartCPUHotplug(ctx, r.ID, state.vmInstance, state.resourceCfg, callbacks); cpuCtrl != nil {
@@ -316,6 +322,56 @@ func (s *service) finalizeCreate(ctx context.Context, state *createState, resp *
 		s.controllerMu.Lock()
 		s.memoryHotplugControllers[r.ID] = memCtrl
 		s.controllerMu.Unlock()
+	}
+}
+
+// persistContainerMetadata saves container/VM state to containerd labels.
+// This enables state recovery and provides visibility for debugging.
+func (s *service) persistContainerMetadata(ctx context.Context, containerID string, state *createState, resp *taskAPI.CreateTaskResponse) {
+	if s.metadataManager == nil {
+		return
+	}
+
+	// Set VM state to running
+	if err := s.metadataManager.SetVMState(ctx, containerID, metadata.VMStateRunning); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to persist VM state label")
+	}
+
+	// Set creation timestamp
+	if err := s.metadataManager.SetTimestamp(ctx, containerID, metadata.LabelCreatedAt); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to persist created-at label")
+	}
+
+	// Persist resource configuration
+	if state.resourceCfg != nil {
+		if err := s.metadataManager.SetResourceConfig(ctx, containerID, state.resourceCfg); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to persist resource config labels")
+		}
+	}
+
+	// Persist network configuration
+	if state.netConfig != nil {
+		netState := &metadata.NetworkState{
+			IP:        net.ParseIP(state.netConfig.IP),
+			Gateway:   net.ParseIP(state.netConfig.Gateway),
+			Netmask:   state.netConfig.Netmask,
+			DNS:       state.netConfig.DNS,
+			Interface: state.netConfig.InterfaceName,
+			NetnsPath: state.netnsPath,
+		}
+		if err := s.metadataManager.SetNetworkInfo(ctx, containerID, netState); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to persist network info labels")
+		}
+	}
+
+	// Persist process info
+	if err := s.metadataManager.SetProcessInfo(ctx, containerID, resp.Pid, state.containerIO.Terminal); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to persist process info labels")
+	}
+
+	// Set started timestamp
+	if err := s.metadataManager.SetTimestamp(ctx, containerID, metadata.LabelStartedAt); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to persist started-at label")
 	}
 }
 

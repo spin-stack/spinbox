@@ -5,24 +5,18 @@
 // # Synchronization Model
 //
 // The cniNetworkManager coordinates CNI network setup across multiple concurrent
-// container creation requests. Thread safety is achieved through two separate
-// synchronization mechanisms:
+// container creation requests. Thread safety is achieved through in-flight coordination:
 //
-// 1. Result Cache (cniResults map, protected by cniMu RWMutex):
-//   - Stores completed CNI setup results for cleanup
-//   - Read lock for checking if already configured (fast path)
-//   - Write lock only when storing/removing results
-//
-// 2. In-Flight Coordination (inFlight map, protected by inflightMu Mutex):
+// In-Flight Coordination (inFlight map, protected by inflightMu Mutex):
 //   - Prevents duplicate CNI setup for the same container ID
 //   - First caller becomes the "worker" and performs setup
 //   - Subsequent callers block on a channel until worker completes
 //   - Worker shares result/error with all waiters via the channel
 //
-// Locking Order (when holding multiple locks):
-//  1. inflightMu (always acquire first if needed)
-//  2. cniMu (acquire second)
-//     Never hold inflightMu during CNI operations (expensive I/O)
+// State Persistence:
+//   - Network state is persisted via NetworkStateStore (e.g., containerd labels)
+//   - This survives shim restarts and enables proper cleanup
+//   - No in-memory caching - single source of truth is the store
 //
 // Goroutine Ownership:
 //   - Each ensureNetworkResourcesCNI call runs in caller's goroutine
@@ -34,7 +28,7 @@
 //   - Network namespace: Created during setup, deleted during teardown
 //   - TAP device: Created by CNI plugins, destroyed during teardown
 //   - IP allocation: Managed by CNI IPAM plugin, released during teardown
-//   - cniResults entry: Stored after successful setup, removed during teardown
+//   - State store entry: Written after successful setup, cleared during teardown
 //   - inFlight entry: Created when setup starts, removed when setup completes
 package network
 
@@ -106,9 +100,8 @@ type cniNetworkManager struct {
 	// CNI manager for network configuration
 	cniManager *cni.CNIManager
 
-	// CNI state storage (maps VM ID to CNI result for cleanup)
-	cniResults map[string]*cni.CNIResult
-	cniMu      sync.RWMutex
+	// State store for persisting network configuration (survives restarts)
+	stateStore NetworkStateStore
 
 	// Tracks in-flight setup operations to avoid duplicate work
 	// Multiple concurrent calls for the same ID will coordinate through this map
@@ -129,14 +122,16 @@ type cniNetworkManager struct {
 }
 
 // NewNetworkManager creates a network manager for the configured mode.
+// The stateStore is used to persist network state across shim restarts.
+// If stateStore is nil, a no-op store is used (state will not persist).
 func NewNetworkManager(
 	ctx context.Context,
 	config NetworkConfig,
+	stateStore NetworkStateStore,
 ) (NetworkManager, error) {
-	// Log the network mode
 	log.G(ctx).Info("Initializing CNI network manager")
 
-	return newCNINetworkManager(config)
+	return newCNINetworkManager(config, stateStore)
 }
 
 // Close stops the network manager and releases internal resources.
@@ -159,4 +154,20 @@ func (nm *cniNetworkManager) ReleaseNetworkResources(ctx context.Context, env *E
 // Metrics returns the CNI operation metrics for this manager instance.
 func (nm *cniNetworkManager) Metrics() *Metrics {
 	return nm.metrics
+}
+
+// noopStateStore is a NetworkStateStore that does nothing.
+// Used when no persistence is configured.
+type noopStateStore struct{}
+
+func (n *noopStateStore) GetNetworkInfo(context.Context, string) (*NetworkInfo, error) {
+	return nil, nil
+}
+
+func (n *noopStateStore) SetNetworkInfo(context.Context, string, *NetworkInfo) error {
+	return nil
+}
+
+func (n *noopStateStore) ClearNetworkInfo(context.Context, string) error {
+	return nil
 }

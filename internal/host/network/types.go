@@ -36,6 +36,21 @@ type Environment struct {
 	NetworkInfo *NetworkInfo
 }
 
+// NetworkStateStore provides persistence for network state.
+// This interface decouples the network manager from the specific storage implementation
+// (e.g., containerd labels, BoltDB, etc.).
+type NetworkStateStore interface {
+	// GetNetworkInfo retrieves persisted network state for a container.
+	// Returns nil, nil if no state exists.
+	GetNetworkInfo(ctx context.Context, containerID string) (*NetworkInfo, error)
+
+	// SetNetworkInfo persists network state for a container.
+	SetNetworkInfo(ctx context.Context, containerID string, info *NetworkInfo) error
+
+	// ClearNetworkInfo removes persisted network state for a container.
+	ClearNetworkInfo(ctx context.Context, containerID string) error
+}
+
 // NetworkManager defines the interface for network management operations
 type NetworkManager interface {
 	// Close stops the network manager and releases internal resources

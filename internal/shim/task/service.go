@@ -95,6 +95,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
 	"github.com/aledbf/qemubox/containerd/internal/shim/lifecycle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
+	"github.com/aledbf/qemubox/containerd/internal/shim/metadata"
 	platformMounts "github.com/aledbf/qemubox/containerd/internal/shim/platform/mounts"
 	platformNetwork "github.com/aledbf/qemubox/containerd/internal/shim/platform/network"
 )
@@ -148,14 +149,39 @@ var (
 
 // NewTaskService creates a new instance of a task service.
 func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TTRPCTaskService, error) {
+	// Initialize metadata manager for label persistence FIRST.
+	// This connects back to containerd to store/retrieve container labels.
+	// The network manager needs this for state persistence.
+	var metadataMgr metadata.MetadataManager
+	if containerdAddress, err := shim.ReadAddress("address"); err == nil {
+		ns, _ := namespaces.Namespace(ctx)
+		if ns == "" {
+			ns = defaultNamespace
+		}
+		metadataMgr, err = metadata.NewContainerdMetadataManager(ctx, containerdAddress, ns)
+		if err != nil {
+			// Graceful degradation: log warning but continue without persistence
+			log.G(ctx).WithError(err).Warn("failed to initialize metadata manager; state will not persist across restarts")
+			metadataMgr = metadata.NewNoopManager()
+		}
+	} else {
+		log.G(ctx).WithError(err).Debug("containerd address not available; metadata persistence disabled")
+		metadataMgr = metadata.NewNoopManager()
+	}
+
+	// Create network state store adapter from metadata manager.
+	// This allows the network manager to persist state via containerd labels.
+	networkStateStore := metadata.NewNetworkStateStore(metadataMgr)
+
 	// Initialize platform managers
 	netMgr := platformNetwork.New()
-	nm, err := netMgr.InitNetworkManager(ctx)
+	nm, err := netMgr.InitNetworkManager(ctx, networkStateStore)
 	if err != nil {
 		return nil, fmt.Errorf("initialize network manager: %w", err)
 	}
 
 	vmLM := lifecycle.NewManager()
+
 	s := &service{
 		events:                   make(chan any, eventChannelBuffer),
 		cpuHotplugControllers:    make(map[string]cpuhotplug.CPUHotplugController),
@@ -167,6 +193,7 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 		initiateShutdown:         sd.Shutdown,
 		shutdownSvc:              sd,
 		connManager:              NewConnectionManager(vmLM.DialClient, vmLM.DialClientWithRetry),
+		metadataManager:          metadataMgr,
 	}
 	sd.RegisterCallback(s.shutdown)
 
@@ -264,6 +291,11 @@ type service struct {
 
 	initStarted atomic.Bool // True once the init process has been started
 	connManager *ConnectionManager
+
+	// === Metadata Persistence ===
+	// metadataManager persists container/VM state to containerd labels.
+	// May be nil if containerd connection failed (graceful degradation).
+	metadataManager metadata.MetadataManager
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -280,29 +312,10 @@ func (s *service) shutdown(ctx context.Context) error {
 	var mountCleanup func(context.Context) error
 
 	// Stop hotplug controllers before VM shutdown
-	s.controllerMu.Lock()
-	for id, controller := range s.cpuHotplugControllers {
-		controller.Stop()
-		delete(s.cpuHotplugControllers, id)
-	}
-	for id, controller := range s.memoryHotplugControllers {
-		controller.Stop()
-		delete(s.memoryHotplugControllers, id)
-	}
-	s.controllerMu.Unlock()
+	s.shutdownHotplugControllers()
 
 	// Shutdown IO for container and execs
-	if s.container != nil && s.container.io != nil {
-		// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
-		if err := s.container.io.init.forwarder.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("container %q io shutdown: %w", s.containerID, err))
-		}
-		for execID, pio := range s.container.io.exec {
-			if err := pio.forwarder.Shutdown(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
-			}
-		}
-	}
+	errs = append(errs, s.shutdownContainerIO(ctx)...)
 	if s.container != nil {
 		mountCleanup = s.container.mountCleanup
 		s.container.mountCleanup = nil
@@ -321,12 +334,7 @@ func (s *service) shutdown(ctx context.Context) error {
 	s.initStarted.Store(false)
 
 	// Release network resources AFTER VM shutdown
-	if s.containerID != "" {
-		env := &network.Environment{ID: s.containerID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
-		}
-	}
+	s.releaseNetworkResources(ctx)
 
 	if mountCleanup != nil {
 		if err := mountCleanup(ctx); err != nil {
@@ -341,6 +349,9 @@ func (s *service) shutdown(ctx context.Context) error {
 		}
 	}
 
+	// Clear metadata labels and close manager
+	errs = append(errs, s.shutdownMetadataManager(ctx)...)
+
 	// Stop forwarding events
 	s.eventsClosed.Store(true)
 	s.eventsCloseOnce.Do(func() {
@@ -348,6 +359,68 @@ func (s *service) shutdown(ctx context.Context) error {
 	})
 
 	return errors.Join(errs...)
+}
+
+// shutdownHotplugControllers stops all hotplug controllers.
+// Must be called with controllerMu NOT held.
+func (s *service) shutdownHotplugControllers() {
+	s.controllerMu.Lock()
+	defer s.controllerMu.Unlock()
+
+	for id, controller := range s.cpuHotplugControllers {
+		controller.Stop()
+		delete(s.cpuHotplugControllers, id)
+	}
+	for id, controller := range s.memoryHotplugControllers {
+		controller.Stop()
+		delete(s.memoryHotplugControllers, id)
+	}
+}
+
+// shutdownContainerIO shuts down I/O forwarders for the container and execs.
+// Must be called with containerMu held.
+func (s *service) shutdownContainerIO(ctx context.Context) []error {
+	var errs []error
+	if s.container != nil && s.container.io != nil {
+		// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
+		if err := s.container.io.init.forwarder.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("container %q io shutdown: %w", s.containerID, err))
+		}
+		for execID, pio := range s.container.io.exec {
+			if err := pio.forwarder.Shutdown(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
+			}
+		}
+	}
+	return errs
+}
+
+// releaseNetworkResources releases CNI network resources.
+// Must be called with containerMu held (reads containerID).
+func (s *service) releaseNetworkResources(ctx context.Context) {
+	if s.containerID != "" {
+		env := &network.Environment{ID: s.containerID}
+		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
+		}
+	}
+}
+
+// shutdownMetadataManager clears labels and closes the metadata manager.
+// Must be called with containerMu held (reads containerID).
+func (s *service) shutdownMetadataManager(ctx context.Context) []error {
+	var errs []error
+	if s.metadataManager != nil {
+		if s.containerID != "" {
+			if err := s.metadataManager.ClearLabels(ctx, s.containerID); err != nil {
+				log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to clear metadata labels")
+			}
+		}
+		if err := s.metadataManager.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("metadata manager close: %w", err))
+		}
+	}
+	return errs
 }
 
 // getTaskClient returns the cached TTRPC client for task RPC calls.
