@@ -179,27 +179,31 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 			VMM: testVMM,
 		},
 		CPUHotplug: CPUHotplugConfig{
-			MonitorInterval:      "10s",
-			ScaleUpCooldown:      "20s",
-			ScaleDownCooldown:    "40s",
-			ScaleUpThreshold:     85.0,
-			ScaleDownThreshold:   40.0,
+			HotplugConfig: HotplugConfig{
+				MonitorInterval:    "10s",
+				ScaleUpCooldown:    "20s",
+				ScaleDownCooldown:  "40s",
+				ScaleUpThreshold:   85.0,
+				ScaleDownThreshold: 40.0,
+				ScaleUpStability:   3,
+				ScaleDownStability: 5,
+				EnableScaleDown:    false,
+			},
 			ScaleUpThrottleLimit: 10.0,
-			ScaleUpStability:     3,
-			ScaleDownStability:   5,
-			EnableScaleDown:      false,
 		},
 		MemHotplug: MemHotplugConfig{
-			MonitorInterval:    "15s",
-			ScaleUpCooldown:    "45s",
-			ScaleDownCooldown:  "90s",
-			ScaleUpThreshold:   90.0,
-			ScaleDownThreshold: 50.0,
-			OOMSafetyMarginMB:  256,
-			IncrementSizeMB:    256,
-			ScaleUpStability:   2,
-			ScaleDownStability: 4,
-			EnableScaleDown:    true,
+			HotplugConfig: HotplugConfig{
+				MonitorInterval:    "15s",
+				ScaleUpCooldown:    "45s",
+				ScaleDownCooldown:  "90s",
+				ScaleUpThreshold:   90.0,
+				ScaleDownThreshold: 50.0,
+				ScaleUpStability:   2,
+				ScaleDownStability: 4,
+				EnableScaleDown:    true,
+			},
+			OOMSafetyMarginMB: 256,
+			IncrementSizeMB:   256,
 		},
 	}
 
@@ -623,12 +627,12 @@ func TestValidate_Comprehensive(t *testing.T) {
 	}
 }
 
-func TestResetForTesting(t *testing.T) {
-	// This test demonstrates that ResetForTesting allows testing different
+func TestReset(t *testing.T) {
+	// This test demonstrates that Reset allows testing different
 	// configurations in the same test run by resetting the global singleton state
 
 	// Reset any cached config from previous tests
-	ResetForTesting()
+	Reset()
 
 	// Create first config environment
 	env1 := createTestConfigEnv(t, t.TempDir())
@@ -647,16 +651,16 @@ func TestResetForTesting(t *testing.T) {
 		t.Errorf("first config: expected StateDir %s, got %s", env1.stateDir, loadedCfg1.Paths.StateDir)
 	}
 
-	// Without ResetForTesting, Get() would return the cached first config
+	// Without Reset, Get() would return the cached first config
 	// even after changing QEMUBOX_CONFIG. Verify this:
 	t.Setenv("QEMUBOX_CONFIG", "/this/does/not/exist")
 	cachedCfg, _ := Get()
 	if cachedCfg.Paths.ShareDir != env1.shareDir {
-		t.Error("expected Get() to return cached config without ResetForTesting")
+		t.Error("expected Get() to return cached config without Reset")
 	}
 
 	// Now reset and load second config
-	ResetForTesting()
+	Reset()
 
 	// Create second config environment
 	env2 := createTestConfigEnv(t, t.TempDir())
@@ -676,7 +680,7 @@ func TestResetForTesting(t *testing.T) {
 
 	// Verify configs are actually different
 	if loadedCfg1.Paths.ShareDir == loadedCfg2.Paths.ShareDir {
-		t.Error("ResetForTesting did not allow loading different config")
+		t.Error("Reset did not allow loading different config")
 	}
 	if env1.shareDir == env2.shareDir {
 		t.Fatal("test setup error: directories should be different")
