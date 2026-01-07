@@ -25,7 +25,9 @@ import (
 // It returns an optional cleanup function that should be called on container
 // delete to unmount any mounted filesystems.
 //
-//nolint:gocognit // The mount pipeline is kept inline to match containerd semantics.
+// https://github.com/containerd/containerd/blob/main/core/mount/mount.go
+//
+//nolint:gocognit,cyclop // The mount pipeline is kept inline to match containerd semantics:
 func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (cleanup func(context.Context) error, retErr error) {
 	if len(mounts) == 0 {
 		return nil, nil
@@ -208,6 +210,95 @@ var (
 	overlayPattern = regexp.MustCompile(`\{\{\s*overlay\s+(\d+)\s+(\d+)\s*\}\}`)
 )
 
+// parseIndex validates and returns an index from a string.
+func parseIndex(indexStr string, maxLen int) (int, error) {
+	i, err := strconv.Atoi(indexStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid index %q: %w", indexStr, err)
+	}
+	if i < 0 || i >= maxLen {
+		return 0, fmt.Errorf("index out of bounds: %d, has %d active mounts", i, maxLen)
+	}
+	return i, nil
+}
+
+// replaceSimplePattern replaces a single-index pattern using the provided getter.
+// Returns the result string and any error encountered during replacement.
+func replaceSimplePattern(s string, pattern *regexp.Regexp, mounts []mount.ActiveMount, getter func(int) string) (string, error) {
+	var capturedErr error
+	result := pattern.ReplaceAllStringFunc(s, func(match string) string {
+		if capturedErr != nil {
+			return match
+		}
+		matches := pattern.FindStringSubmatch(match)
+		if len(matches) != 2 {
+			capturedErr = fmt.Errorf("invalid pattern: %s", match)
+			return match
+		}
+		idx, err := parseIndex(matches[1], len(mounts))
+		if err != nil {
+			capturedErr = err
+			return match
+		}
+		return getter(idx)
+	})
+	return result, capturedErr
+}
+
+// replaceOverlayPattern handles the overlay N M pattern replacement.
+// Returns the result string and any error encountered during replacement.
+func replaceOverlayPattern(s string, mounts []mount.ActiveMount) (string, error) {
+	var capturedErr error
+	result := overlayPattern.ReplaceAllStringFunc(s, func(match string) string {
+		if capturedErr != nil {
+			return match
+		}
+		matches := overlayPattern.FindStringSubmatch(match)
+		if len(matches) != 3 {
+			capturedErr = fmt.Errorf("invalid overlay pattern: %s", match)
+			return match
+		}
+		start, err := strconv.Atoi(matches[1])
+		if err != nil {
+			capturedErr = fmt.Errorf("invalid start index in overlay: %w", err)
+			return match
+		}
+		end, err := strconv.Atoi(matches[2])
+		if err != nil {
+			capturedErr = fmt.Errorf("invalid end index in overlay: %w", err)
+			return match
+		}
+		dirs, err := buildOverlayDirs(start, end, mounts)
+		if err != nil {
+			capturedErr = err
+			return match
+		}
+		return dirs
+	})
+	return result, capturedErr
+}
+
+// buildOverlayDirs builds the colon-separated directory list for overlay.
+func buildOverlayDirs(start, end int, mounts []mount.ActiveMount) (string, error) {
+	var dirs []string
+	if start > end {
+		if start >= len(mounts) || end < 0 {
+			return "", fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(mounts))
+		}
+		for i := start; i >= end; i-- {
+			dirs = append(dirs, mounts[i].MountPoint)
+		}
+	} else {
+		if start < 0 || end >= len(mounts) {
+			return "", fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(mounts))
+		}
+		for i := start; i <= end; i++ {
+			dirs = append(dirs, mounts[i].MountPoint)
+		}
+	}
+	return strings.Join(dirs, ":"), nil
+}
+
 // formatString returns a function that performs safe string substitution.
 // Uses explicit pattern matching instead of Go templates to prevent injection attacks.
 //
@@ -223,118 +314,26 @@ func formatString(s string) func([]mount.ActiveMount) (string, error) {
 
 	return func(a []mount.ActiveMount) (string, error) {
 		result := s
-		var parseErr error
+		var err error
 
-		// Helper to get index and validate bounds
-		getIndex := func(indexStr string) (int, error) {
-			i, err := strconv.Atoi(indexStr)
-			if err != nil {
-				return 0, fmt.Errorf("invalid index %q: %w", indexStr, err)
-			}
-			if i < 0 || i >= len(a) {
-				return 0, fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
-			}
-			return i, nil
+		result, err = replaceSimplePattern(result, sourcePattern, a, func(i int) string { return a[i].Source })
+		if err != nil {
+			return "", fmt.Errorf("source pattern: %w", err)
 		}
 
-		// Replace {{source N}}
-		result = sourcePattern.ReplaceAllStringFunc(result, func(match string) string {
-			if parseErr != nil {
-				return match
-			}
-			matches := sourcePattern.FindStringSubmatch(match)
-			if len(matches) != 2 {
-				parseErr = fmt.Errorf("invalid source pattern: %s", match)
-				return match
-			}
-			idx, err := getIndex(matches[1])
-			if err != nil {
-				parseErr = err
-				return match
-			}
-			return a[idx].Source
-		})
+		result, err = replaceSimplePattern(result, targetPattern, a, func(i int) string { return a[i].Target })
+		if err != nil {
+			return "", fmt.Errorf("target pattern: %w", err)
+		}
 
-		// Replace {{target N}}
-		result = targetPattern.ReplaceAllStringFunc(result, func(match string) string {
-			if parseErr != nil {
-				return match
-			}
-			matches := targetPattern.FindStringSubmatch(match)
-			if len(matches) != 2 {
-				parseErr = fmt.Errorf("invalid target pattern: %s", match)
-				return match
-			}
-			idx, err := getIndex(matches[1])
-			if err != nil {
-				parseErr = err
-				return match
-			}
-			return a[idx].Target
-		})
+		result, err = replaceSimplePattern(result, mountPattern, a, func(i int) string { return a[i].MountPoint })
+		if err != nil {
+			return "", fmt.Errorf("mount pattern: %w", err)
+		}
 
-		// Replace {{mount N}}
-		result = mountPattern.ReplaceAllStringFunc(result, func(match string) string {
-			if parseErr != nil {
-				return match
-			}
-			matches := mountPattern.FindStringSubmatch(match)
-			if len(matches) != 2 {
-				parseErr = fmt.Errorf("invalid mount pattern: %s", match)
-				return match
-			}
-			idx, err := getIndex(matches[1])
-			if err != nil {
-				parseErr = err
-				return match
-			}
-			return a[idx].MountPoint
-		})
-
-		// Replace {{overlay N M}}
-		result = overlayPattern.ReplaceAllStringFunc(result, func(match string) string {
-			if parseErr != nil {
-				return match
-			}
-			matches := overlayPattern.FindStringSubmatch(match)
-			if len(matches) != 3 {
-				parseErr = fmt.Errorf("invalid overlay pattern: %s", match)
-				return match
-			}
-			start, err := strconv.Atoi(matches[1])
-			if err != nil {
-				parseErr = fmt.Errorf("invalid start index in overlay: %w", err)
-				return match
-			}
-			end, err := strconv.Atoi(matches[2])
-			if err != nil {
-				parseErr = fmt.Errorf("invalid end index in overlay: %w", err)
-				return match
-			}
-
-			var dirs []string
-			if start > end {
-				if start >= len(a) || end < 0 {
-					parseErr = fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
-					return match
-				}
-				for i := start; i >= end; i-- {
-					dirs = append(dirs, a[i].MountPoint)
-				}
-			} else {
-				if start < 0 || end >= len(a) {
-					parseErr = fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
-					return match
-				}
-				for i := start; i <= end; i++ {
-					dirs = append(dirs, a[i].MountPoint)
-				}
-			}
-			return strings.Join(dirs, ":")
-		})
-
-		if parseErr != nil {
-			return "", parseErr
+		result, err = replaceOverlayPattern(result, a)
+		if err != nil {
+			return "", fmt.Errorf("overlay pattern: %w", err)
 		}
 
 		// Check for any remaining unprocessed patterns (indicates unsupported syntax)

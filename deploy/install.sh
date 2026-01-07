@@ -289,6 +289,102 @@ check_cni_config() {
     return 1
 }
 
+check_ubuntu_packages() {
+    echo "Checking required Ubuntu packages for QEMU..."
+
+    # Only run on Ubuntu/Debian systems
+    if [ ! -f /etc/os-release ]; then
+        echo -e "  ${YELLOW}⚠${NC}  Cannot detect OS, skipping package check"
+        return 0
+    fi
+
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    if [[ "${ID:-}" != "ubuntu" && "${ID:-}" != "debian" ]]; then
+        echo -e "  ${YELLOW}⚠${NC}  Not Ubuntu/Debian (detected: ${ID:-unknown}), skipping package check"
+        echo "      You may need to manually install equivalent packages for your distribution."
+        return 0
+    fi
+
+    echo -e "  ${GREEN}✓${NC} Detected: ${PRETTY_NAME:-$ID}"
+
+    # Required packages for QEMU dependencies
+    # These provide the shared libraries listed in ldd output
+    local required_packages=(
+        libpixman-1-0      # libpixman-1.so.0
+        libseccomp2        # libseccomp.so.2
+        zlib1g             # libz.so.1
+        libzstd1           # libzstd.so.1
+        libaio1t64         # libaio.so.1t64 (Ubuntu 24.04+)
+        liburing2          # liburing.so.2
+        libpmem1           # libpmem.so.1 (persistent memory)
+        librdmacm1         # librdmacm.so.1 (RDMA)
+        libibverbs1        # libibverbs.so.1 (InfiniBand)
+        libdw1             # libdw.so.1 (DWARF debugging)
+        libbpf1            # libbpf.so.1 (BPF)
+    )
+
+    # Check if dpkg is available
+    if ! command -v dpkg &> /dev/null; then
+        echo -e "  ${YELLOW}⚠${NC}  dpkg not available, skipping package check"
+        return 0
+    fi
+
+    local missing_required=()
+    local missing_optional=()
+
+    # Check required packages
+    for pkg in "${required_packages[@]}"; do
+        if dpkg -s "$pkg" &> /dev/null; then
+            echo -e "  ${GREEN}✓${NC} $pkg"
+        else
+            # Handle t64 suffix package name changes (Ubuntu 24.04+ time_t transition)
+            # Try both directions: pkg -> pkg + t64, and pkg -> pkg - t64
+            local alt_pkg=""
+            if [[ "$pkg" == *t64 ]]; then
+                # Try without t64 suffix (e.g., libaio1t64 -> libaio1)
+                alt_pkg="${pkg%t64}"
+            else
+                # Try with t64 suffix (e.g., librdmacm1 -> librdmacm1t64)
+                alt_pkg="${pkg}t64"
+            fi
+
+            if [[ -n "$alt_pkg" ]] && dpkg -s "$alt_pkg" &> /dev/null; then
+                echo -e "  ${GREEN}✓${NC} $alt_pkg (provides $pkg)"
+                continue
+            fi
+            missing_required+=("$pkg")
+        fi
+    done
+
+    # Report missing packages
+    if [ ${#missing_required[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${RED}✗${NC} Missing required packages:"
+        for pkg in "${missing_required[@]}"; do
+            echo -e "      ${RED}•${NC} $pkg"
+        done
+        echo ""
+        echo "      Install with:"
+        echo -e "      ${BLUE}sudo apt-get install ${missing_required[*]}${NC}"
+        echo ""
+        return 1
+    fi
+
+    if [ ${#missing_optional[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${YELLOW}⚠${NC}  Missing optional packages (some features may be unavailable):"
+        for pkg in "${missing_optional[@]}"; do
+            echo -e "      ${YELLOW}•${NC} $pkg"
+        done
+        echo ""
+        echo "      Install with:"
+        echo -e "      ${BLUE}sudo apt-get install ${missing_optional[*]}${NC}"
+    fi
+
+    return 0
+}
+
 check_qemu_dependencies() {
     echo "Checking QEMU binary dependencies..."
 
@@ -321,7 +417,7 @@ check_qemu_dependencies() {
         echo -e "  ${GREEN}✓${NC} QEMU binary is statically linked (no external dependencies)"
         return 0
     else
-        echo -e "  ${GREEN}✓${NC} All QEMU dependencies are satisfied"
+        echo -e "  ${GREEN}✓${NC} All QEMU library dependencies are satisfied"
         return 0
     fi
 }
@@ -346,6 +442,11 @@ run_prerequisite_checks() {
     echo ""
 
     if ! check_cni_plugins; then
+        errors=$((errors + 1))
+    fi
+    echo ""
+
+    if ! check_ubuntu_packages; then
         errors=$((errors + 1))
     fi
     echo ""
@@ -395,6 +496,40 @@ run_prerequisite_checks() {
 # Run prerequisite checks for shim-only mode
 if [ "$SHIM_ONLY" = true ] && [ "$SKIP_CHECKS" = false ]; then
     if ! run_prerequisite_checks; then
+        exit 1
+    fi
+fi
+
+# Run basic checks for full installation mode
+if [ "$SHIM_ONLY" = false ] && [ "$SKIP_CHECKS" = false ]; then
+    echo ""
+    echo "🔍 Running prerequisite checks..."
+    echo ""
+
+    errors=0
+
+    if ! check_kvm_access; then
+        errors=$((errors + 1))
+    fi
+    echo ""
+
+    if ! check_ubuntu_packages; then
+        errors=$((errors + 1))
+    fi
+    echo ""
+
+    if ! check_qemu_dependencies; then
+        errors=$((errors + 1))
+    fi
+    echo ""
+
+    if [ $errors -gt 0 ]; then
+        echo "================================================"
+        echo -e "${RED}Prerequisite checks failed with $errors error(s)${NC}"
+        echo ""
+        echo "Please resolve the errors above before installing."
+        echo "Use --skip-checks to bypass these checks (not recommended)."
+        echo "================================================"
         exit 1
     fi
 fi

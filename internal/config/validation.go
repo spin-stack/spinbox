@@ -20,6 +20,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("runtime validation failed: %w", err)
 	}
 
+	if err := c.validateTimeouts(); err != nil {
+		return fmt.Errorf("timeouts validation failed: %w", err)
+	}
+
 	if err := c.validateCPUHotplug(); err != nil {
 		return fmt.Errorf("cpu_hotplug validation failed: %w", err)
 	}
@@ -100,6 +104,38 @@ func (c *Config) validateRuntime() error {
 	// VMM must be "qemu" (only supported backend)
 	if c.Runtime.VMM != "qemu" {
 		return fmt.Errorf("vmm must be \"qemu\" (only supported backend), got %q", c.Runtime.VMM)
+	}
+
+	return nil
+}
+
+// validateTimeouts validates timeout configuration and caches parsed durations.
+func (c *Config) validateTimeouts() error {
+	// Parse and cache all durations
+	if err := c.Timeouts.parseAndCache(); err != nil {
+		return fmt.Errorf("invalid duration: %w", err)
+	}
+
+	// Validate bounds on cached durations
+	d := c.Timeouts.Durations()
+	durations := map[string]time.Duration{
+		"vm_start":          d.VMStart,
+		"device_detection":  d.DeviceDetection,
+		"shutdown_grace":    d.ShutdownGrace,
+		"event_reconnect":   d.EventReconnect,
+		"task_client_retry": d.TaskClientRetry,
+		"io_wait":           d.IOWait,
+		"qmp_command":       d.QMPCommand,
+	}
+
+	for name, dur := range durations {
+		if dur <= 0 {
+			return fmt.Errorf("%s must be a positive duration, got %s", name, dur)
+		}
+		// Reasonable upper bound to catch configuration errors (1 hour)
+		if dur > time.Hour {
+			return fmt.Errorf("%s is unusually large (%s), maximum is 1h", name, dur)
+		}
 	}
 
 	return nil
@@ -215,53 +251,16 @@ func (c *Config) validateMemHotplug() error {
 // Helper functions
 
 // canonicalizePath resolves symlinks and cleans the path for consistent validation.
-// This surfaces the real location but does not enforce a security boundary.
-// If the path doesn't exist yet (for directories we'll create), we clean it
-// and resolve as much of the path as possible.
+// For non-existent paths (directories we'll create), returns the cleaned path.
 func canonicalizePath(path string) (string, error) {
-	// First clean the path to normalize it (remove . and .. where possible)
 	cleaned := filepath.Clean(path)
-
-	// Try to resolve symlinks for the full path
 	resolved, err := filepath.EvalSymlinks(cleaned)
 	if err == nil {
 		return resolved, nil
 	}
-
-	// If path doesn't exist, resolve parent directories that do exist
-	// This handles the case where we need to create a directory
 	if os.IsNotExist(err) {
-		// Walk up the path to find the first existing parent
-		dir := cleaned
-		var nonExistent []string
-		for {
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				// Reached root, nothing exists
-				break
-			}
-
-			resolved, err := filepath.EvalSymlinks(parent)
-			if err == nil {
-				// Found an existing parent, reconstruct the path
-				for i := len(nonExistent) - 1; i >= 0; i-- {
-					resolved = filepath.Join(resolved, nonExistent[i])
-				}
-				resolved = filepath.Join(resolved, filepath.Base(dir))
-				return resolved, nil
-			}
-
-			if !os.IsNotExist(err) {
-				return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
-			}
-
-			nonExistent = append(nonExistent, filepath.Base(dir))
-			dir = parent
-		}
-		// Nothing exists, just return the cleaned path
 		return cleaned, nil
 	}
-
 	return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
 }
 

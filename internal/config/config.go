@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 const (
@@ -16,12 +17,51 @@ const (
 
 	// ConfigEnvVar is the environment variable to override config file location
 	ConfigEnvVar = "QEMUBOX_CONFIG"
+
+	// Path defaults
+	defaultShareDir = "/usr/share/qemubox"
+	defaultStateDir = "/var/lib/qemubox"
+	defaultLogDir   = "/var/log/qemubox"
+
+	// Runtime defaults
+	defaultVMM = "qemu"
+
+	// Timeout defaults
+	defaultVMStart         = "10s"
+	defaultDeviceDetection = "5s"
+	defaultShutdownGrace   = "2s"
+	defaultEventReconnect  = "2s"
+	defaultTaskClientRetry = "1s"
+	defaultIOWait          = "30s"
+	defaultQMPCommand      = "5s"
+
+	// CPU hotplug defaults
+	defaultCPUMonitorInterval      = "5s"
+	defaultCPUScaleUpCooldown      = "10s"
+	defaultCPUScaleDownCooldown    = "30s"
+	defaultCPUScaleUpThreshold     = 80.0
+	defaultCPUScaleDownThreshold   = 50.0
+	defaultCPUScaleUpThrottleLimit = 5.0
+	defaultCPUScaleUpStability     = 2
+	defaultCPUScaleDownStability   = 6
+
+	// Memory hotplug defaults
+	defaultMemMonitorInterval    = "10s"
+	defaultMemScaleUpCooldown    = "30s"
+	defaultMemScaleDownCooldown  = "60s"
+	defaultMemScaleUpThreshold   = 85.0
+	defaultMemScaleDownThreshold = 60.0
+	defaultMemOOMSafetyMarginMB  = 128
+	defaultMemIncrementSizeMB    = 128
+	defaultMemScaleUpStability   = 3
+	defaultMemScaleDownStability = 6
 )
 
 // Config is the root configuration structure
 type Config struct {
 	Paths      PathsConfig      `json:"paths"`
 	Runtime    RuntimeConfig    `json:"runtime"`
+	Timeouts   TimeoutsConfig   `json:"timeouts"`
 	CPUHotplug CPUHotplugConfig `json:"cpu_hotplug"`
 	MemHotplug MemHotplugConfig `json:"memory_hotplug"`
 }
@@ -38,6 +78,110 @@ type PathsConfig struct {
 // RuntimeConfig defines runtime behavior settings
 type RuntimeConfig struct {
 	VMM string `json:"vmm"` // VMM backend (currently only "qemu" supported)
+}
+
+// TimeoutsConfig defines timeout durations for various lifecycle operations.
+// All values are duration strings (e.g., "5s", "2m", "500ms").
+// These timeouts can be tuned based on hardware performance and workload characteristics.
+//
+// After validation, use the Durations() method to access parsed values.
+type TimeoutsConfig struct {
+	// VMStart is the timeout for VM boot (QEMU process start to vsock connection).
+	// Default: 10s. Increase for slow storage or complex configurations.
+	VMStart string `json:"vm_start"`
+
+	// DeviceDetection is the timeout for guest device detection (virtio-blk).
+	// Default: 5s. Increase for VMs with many disks or slow I/O.
+	DeviceDetection string `json:"device_detection"`
+
+	// ShutdownGrace is how long to wait for guest OS shutdown before SIGKILL.
+	// Default: 2s. Increase for applications with slow shutdown handlers.
+	ShutdownGrace string `json:"shutdown_grace"`
+
+	// EventReconnect is how long to retry event stream reconnection.
+	// Default: 2s. Increase for workloads with high VM pause frequency.
+	EventReconnect string `json:"event_reconnect"`
+
+	// TaskClientRetry is how long to retry vsock dial for task RPCs.
+	// Default: 1s. Increase for environments with vsock routing instability.
+	TaskClientRetry string `json:"task_client_retry"`
+
+	// IOWait is the timeout for waiting for I/O forwarder completion on exit.
+	// Default: 30s. Decrease for faster container cleanup, increase for large outputs.
+	IOWait string `json:"io_wait"`
+
+	// QMPCommand is the default timeout for QMP commands to QEMU.
+	// Default: 5s. Increase for complex QMP operations or slow hosts.
+	QMPCommand string `json:"qmp_command"`
+
+	// parsed holds the parsed durations, set during validation
+	parsed *TimeoutDurations
+}
+
+// TimeoutDurations contains parsed timeout values ready for use.
+// Obtained via TimeoutsConfig.Durations() after validation.
+type TimeoutDurations struct {
+	VMStart         time.Duration
+	DeviceDetection time.Duration
+	ShutdownGrace   time.Duration
+	EventReconnect  time.Duration
+	TaskClientRetry time.Duration
+	IOWait          time.Duration
+	QMPCommand      time.Duration
+}
+
+// parseAndCache parses all duration strings and caches the results.
+// Returns an error if any duration is invalid.
+func (t *TimeoutsConfig) parseAndCache() error {
+	d := &TimeoutDurations{}
+	var err error
+
+	d.VMStart, err = time.ParseDuration(t.VMStart)
+	if err != nil {
+		return fmt.Errorf("vm_start: %w", err)
+	}
+
+	d.DeviceDetection, err = time.ParseDuration(t.DeviceDetection)
+	if err != nil {
+		return fmt.Errorf("device_detection: %w", err)
+	}
+
+	d.ShutdownGrace, err = time.ParseDuration(t.ShutdownGrace)
+	if err != nil {
+		return fmt.Errorf("shutdown_grace: %w", err)
+	}
+
+	d.EventReconnect, err = time.ParseDuration(t.EventReconnect)
+	if err != nil {
+		return fmt.Errorf("event_reconnect: %w", err)
+	}
+
+	d.TaskClientRetry, err = time.ParseDuration(t.TaskClientRetry)
+	if err != nil {
+		return fmt.Errorf("task_client_retry: %w", err)
+	}
+
+	d.IOWait, err = time.ParseDuration(t.IOWait)
+	if err != nil {
+		return fmt.Errorf("io_wait: %w", err)
+	}
+
+	d.QMPCommand, err = time.ParseDuration(t.QMPCommand)
+	if err != nil {
+		return fmt.Errorf("qmp_command: %w", err)
+	}
+
+	t.parsed = d
+	return nil
+}
+
+// Durations returns the parsed timeout values.
+// Panics if called before validation (parseAndCache).
+func (t *TimeoutsConfig) Durations() *TimeoutDurations {
+	if t.parsed == nil {
+		panic("TimeoutsConfig.Durations() called before validation")
+	}
+	return t.parsed
 }
 
 // CPUHotplugConfig defines CPU hotplug controller settings
@@ -135,130 +279,114 @@ func LoadFrom(path string) (*Config, error) {
 // DefaultConfig returns the default configuration.
 // This is primarily for reference and documentation - production code should use Get().
 func DefaultConfig() *Config {
-	cfg := &Config{
+	return &Config{
 		Paths: PathsConfig{
-			ShareDir:      "/usr/share/qemubox",
-			StateDir:      "/var/lib/qemubox",
-			LogDir:        "/var/log/qemubox",
+			ShareDir:      defaultShareDir,
+			StateDir:      defaultStateDir,
+			LogDir:        defaultLogDir,
 			QEMUPath:      "", // Auto-discovered
 			QEMUSharePath: "", // Auto-discovered
 		},
 		Runtime: RuntimeConfig{
-			VMM: "qemu",
+			VMM: defaultVMM,
+		},
+		Timeouts: TimeoutsConfig{
+			VMStart:         defaultVMStart,
+			DeviceDetection: defaultDeviceDetection,
+			ShutdownGrace:   defaultShutdownGrace,
+			EventReconnect:  defaultEventReconnect,
+			TaskClientRetry: defaultTaskClientRetry,
+			IOWait:          defaultIOWait,
+			QMPCommand:      defaultQMPCommand,
 		},
 		CPUHotplug: CPUHotplugConfig{
-			MonitorInterval:      "5s",
-			ScaleUpCooldown:      "10s",
-			ScaleDownCooldown:    "30s",
-			ScaleUpThreshold:     80.0,
-			ScaleDownThreshold:   50.0,
-			ScaleUpThrottleLimit: 5.0,
-			ScaleUpStability:     2,
-			ScaleDownStability:   6,
+			MonitorInterval:      defaultCPUMonitorInterval,
+			ScaleUpCooldown:      defaultCPUScaleUpCooldown,
+			ScaleDownCooldown:    defaultCPUScaleDownCooldown,
+			ScaleUpThreshold:     defaultCPUScaleUpThreshold,
+			ScaleDownThreshold:   defaultCPUScaleDownThreshold,
+			ScaleUpThrottleLimit: defaultCPUScaleUpThrottleLimit,
+			ScaleUpStability:     defaultCPUScaleUpStability,
+			ScaleDownStability:   defaultCPUScaleDownStability,
 			EnableScaleDown:      true,
 		},
 		MemHotplug: MemHotplugConfig{
-			MonitorInterval:    "10s",
-			ScaleUpCooldown:    "30s",
-			ScaleDownCooldown:  "60s",
-			ScaleUpThreshold:   85.0,
-			ScaleDownThreshold: 60.0,
-			OOMSafetyMarginMB:  128,
-			IncrementSizeMB:    128,
-			ScaleUpStability:   3,
-			ScaleDownStability: 6,
+			MonitorInterval:    defaultMemMonitorInterval,
+			ScaleUpCooldown:    defaultMemScaleUpCooldown,
+			ScaleDownCooldown:  defaultMemScaleDownCooldown,
+			ScaleUpThreshold:   defaultMemScaleUpThreshold,
+			ScaleDownThreshold: defaultMemScaleDownThreshold,
+			OOMSafetyMarginMB:  defaultMemOOMSafetyMarginMB,
+			IncrementSizeMB:    defaultMemIncrementSizeMB,
+			ScaleUpStability:   defaultMemScaleUpStability,
+			ScaleDownStability: defaultMemScaleDownStability,
 			EnableScaleDown:    false,
 		},
 	}
-	return cfg
+}
+
+// Helper functions for applying defaults
+func setDefault(s *string, dflt string) {
+	if *s == "" {
+		*s = dflt
+	}
+}
+
+func setDefaultFloat(f *float64, dflt float64) {
+	if *f == 0 {
+		*f = dflt
+	}
+}
+
+func setDefaultInt(i *int, dflt int) {
+	if *i == 0 {
+		*i = dflt
+	}
+}
+
+func setDefaultInt64(i *int64, dflt int64) {
+	if *i == 0 {
+		*i = dflt
+	}
 }
 
 // applyDefaults fills in default values for any empty fields
 func (c *Config) applyDefaults() {
-	defaults := DefaultConfig()
+	// Paths (QEMUPath and QEMUSharePath are intentionally left empty for auto-discovery)
+	setDefault(&c.Paths.ShareDir, defaultShareDir)
+	setDefault(&c.Paths.StateDir, defaultStateDir)
+	setDefault(&c.Paths.LogDir, defaultLogDir)
 
-	c.applyPathDefaults(defaults)
-	c.applyRuntimeDefaults(defaults)
-	c.applyCPUHotplugDefaults(defaults)
-	c.applyMemHotplugDefaults(defaults)
-}
-
-func (c *Config) applyPathDefaults(defaults *Config) {
-	// Paths
-	if c.Paths.ShareDir == "" {
-		c.Paths.ShareDir = defaults.Paths.ShareDir
-	}
-	if c.Paths.StateDir == "" {
-		c.Paths.StateDir = defaults.Paths.StateDir
-	}
-	if c.Paths.LogDir == "" {
-		c.Paths.LogDir = defaults.Paths.LogDir
-	}
-	// QEMUPath and QEMUSharePath are intentionally left empty for auto-discovery
-}
-
-func (c *Config) applyRuntimeDefaults(defaults *Config) {
 	// Runtime
-	if c.Runtime.VMM == "" {
-		c.Runtime.VMM = defaults.Runtime.VMM
-	}
-}
+	setDefault(&c.Runtime.VMM, defaultVMM)
 
-func (c *Config) applyCPUHotplugDefaults(defaults *Config) {
+	// Timeouts
+	setDefault(&c.Timeouts.VMStart, defaultVMStart)
+	setDefault(&c.Timeouts.DeviceDetection, defaultDeviceDetection)
+	setDefault(&c.Timeouts.ShutdownGrace, defaultShutdownGrace)
+	setDefault(&c.Timeouts.EventReconnect, defaultEventReconnect)
+	setDefault(&c.Timeouts.TaskClientRetry, defaultTaskClientRetry)
+	setDefault(&c.Timeouts.IOWait, defaultIOWait)
+	setDefault(&c.Timeouts.QMPCommand, defaultQMPCommand)
+
 	// CPU Hotplug
-	if c.CPUHotplug.MonitorInterval == "" {
-		c.CPUHotplug.MonitorInterval = defaults.CPUHotplug.MonitorInterval
-	}
-	if c.CPUHotplug.ScaleUpCooldown == "" {
-		c.CPUHotplug.ScaleUpCooldown = defaults.CPUHotplug.ScaleUpCooldown
-	}
-	if c.CPUHotplug.ScaleDownCooldown == "" {
-		c.CPUHotplug.ScaleDownCooldown = defaults.CPUHotplug.ScaleDownCooldown
-	}
-	if c.CPUHotplug.ScaleUpThreshold == 0 {
-		c.CPUHotplug.ScaleUpThreshold = defaults.CPUHotplug.ScaleUpThreshold
-	}
-	if c.CPUHotplug.ScaleDownThreshold == 0 {
-		c.CPUHotplug.ScaleDownThreshold = defaults.CPUHotplug.ScaleDownThreshold
-	}
-	if c.CPUHotplug.ScaleUpThrottleLimit == 0 {
-		c.CPUHotplug.ScaleUpThrottleLimit = defaults.CPUHotplug.ScaleUpThrottleLimit
-	}
-	if c.CPUHotplug.ScaleUpStability == 0 {
-		c.CPUHotplug.ScaleUpStability = defaults.CPUHotplug.ScaleUpStability
-	}
-	if c.CPUHotplug.ScaleDownStability == 0 {
-		c.CPUHotplug.ScaleDownStability = defaults.CPUHotplug.ScaleDownStability
-	}
-}
+	setDefault(&c.CPUHotplug.MonitorInterval, defaultCPUMonitorInterval)
+	setDefault(&c.CPUHotplug.ScaleUpCooldown, defaultCPUScaleUpCooldown)
+	setDefault(&c.CPUHotplug.ScaleDownCooldown, defaultCPUScaleDownCooldown)
+	setDefaultFloat(&c.CPUHotplug.ScaleUpThreshold, defaultCPUScaleUpThreshold)
+	setDefaultFloat(&c.CPUHotplug.ScaleDownThreshold, defaultCPUScaleDownThreshold)
+	setDefaultFloat(&c.CPUHotplug.ScaleUpThrottleLimit, defaultCPUScaleUpThrottleLimit)
+	setDefaultInt(&c.CPUHotplug.ScaleUpStability, defaultCPUScaleUpStability)
+	setDefaultInt(&c.CPUHotplug.ScaleDownStability, defaultCPUScaleDownStability)
 
-func (c *Config) applyMemHotplugDefaults(defaults *Config) {
 	// Memory Hotplug
-	if c.MemHotplug.MonitorInterval == "" {
-		c.MemHotplug.MonitorInterval = defaults.MemHotplug.MonitorInterval
-	}
-	if c.MemHotplug.ScaleUpCooldown == "" {
-		c.MemHotplug.ScaleUpCooldown = defaults.MemHotplug.ScaleUpCooldown
-	}
-	if c.MemHotplug.ScaleDownCooldown == "" {
-		c.MemHotplug.ScaleDownCooldown = defaults.MemHotplug.ScaleDownCooldown
-	}
-	if c.MemHotplug.ScaleUpThreshold == 0 {
-		c.MemHotplug.ScaleUpThreshold = defaults.MemHotplug.ScaleUpThreshold
-	}
-	if c.MemHotplug.ScaleDownThreshold == 0 {
-		c.MemHotplug.ScaleDownThreshold = defaults.MemHotplug.ScaleDownThreshold
-	}
-	if c.MemHotplug.OOMSafetyMarginMB == 0 {
-		c.MemHotplug.OOMSafetyMarginMB = defaults.MemHotplug.OOMSafetyMarginMB
-	}
-	if c.MemHotplug.IncrementSizeMB == 0 {
-		c.MemHotplug.IncrementSizeMB = defaults.MemHotplug.IncrementSizeMB
-	}
-	if c.MemHotplug.ScaleUpStability == 0 {
-		c.MemHotplug.ScaleUpStability = defaults.MemHotplug.ScaleUpStability
-	}
-	if c.MemHotplug.ScaleDownStability == 0 {
-		c.MemHotplug.ScaleDownStability = defaults.MemHotplug.ScaleDownStability
-	}
+	setDefault(&c.MemHotplug.MonitorInterval, defaultMemMonitorInterval)
+	setDefault(&c.MemHotplug.ScaleUpCooldown, defaultMemScaleUpCooldown)
+	setDefault(&c.MemHotplug.ScaleDownCooldown, defaultMemScaleDownCooldown)
+	setDefaultFloat(&c.MemHotplug.ScaleUpThreshold, defaultMemScaleUpThreshold)
+	setDefaultFloat(&c.MemHotplug.ScaleDownThreshold, defaultMemScaleDownThreshold)
+	setDefaultInt64(&c.MemHotplug.OOMSafetyMarginMB, defaultMemOOMSafetyMarginMB)
+	setDefaultInt64(&c.MemHotplug.IncrementSizeMB, defaultMemIncrementSizeMB)
+	setDefaultInt(&c.MemHotplug.ScaleUpStability, defaultMemScaleUpStability)
+	setDefaultInt(&c.MemHotplug.ScaleDownStability, defaultMemScaleDownStability)
 }

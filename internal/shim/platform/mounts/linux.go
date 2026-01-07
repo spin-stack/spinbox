@@ -181,6 +181,46 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 	return []*types.Mount{out}, addDisks, nil
 }
 
+// overlayAnalysis holds the results of analyzing overlay mount options.
+type overlayAnalysis struct {
+	workdirIdx    int  // index of workdir= option, -1 if not found
+	upperdirIdx   int  // index of upperdir= option, -1 if not found
+	hasLowerTmpl  bool // true if lowerdir uses a template
+	needTransform bool // true if upperdir/workdir need transformation
+	overlayEnd    int  // end index from overlay template, -1 if not found
+}
+
+// analyzeOverlayOptions examines overlay mount options to determine if transformation is needed.
+func analyzeOverlayOptions(options []string) overlayAnalysis {
+	result := overlayAnalysis{workdirIdx: -1, upperdirIdx: -1, overlayEnd: -1}
+	overlayRe := regexp.MustCompile(`\{\{\s*overlay\s+(\d+)\s+(\d+)\s*\}\}`)
+
+	for i, opt := range options {
+		switch {
+		case strings.HasPrefix(opt, "upperdir="):
+			result.upperdirIdx = i
+			if !strings.Contains(opt, "{{") {
+				result.needTransform = true
+			}
+		case strings.HasPrefix(opt, "workdir="):
+			result.workdirIdx = i
+			if !strings.Contains(opt, "{{") {
+				result.needTransform = true
+			}
+		case strings.HasPrefix(opt, "lowerdir="):
+			if strings.Contains(opt, "{{") {
+				result.hasLowerTmpl = true
+				if matches := overlayRe.FindStringSubmatch(opt); len(matches) == 3 {
+					start, _ := strconv.Atoi(matches[1])
+					end, _ := strconv.Atoi(matches[2])
+					result.overlayEnd = max(start, end)
+				}
+			}
+		}
+	}
+	return result
+}
+
 // handleOverlay transforms an overlay mount for VM use.
 //
 // The overlay's upperdir/workdir paths (which are host paths) need to be transformed
@@ -195,59 +235,20 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 // 2. Adding a tmpfs mount as the next mount after the EROFS layers
 // 3. Using templates to reference the tmpfs mount for upperdir/workdir
 func (m *linuxManager) handleOverlay(ctx context.Context, id string, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
-	var (
-		wdi           = -1
-		udi           = -1
-		hasLowerTmpl  = false
-		needTransform = false
-		overlayEnd    = -1
-	)
-
-	// Regex to extract overlay range from lowerdir template
-	overlayRe := regexp.MustCompile(`\{\{\s*overlay\s+(\d+)\s+(\d+)\s*\}\}`)
-
-	// Find option indices and check for templates
-	for i, opt := range mnt.Options {
-		switch {
-		case strings.HasPrefix(opt, "upperdir="):
-			udi = i
-			if !strings.Contains(opt, "{{") {
-				needTransform = true
-			}
-		case strings.HasPrefix(opt, "workdir="):
-			wdi = i
-			if !strings.Contains(opt, "{{") {
-				needTransform = true
-			}
-		case strings.HasPrefix(opt, "lowerdir="):
-			if strings.Contains(opt, "{{") {
-				hasLowerTmpl = true
-				// Extract the end index from overlay template
-				if matches := overlayRe.FindStringSubmatch(opt); len(matches) == 3 {
-					start, _ := strconv.Atoi(matches[1])
-					end, _ := strconv.Atoi(matches[2])
-					if end > start {
-						overlayEnd = end
-					} else {
-						overlayEnd = start
-					}
-				}
-			}
-		}
-	}
+	analysis := analyzeOverlayOptions(mnt.Options)
 
 	// If lowerdir has a template but upperdir/workdir are host paths,
 	// transform them to use tmpfs inside the guest.
-	if hasLowerTmpl && needTransform && udi >= 0 && wdi >= 0 && overlayEnd >= 0 {
+	if analysis.hasLowerTmpl && analysis.needTransform && analysis.upperdirIdx >= 0 && analysis.workdirIdx >= 0 && analysis.overlayEnd >= 0 {
 		// The tmpfs mount will be at index overlayEnd+1
 		// We use templates to reference it for upperdir/workdir
-		tmpfsIndex := overlayEnd + 1
+		tmpfsIndex := analysis.overlayEnd + 1
 
 		log.G(ctx).WithFields(log.Fields{
 			"id":         id,
-			"overlayEnd": overlayEnd,
+			"overlayEnd": analysis.overlayEnd,
 			"tmpfsIndex": tmpfsIndex,
-			"needsUpper": needTransform,
+			"needsUpper": analysis.needTransform,
 		}).Debug("transforming overlay for VM use with tmpfs upper/work dirs")
 
 		// Create a copy of options with transformed paths using templates
@@ -255,10 +256,10 @@ func (m *linuxManager) handleOverlay(ctx context.Context, id string, mnt *types.
 		newOpts := make([]string, 0, len(mnt.Options)+2)
 		for i, opt := range mnt.Options {
 			switch i {
-			case udi:
+			case analysis.upperdirIdx:
 				// Transform upperdir to use tmpfs mount point via template
 				newOpts = append(newOpts, fmt.Sprintf("upperdir={{ mount %d }}/upper", tmpfsIndex))
-			case wdi:
+			case analysis.workdirIdx:
 				// Transform workdir to use tmpfs mount point via template
 				newOpts = append(newOpts, fmt.Sprintf("workdir={{ mount %d }}/work", tmpfsIndex))
 			default:
@@ -299,7 +300,7 @@ func (m *linuxManager) handleOverlay(ctx context.Context, id string, mnt *types.
 	}
 
 	// No transformation needed - pass through as-is
-	if wdi < 0 || udi < 0 {
+	if analysis.workdirIdx < 0 || analysis.upperdirIdx < 0 {
 		log.G(ctx).WithField("options", mnt.Options).Warn("overlayfs missing workdir or upperdir")
 	}
 
