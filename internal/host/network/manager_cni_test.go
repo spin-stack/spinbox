@@ -14,21 +14,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCleanupErrorMethods(t *testing.T) {
+func TestCleanupResultMethods(t *testing.T) {
 	tests := []struct {
 		name        string
-		result      CleanupError
+		result      CleanupResult
 		expectErr   bool
 		errContains []string
 	}{
 		{
 			name:      "no errors",
-			result:    CleanupError{InMemoryClear: true},
+			result:    CleanupResult{InMemoryClear: true},
 			expectErr: false,
 		},
 		{
 			name: "CNI teardown error only",
-			result: CleanupError{
+			result: CleanupResult{
 				CNITeardown:   errors.New("CNI failed"),
 				InMemoryClear: true,
 			},
@@ -37,7 +37,7 @@ func TestCleanupErrorMethods(t *testing.T) {
 		},
 		{
 			name: "netns delete error only",
-			result: CleanupError{
+			result: CleanupResult{
 				NetNSDelete:   errors.New("netns busy"),
 				InMemoryClear: true,
 			},
@@ -46,7 +46,7 @@ func TestCleanupErrorMethods(t *testing.T) {
 		},
 		{
 			name: "IPAM verify error only",
-			result: CleanupError{
+			result: CleanupResult{
 				IPAMVerify:    errors.New("IP still allocated"),
 				InMemoryClear: true,
 			},
@@ -55,7 +55,7 @@ func TestCleanupErrorMethods(t *testing.T) {
 		},
 		{
 			name: "multiple errors",
-			result: CleanupError{
+			result: CleanupResult{
 				CNITeardown: errors.New("CNI failed"),
 				NetNSDelete: errors.New("netns busy"),
 				IPAMVerify:  errors.New("IP leaked"),
@@ -70,64 +70,103 @@ func TestCleanupErrorMethods(t *testing.T) {
 			hasErr := tt.result.HasError()
 			assert.Equal(t, tt.expectErr, hasErr)
 
-			errStr := tt.result.Error()
+			err := tt.result.Err()
 			if tt.expectErr {
-				assert.NotEmpty(t, errStr)
+				require.Error(t, err)
+				errStr := err.Error()
 				for _, contains := range tt.errContains {
 					assert.Contains(t, errStr, contains)
 				}
 			} else {
-				assert.Empty(t, errStr)
+				assert.NoError(t, err)
 			}
 		})
 	}
 }
 
 func TestVerifyIPAMCleanup(t *testing.T) {
-	// Create a temporary IPAM directory structure
-	tmpDir := t.TempDir()
-	ipamDir := filepath.Join(tmpDir, "cni", "networks")
-	networkDir := filepath.Join(ipamDir, "test-network")
-	require.NoError(t, os.MkdirAll(networkDir, 0755))
-
-	// Create the manager with custom IPAM path (we'll test via direct function call)
-	nm := &cniNetworkManager{}
-
-	// Override the IPAM directory for testing
-	// We'll create a test helper instead
 	t.Run("no IPAM directory", func(t *testing.T) {
+		nm := &cniNetworkManager{
+			ipamDir: "/nonexistent/path/that/does/not/exist",
+		}
 		err := nm.verifyIPAMCleanup(context.Background(), "test-container")
 		assert.NoError(t, err) // Non-existent dir should not error
 	})
 
+	t.Run("empty IPAM directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		nm := &cniNetworkManager{
+			ipamDir: tmpDir,
+		}
+		err := nm.verifyIPAMCleanup(context.Background(), "test-container")
+		assert.NoError(t, err)
+	})
+
 	t.Run("leaked IP detected", func(t *testing.T) {
-		// Create the standard IPAM directory
-		stdIpamDir := "/var/lib/cni/networks"
-		if _, err := os.Stat(stdIpamDir); os.IsNotExist(err) {
-			t.Skip("Standard IPAM directory does not exist")
+		// Create a temporary IPAM directory structure
+		tmpDir := t.TempDir()
+		networkDir := filepath.Join(tmpDir, "test-network")
+		require.NoError(t, os.MkdirAll(networkDir, 0755))
+
+		// Create an IP file with the container ID (simulates leaked allocation)
+		ipFile := filepath.Join(networkDir, "10.88.0.5")
+		require.NoError(t, os.WriteFile(ipFile, []byte("leaked-container-id"), 0644))
+
+		nm := &cniNetworkManager{
+			ipamDir: tmpDir,
 		}
 
-		// This test would require root and actual IPAM setup
-		// Skip for unit tests
-		t.Skip("Requires actual IPAM setup")
+		// Should detect the leak
+		err := nm.verifyIPAMCleanup(context.Background(), "leaked-container-id")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cni.ErrIPAMLeak)
+		assert.Contains(t, err.Error(), "10.88.0.5")
+		assert.Contains(t, err.Error(), "test-network")
+
+		// Different container ID should not find a leak
+		err = nm.verifyIPAMCleanup(context.Background(), "other-container")
+		assert.NoError(t, err)
+	})
+
+	t.Run("ignores special files", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		networkDir := filepath.Join(tmpDir, "test-network")
+		require.NoError(t, os.MkdirAll(networkDir, 0755))
+
+		// Create special files that should be ignored
+		require.NoError(t, os.WriteFile(filepath.Join(networkDir, "last_reserved_ip"), []byte("test-container"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(networkDir, ".lock"), []byte("test-container"), 0644))
+
+		nm := &cniNetworkManager{
+			ipamDir: tmpDir,
+		}
+
+		// Should not detect a leak from special files
+		err := nm.verifyIPAMCleanup(context.Background(), "test-container")
+		assert.NoError(t, err)
 	})
 }
 
-func TestCleanupErrorImplementsError(t *testing.T) {
-	var err error = &CleanupError{
+func TestCleanupResultErr(t *testing.T) {
+	result := &CleanupResult{
 		CNITeardown: errors.New("test"),
 	}
+	err := result.Err()
 
 	// Should be usable as an error
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "test")
+
+	// No error case
+	okResult := &CleanupResult{InMemoryClear: true}
+	assert.NoError(t, okResult.Err())
 }
 
 func TestIPAMLeakErrorWrapping(t *testing.T) {
 	// Verify that IPAM leak errors are properly wrapped
-	leakErr := &CleanupError{
+	result := &CleanupResult{
 		IPAMVerify: cni.ErrIPAMLeak,
 	}
 
-	assert.ErrorIs(t, leakErr.IPAMVerify, cni.ErrIPAMLeak)
+	assert.ErrorIs(t, result.IPAMVerify, cni.ErrIPAMLeak)
 }

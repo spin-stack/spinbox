@@ -16,43 +16,57 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
 )
 
-// CleanupError reports what succeeded and what failed during network teardown.
+// CleanupResult reports what succeeded and what failed during network teardown.
 // This allows callers to understand partial failures instead of getting a single opaque error.
-type CleanupError struct {
+type CleanupResult struct {
 	CNITeardown   error // Error from CNI DEL operation
 	NetNSDelete   error // Error from network namespace deletion
 	IPAMVerify    error // Error from IPAM verification (nil = verified clean)
 	InMemoryClear bool  // Whether in-memory state was cleared
 }
 
-// Error returns a combined error message from all failures.
-func (c CleanupError) Error() string {
+// HasError returns true if any cleanup operation failed.
+func (c *CleanupResult) HasError() bool {
+	return c.CNITeardown != nil || c.NetNSDelete != nil || c.IPAMVerify != nil
+}
+
+// Err returns an error if any cleanup operation failed, nil otherwise.
+func (c *CleanupResult) Err() error {
+	if !c.HasError() {
+		return nil
+	}
+	return &cleanupError{result: c}
+}
+
+// cleanupError wraps CleanupResult as an error type.
+type cleanupError struct {
+	result *CleanupResult
+}
+
+func (c *cleanupError) Error() string {
 	var msgs []string
-	if c.CNITeardown != nil {
-		msgs = append(msgs, "CNI teardown: "+c.CNITeardown.Error())
+	if c.result.CNITeardown != nil {
+		msgs = append(msgs, "CNI teardown: "+c.result.CNITeardown.Error())
 	}
-	if c.NetNSDelete != nil {
-		msgs = append(msgs, "netns delete: "+c.NetNSDelete.Error())
+	if c.result.NetNSDelete != nil {
+		msgs = append(msgs, "netns delete: "+c.result.NetNSDelete.Error())
 	}
-	if c.IPAMVerify != nil {
-		msgs = append(msgs, "IPAM verify: "+c.IPAMVerify.Error())
-	}
-	if len(msgs) == 0 {
-		return ""
+	if c.result.IPAMVerify != nil {
+		msgs = append(msgs, "IPAM verify: "+c.result.IPAMVerify.Error())
 	}
 	return strings.Join(msgs, "; ")
 }
 
-// HasError returns true if any cleanup operation failed.
-func (c CleanupError) HasError() bool {
-	return c.CNITeardown != nil || c.NetNSDelete != nil || c.IPAMVerify != nil
+// Result returns the underlying CleanupResult for inspection.
+func (c *cleanupError) Result() *CleanupResult {
+	return c.result
 }
 
 // teardownInFlight tracks an in-progress teardown operation.
 // Prevents duplicate teardown attempts for the same container ID.
 type teardownInFlight struct {
 	done   chan struct{}
-	result CleanupError
+	result CleanupResult
 }
 
 // newCNINetworkManager creates a cniNetworkManager configured for CNI mode.
@@ -72,6 +86,8 @@ func newCNINetworkManager(config NetworkConfig) (*cniNetworkManager, error) {
 		cniResults:       make(map[string]*cni.CNIResult),
 		inFlight:         make(map[string]*setupInFlight),
 		teardownInFlight: make(map[string]*teardownInFlight),
+		metrics:          &Metrics{},
+		ipamDir:          "/var/lib/cni/networks",
 	}
 
 	return nm, nil
@@ -140,12 +156,12 @@ func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env 
 
 	if err != nil {
 		conflict := errors.Is(err, cni.ErrResourceConflict)
-		RecordSetup(false, conflict, duration)
+		nm.metrics.RecordSetup(false, conflict, duration)
 		inflight.err = err
 		return err
 	}
 
-	RecordSetup(true, false, duration)
+	nm.metrics.RecordSetup(true, false, duration)
 
 	// Store result
 	nm.cniMu.Lock()
@@ -202,23 +218,7 @@ func (nm *cniNetworkManager) performCNISetup(ctx context.Context, containerID st
 				"cniLatency":  cniLatency,
 			}).Warn("CNI setup failed due to resource conflict, attempting cleanup")
 
-			// Try to clean up orphaned resources using a unique temp netns name
-			// to avoid racing with other processes that might be using the same containerID.
-			cleanupID := fmt.Sprintf("%s-cleanup-%d", containerID, time.Now().UnixNano())
-			cleanupNetns, cleanupErr := cni.CreateNetNS(cleanupID)
-			if cleanupErr != nil {
-				log.G(ctx).WithError(cleanupErr).WithField("cleanupID", cleanupID).
-					Warn("failed to create temp netns for orphaned resource cleanup")
-			} else {
-				if teardownErr := nm.cniManager.Teardown(ctx, containerID, cleanupNetns); teardownErr != nil {
-					log.G(ctx).WithError(teardownErr).WithField("containerID", containerID).
-						Warn("failed to teardown orphaned CNI resources")
-				}
-				if deleteErr := cni.DeleteNetNS(cleanupID); deleteErr != nil {
-					log.G(ctx).WithError(deleteErr).WithField("cleanupID", cleanupID).
-						Warn("failed to delete temp cleanup netns")
-				}
-			}
+			nm.attemptOrphanCleanup(ctx, containerID)
 
 			return nil, fmt.Errorf("setup CNI network (resource conflict - orphaned resources from previous run?): %w", err)
 		}
@@ -235,6 +235,28 @@ func (nm *cniNetworkManager) performCNISetup(ctx context.Context, containerID st
 	return result, nil
 }
 
+// attemptOrphanCleanup tries to clean up orphaned CNI resources from a previous run.
+// Uses a unique temporary netns to avoid racing with other processes.
+func (nm *cniNetworkManager) attemptOrphanCleanup(ctx context.Context, containerID string) {
+	cleanupID := fmt.Sprintf("%s-cleanup-%d", containerID, time.Now().UnixNano())
+	cleanupNetns, err := cni.CreateNetNS(cleanupID)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("cleanupID", cleanupID).
+			Warn("failed to create temp netns for orphaned resource cleanup")
+		return
+	}
+
+	if teardownErr := nm.cniManager.Teardown(ctx, containerID, cleanupNetns); teardownErr != nil {
+		log.G(ctx).WithError(teardownErr).WithField("containerID", containerID).
+			Warn("failed to teardown orphaned CNI resources")
+	}
+
+	if deleteErr := cni.DeleteNetNS(cleanupID); deleteErr != nil {
+		log.G(ctx).WithError(deleteErr).WithField("cleanupID", cleanupID).
+			Warn("failed to delete temp cleanup netns")
+	}
+}
+
 // updateEnvironment updates the environment with network information from a CNI result.
 func (nm *cniNetworkManager) updateEnvironment(env *Environment, result *cni.CNIResult) {
 	env.NetworkInfo = &NetworkInfo{
@@ -248,7 +270,7 @@ func (nm *cniNetworkManager) updateEnvironment(env *Environment, result *cni.CNI
 
 // releaseNetworkResourcesCNI releases network resources using CNI plugins.
 // Uses deduplication to prevent concurrent teardown attempts for the same container.
-// Returns a CleanupError with details on what succeeded/failed.
+// Returns an error wrapping CleanupResult with details on what succeeded/failed.
 func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env *Environment) error {
 	// Check if another goroutine is already tearing down this container
 	nm.teardownMu.Lock()
@@ -264,10 +286,7 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 			return ctx.Err()
 		}
 
-		if inflight.result.HasError() {
-			return &inflight.result
-		}
-		return nil
+		return inflight.result.Err()
 	}
 
 	// We're the first - create an in-flight tracker
@@ -290,18 +309,15 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 	inflight.result = nm.performCNITeardown(ctx, env)
 	duration := time.Since(start)
 
-	RecordTeardown(!inflight.result.HasError(), duration)
+	nm.metrics.RecordTeardown(!inflight.result.HasError(), duration)
 
-	if inflight.result.HasError() {
-		return &inflight.result
-	}
-	return nil
+	return inflight.result.Err()
 }
 
 // performCNITeardown executes the actual CNI teardown.
-// Returns a CleanupError with details on each step.
-func (nm *cniNetworkManager) performCNITeardown(ctx context.Context, env *Environment) CleanupError {
-	result := CleanupError{}
+// Returns a CleanupResult with details on each step.
+func (nm *cniNetworkManager) performCNITeardown(ctx context.Context, env *Environment) CleanupResult {
+	result := CleanupResult{}
 
 	// Get CNI result for this VM
 	nm.cniMu.RLock()
@@ -358,7 +374,7 @@ func (nm *cniNetworkManager) performCNITeardown(ctx context.Context, env *Enviro
 		log.G(ctx).WithError(verifyErr).WithField("vmID", env.ID).
 			Warn("IPAM cleanup verification failed - IP may be leaked")
 		result.IPAMVerify = verifyErr
-		RecordIPAMLeak()
+		nm.metrics.RecordIPAMLeak()
 	}
 
 	// Clean up netns (whether it's the original or temporary)
@@ -380,15 +396,15 @@ func (nm *cniNetworkManager) performCNITeardown(ctx context.Context, env *Enviro
 			"vmID": env.ID,
 			"tap":  cniResult.TAPDevice,
 		}
-		if result.HasError() {
-			log.G(ctx).WithFields(fields).WithField("errors", result.Error()).
+		if err := result.Err(); err != nil {
+			log.G(ctx).WithFields(fields).WithError(err).
 				Warn("CNI network cleanup completed with errors")
 		} else {
 			log.G(ctx).WithFields(fields).Info("CNI network released")
 		}
 	} else {
-		if result.HasError() {
-			log.G(ctx).WithField("vmID", env.ID).WithField("errors", result.Error()).
+		if err := result.Err(); err != nil {
+			log.G(ctx).WithField("vmID", env.ID).WithError(err).
 				Warn("CNI network cleanup attempted with errors")
 		} else {
 			log.G(ctx).WithField("vmID", env.ID).Info("CNI network cleanup completed")
@@ -404,17 +420,14 @@ func (nm *cniNetworkManager) performCNITeardown(ctx context.Context, env *Enviro
 // verifyIPAMCleanup checks if the IP allocation was properly released.
 // Returns an error if the container ID still has an allocated IP.
 func (nm *cniNetworkManager) verifyIPAMCleanup(ctx context.Context, containerID string) error {
-	// Standard IPAM state directory for host-local plugin
-	ipamDir := "/var/lib/cni/networks"
-
-	entries, err := os.ReadDir(ipamDir)
+	entries, err := os.ReadDir(nm.ipamDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No IPAM state directory - nothing to verify
 			return nil
 		}
 		// Can't read directory - log but don't fail
-		log.G(ctx).WithError(err).WithField("ipamDir", ipamDir).
+		log.G(ctx).WithError(err).WithField("ipamDir", nm.ipamDir).
 			Debug("Could not read IPAM directory for verification")
 		return nil
 	}
@@ -423,7 +436,7 @@ func (nm *cniNetworkManager) verifyIPAMCleanup(ctx context.Context, containerID 
 		if !netDir.IsDir() {
 			continue
 		}
-		netPath := filepath.Join(ipamDir, netDir.Name())
+		netPath := filepath.Join(nm.ipamDir, netDir.Name())
 		ipFiles, err := os.ReadDir(netPath)
 		if err != nil {
 			continue

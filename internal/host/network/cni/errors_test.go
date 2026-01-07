@@ -3,6 +3,7 @@
 package cni
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -68,10 +69,11 @@ func TestErrorClassification(t *testing.T) {
 		},
 	}
 
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rawErr := errors.New(tt.errMsg)
-			classifiedErr := classifyError("ADD", "test-net", rawErr)
+			classifiedErr := ClassifyError(ctx, "ADD", "test-net", rawErr)
 
 			require.Error(t, classifiedErr)
 
@@ -98,7 +100,7 @@ func TestErrorClassification(t *testing.T) {
 }
 
 func TestErrorNil(t *testing.T) {
-	result := classifyError("ADD", "test", nil)
+	result := ClassifyError(context.Background(), "ADD", "test", nil)
 	assert.NoError(t, result)
 }
 
@@ -136,26 +138,23 @@ func TestErrorWithoutPlugin(t *testing.T) {
 	assert.NotContains(t, errStr, "CNI  DEL") // Should not have double space
 }
 
-func TestIsResourceConflict(t *testing.T) {
+func TestErrorIsWithSentinels(t *testing.T) {
 	conflictErr := &Error{
 		Category: ErrResourceConflict,
 		Cause:    fmt.Errorf("veth exists"),
 	}
-	otherErr := fmt.Errorf("some other error")
-
-	assert.True(t, IsResourceConflict(conflictErr))
-	assert.False(t, IsResourceConflict(otherErr))
-	assert.False(t, IsResourceConflict(nil))
-}
-
-func TestIsIPAMExhausted(t *testing.T) {
 	exhaustedErr := &Error{
 		Category: ErrIPAMExhausted,
 		Cause:    fmt.Errorf("no ips"),
 	}
 	otherErr := fmt.Errorf("some other error")
 
-	assert.True(t, IsIPAMExhausted(exhaustedErr))
-	assert.False(t, IsIPAMExhausted(otherErr))
-	assert.False(t, IsIPAMExhausted(nil))
+	// Use errors.Is() directly as intended
+	assert.ErrorIs(t, conflictErr, ErrResourceConflict)
+	assert.NotErrorIs(t, otherErr, ErrResourceConflict)
+	assert.NotErrorIs(t, conflictErr, ErrIPAMExhausted) // Not the other sentinel
+
+	assert.ErrorIs(t, exhaustedErr, ErrIPAMExhausted)
+	assert.NotErrorIs(t, otherErr, ErrIPAMExhausted)
+	assert.NotErrorIs(t, exhaustedErr, ErrResourceConflict) // Not the other sentinel
 }

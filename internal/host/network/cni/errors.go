@@ -3,9 +3,12 @@
 package cni
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/containerd/log"
 )
 
 // Sentinel errors for CNI operations.
@@ -59,9 +62,12 @@ func (e *Error) Is(target error) bool {
 	return false
 }
 
-// classifyError wraps a raw CNI error with classification.
+// ClassifyError wraps a raw CNI error with classification.
 // This centralizes error string parsing so callers can use typed errors.
-func classifyError(operation, network string, err error) error {
+//
+// Classification is case-insensitive. Unclassified errors are logged at debug
+// level to help identify new error patterns from CNI plugins.
+func ClassifyError(ctx context.Context, operation, network string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -72,6 +78,7 @@ func classifyError(operation, network string, err error) error {
 		Cause:     err,
 	}
 
+	// Case-insensitive matching for CNI error messages
 	msg := strings.ToLower(err.Error())
 
 	switch {
@@ -86,18 +93,14 @@ func classifyError(operation, network string, err error) error {
 		cniErr.Category = ErrResourceConflict
 	case strings.Contains(msg, "network namespace") && strings.Contains(msg, "not found"):
 		cniErr.Category = ErrNetNSNotFound
+	default:
+		// Log unclassified errors to help identify new patterns
+		log.G(ctx).WithFields(log.Fields{
+			"operation": operation,
+			"network":   network,
+			"error":     err.Error(),
+		}).Debug("unclassified CNI error - consider adding classification")
 	}
 
 	return cniErr
-}
-
-// IsResourceConflict returns true if the error indicates a resource conflict.
-// Prefer using errors.Is(err, cni.ErrResourceConflict) directly.
-func IsResourceConflict(err error) bool {
-	return errors.Is(err, ErrResourceConflict)
-}
-
-// IsIPAMExhausted returns true if the error indicates IPAM pool exhaustion.
-func IsIPAMExhausted(err error) bool {
-	return errors.Is(err, ErrIPAMExhausted)
 }

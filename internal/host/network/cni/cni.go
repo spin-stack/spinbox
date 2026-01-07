@@ -100,7 +100,7 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 	result, err := m.execPluginChain(ctx, vmID, netns, netConfList)
 	if err != nil {
 		// Classify the error for callers to handle appropriately
-		return nil, classifyError("ADD", netConfList.Name, err)
+		return nil, ClassifyError(ctx, "ADD", netConfList.Name, err)
 	}
 	log.G(ctx).WithFields(log.Fields{
 		"net":        netConfList.Name,
@@ -140,7 +140,7 @@ func (m *CNIManager) Teardown(ctx context.Context, vmID string, netns string) er
 
 	// Execute DEL operation
 	if err := m.cniConfig.DelNetworkList(ctx, netConfList, rt); err != nil {
-		return classifyError("DEL", netConfList.Name, err)
+		return ClassifyError(ctx, "DEL", netConfList.Name, err)
 	}
 
 	return nil

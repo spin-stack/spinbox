@@ -10,44 +10,42 @@ import (
 )
 
 func TestMetricsRecording(t *testing.T) {
-	// Reset metrics before test
-	ResetMetrics()
+	m := &Metrics{}
 
 	// Record some setups
-	RecordSetup(true, false, 100*time.Millisecond)
-	RecordSetup(true, false, 200*time.Millisecond)
-	RecordSetup(false, true, 50*time.Millisecond)  // failure with conflict
-	RecordSetup(false, false, 75*time.Millisecond) // failure without conflict
+	m.RecordSetup(true, false, 100*time.Millisecond)
+	m.RecordSetup(true, false, 200*time.Millisecond)
+	m.RecordSetup(false, true, 50*time.Millisecond)  // failure with conflict
+	m.RecordSetup(false, false, 75*time.Millisecond) // failure without conflict
 
-	m := GetMetrics()
 	assert.Equal(t, int64(4), m.SetupAttempts.Load())
 	assert.Equal(t, int64(2), m.SetupSuccesses.Load())
 	assert.Equal(t, int64(2), m.SetupFailures.Load())
 	assert.Equal(t, int64(1), m.ResourceConflicts.Load())
 
 	// Record some teardowns
-	RecordTeardown(true, 50*time.Millisecond)
-	RecordTeardown(false, 30*time.Millisecond)
+	m.RecordTeardown(true, 50*time.Millisecond)
+	m.RecordTeardown(false, 30*time.Millisecond)
 
 	assert.Equal(t, int64(2), m.TeardownAttempts.Load())
 	assert.Equal(t, int64(1), m.TeardownSuccesses.Load())
 	assert.Equal(t, int64(1), m.TeardownFailures.Load())
 
 	// Record IPAM leak
-	RecordIPAMLeak()
+	m.RecordIPAMLeak()
 	assert.Equal(t, int64(1), m.IPAMLeaksDetected.Load())
 }
 
 func TestMetricsSnapshot(t *testing.T) {
-	ResetMetrics()
+	m := &Metrics{}
 
 	// Record some operations
-	RecordSetup(true, false, 100*time.Millisecond)
-	RecordSetup(true, false, 200*time.Millisecond)
-	RecordTeardown(true, 50*time.Millisecond)
-	RecordIPAMLeak()
+	m.RecordSetup(true, false, 100*time.Millisecond)
+	m.RecordSetup(true, false, 200*time.Millisecond)
+	m.RecordTeardown(true, 50*time.Millisecond)
+	m.RecordIPAMLeak()
 
-	snap := GetMetrics().Snapshot()
+	snap := m.Snapshot()
 
 	assert.Equal(t, int64(2), snap.SetupAttempts)
 	assert.Equal(t, int64(2), snap.SetupSuccesses)
@@ -61,25 +59,26 @@ func TestMetricsSnapshot(t *testing.T) {
 }
 
 func TestMetricsSnapshotEmpty(t *testing.T) {
-	ResetMetrics()
+	m := &Metrics{}
 
-	snap := GetMetrics().Snapshot()
+	snap := m.Snapshot()
 
 	assert.Equal(t, int64(0), snap.SetupAttempts)
 	assert.InDelta(t, 0.0, snap.AvgSetupTimeMs, 0.001)
 	assert.InDelta(t, 0.0, snap.AvgTeardownTimeMs, 0.001)
 }
 
-func TestResetMetrics(t *testing.T) {
+func TestMetricsReset(t *testing.T) {
+	m := &Metrics{}
+
 	// Add some data
-	RecordSetup(true, false, 100*time.Millisecond)
-	RecordTeardown(true, 50*time.Millisecond)
-	RecordIPAMLeak()
+	m.RecordSetup(true, false, 100*time.Millisecond)
+	m.RecordTeardown(true, 50*time.Millisecond)
+	m.RecordIPAMLeak()
 
 	// Reset
-	ResetMetrics()
+	m.Reset()
 
-	m := GetMetrics()
 	assert.Equal(t, int64(0), m.SetupAttempts.Load())
 	assert.Equal(t, int64(0), m.SetupSuccesses.Load())
 	assert.Equal(t, int64(0), m.TeardownAttempts.Load())

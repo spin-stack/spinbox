@@ -29,45 +29,50 @@ type Metrics struct {
 	TotalTeardownTimeNs atomic.Int64
 }
 
-// global metrics instance
-var globalMetrics = &Metrics{}
-
-// GetMetrics returns the global CNI metrics.
-// Safe to call from multiple goroutines.
-func GetMetrics() *Metrics {
-	return globalMetrics
-}
-
 // RecordSetup records a setup attempt result.
-func RecordSetup(success bool, conflict bool, duration time.Duration) {
-	globalMetrics.SetupAttempts.Add(1)
-	globalMetrics.TotalSetupTimeNs.Add(int64(duration))
+func (m *Metrics) RecordSetup(success bool, conflict bool, duration time.Duration) {
+	m.SetupAttempts.Add(1)
+	m.TotalSetupTimeNs.Add(int64(duration))
 
 	if success {
-		globalMetrics.SetupSuccesses.Add(1)
+		m.SetupSuccesses.Add(1)
 	} else {
-		globalMetrics.SetupFailures.Add(1)
+		m.SetupFailures.Add(1)
 	}
 	if conflict {
-		globalMetrics.ResourceConflicts.Add(1)
+		m.ResourceConflicts.Add(1)
 	}
 }
 
 // RecordTeardown records a teardown attempt result.
-func RecordTeardown(success bool, duration time.Duration) {
-	globalMetrics.TeardownAttempts.Add(1)
-	globalMetrics.TotalTeardownTimeNs.Add(int64(duration))
+func (m *Metrics) RecordTeardown(success bool, duration time.Duration) {
+	m.TeardownAttempts.Add(1)
+	m.TotalTeardownTimeNs.Add(int64(duration))
 
 	if success {
-		globalMetrics.TeardownSuccesses.Add(1)
+		m.TeardownSuccesses.Add(1)
 	} else {
-		globalMetrics.TeardownFailures.Add(1)
+		m.TeardownFailures.Add(1)
 	}
 }
 
 // RecordIPAMLeak records a detected IPAM leak.
-func RecordIPAMLeak() {
-	globalMetrics.IPAMLeaksDetected.Add(1)
+func (m *Metrics) RecordIPAMLeak() {
+	m.IPAMLeaksDetected.Add(1)
+}
+
+// Reset resets all metrics to zero. Useful for testing.
+func (m *Metrics) Reset() {
+	m.SetupAttempts.Store(0)
+	m.SetupSuccesses.Store(0)
+	m.SetupFailures.Store(0)
+	m.ResourceConflicts.Store(0)
+	m.TeardownAttempts.Store(0)
+	m.TeardownSuccesses.Store(0)
+	m.TeardownFailures.Store(0)
+	m.IPAMLeaksDetected.Store(0)
+	m.TotalSetupTimeNs.Store(0)
+	m.TotalTeardownTimeNs.Store(0)
 }
 
 // MetricsSnapshot is a point-in-time copy of metrics values.
@@ -110,18 +115,4 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 	}
 
 	return snap
-}
-
-// ResetMetrics resets all metrics to zero. Useful for testing.
-func ResetMetrics() {
-	globalMetrics.SetupAttempts.Store(0)
-	globalMetrics.SetupSuccesses.Store(0)
-	globalMetrics.SetupFailures.Store(0)
-	globalMetrics.ResourceConflicts.Store(0)
-	globalMetrics.TeardownAttempts.Store(0)
-	globalMetrics.TeardownSuccesses.Store(0)
-	globalMetrics.TeardownFailures.Store(0)
-	globalMetrics.IPAMLeaksDetected.Store(0)
-	globalMetrics.TotalSetupTimeNs.Store(0)
-	globalMetrics.TotalTeardownTimeNs.Store(0)
 }
