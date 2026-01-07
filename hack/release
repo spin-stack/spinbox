@@ -98,7 +98,7 @@ NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_
 NERDCTL_TARBALL="${OUTPUT_DIR}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
 
 if [ ! -f "${NERDCTL_TARBALL}" ]; then
-  curl -L -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
+  curl -sSL -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
 fi
 
 echo "Extracting nerdctl-full components (containerd, containerd-shim-runc-v2, nerdctl, ctr, runc)..."
@@ -157,7 +157,7 @@ for entry in "${NEXUS_EROFS_BINARIES[@]}"; do
   bin_path="${OUTPUT_DIR}/${src}"
 
   if [ ! -f "${bin_path}" ]; then
-    curl -L -o "${bin_path}" "${NEXUS_EROFS_BASE_URL}/${src}"
+    curl -sSL -o "${bin_path}" "${NEXUS_EROFS_BASE_URL}/${src}"
   fi
 
   cp "${bin_path}" "${RELEASE_DIR}/usr/share/qemubox/bin/${dest}"
