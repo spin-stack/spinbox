@@ -6,7 +6,6 @@ package task
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -349,12 +348,11 @@ func (s *service) persistContainerMetadata(ctx context.Context, containerID stri
 		}
 	}
 
-	// Persist network configuration
+	// Persist additional network configuration (DNS, interface, netns).
+	// Note: IP, Gateway, Netmask, TapName, MAC are already persisted by the
+	// network manager via NetworkStateStore during EnsureNetworkResources.
 	if state.netConfig != nil {
 		netState := &metadata.NetworkState{
-			IP:        net.ParseIP(state.netConfig.IP),
-			Gateway:   net.ParseIP(state.netConfig.Gateway),
-			Netmask:   state.netConfig.Netmask,
 			DNS:       state.netConfig.DNS,
 			Interface: state.netConfig.InterfaceName,
 			NetnsPath: state.netnsPath,
