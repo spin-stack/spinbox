@@ -81,7 +81,7 @@ func (m *linuxManager) transformMounts(ctx context.Context, vmi vm.Instance, id 
 	// Check if we need to generate an overlay mount.
 	// When nexus-erofs provides multiple EROFS layers + ext4 (no overlay mount provided),
 	// we need to generate one to combine them into a usable rootfs.
-	am = m.maybeGenerateOverlay(ctx, am)
+	am = m.generateOverlayIfNeeded(ctx, am)
 
 	return am, nil
 }
@@ -335,7 +335,7 @@ func filterOptions(options []string) []string {
 	return filtered
 }
 
-// maybeGenerateOverlay detects when mounts contain multiple EROFS layers followed by
+// generateOverlayIfNeeded detects when mounts contain multiple EROFS layers followed by
 // an ext4 layer (from nexus-erofs snapshotter) and generates an overlay mount to combine them.
 //
 // Pattern detected:
@@ -346,7 +346,7 @@ func filterOptions(options []string) []string {
 // Generated overlay uses:
 //   - lowerdir: all EROFS mount points (via {{ overlay 0 N }} template)
 //   - upperdir/workdir: directories inside the ext4 mount (for persistence)
-func (m *linuxManager) maybeGenerateOverlay(ctx context.Context, mounts []*types.Mount) []*types.Mount {
+func (m *linuxManager) generateOverlayIfNeeded(ctx context.Context, mounts []*types.Mount) []*types.Mount {
 	if len(mounts) < 2 {
 		return mounts
 	}
