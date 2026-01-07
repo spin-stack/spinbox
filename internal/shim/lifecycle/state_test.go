@@ -247,46 +247,43 @@ func TestStateMachine_IntentionalShutdown(t *testing.T) {
 }
 
 func TestStateMachine_StatePredicates(t *testing.T) {
-	sm := NewStateMachine()
-
-	// Idle
-	if sm.IsCreating() || sm.IsRunning() || sm.IsDeleting() || sm.IsShuttingDown() {
-		t.Error("idle state should not match any predicate")
+	tests := []struct {
+		name              string
+		state             ShimState
+		isCreating        bool
+		isRunning         bool
+		isDeleting        bool
+		isShuttingDown    bool
+		canAcceptRequests bool
+	}{
+		{"idle", StateIdle, false, false, false, false, false},
+		{"creating", StateCreating, true, false, false, false, true},
+		{"running", StateRunning, false, true, false, false, true},
+		{"deleting", StateDeleting, false, false, true, false, false},
+		{"shutting_down", StateShuttingDown, false, false, false, true, false},
 	}
 
-	// Creating
-	sm.TryStartCreating()
-	if !sm.IsCreating() {
-		t.Error("should be creating")
-	}
-	if !sm.CanAcceptRequests() {
-		t.Error("should accept requests while creating")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := NewStateMachine()
+			sm.state.Store(int32(tt.state))
 
-	// Running
-	if err := sm.MarkCreated(); err != nil {
-		t.Errorf("MarkCreated failed: %v", err)
-	}
-	if !sm.IsRunning() {
-		t.Error("should be running")
-	}
-	if !sm.CanAcceptRequests() {
-		t.Error("should accept requests while running")
-	}
-
-	// Deleting
-	sm.TryStartDeleting()
-	if !sm.IsDeleting() {
-		t.Error("should be deleting")
-	}
-
-	// ShuttingDown
-	sm.ForceTransition(StateShuttingDown)
-	if !sm.IsShuttingDown() {
-		t.Error("should be shutting down")
-	}
-	if sm.CanAcceptRequests() {
-		t.Error("should not accept requests while shutting down")
+			if got := sm.IsCreating(); got != tt.isCreating {
+				t.Errorf("IsCreating() = %v, want %v", got, tt.isCreating)
+			}
+			if got := sm.IsRunning(); got != tt.isRunning {
+				t.Errorf("IsRunning() = %v, want %v", got, tt.isRunning)
+			}
+			if got := sm.IsDeleting(); got != tt.isDeleting {
+				t.Errorf("IsDeleting() = %v, want %v", got, tt.isDeleting)
+			}
+			if got := sm.IsShuttingDown(); got != tt.isShuttingDown {
+				t.Errorf("IsShuttingDown() = %v, want %v", got, tt.isShuttingDown)
+			}
+			if got := sm.CanAcceptRequests(); got != tt.canAcceptRequests {
+				t.Errorf("CanAcceptRequests() = %v, want %v", got, tt.canAcceptRequests)
+			}
+		})
 	}
 }
 

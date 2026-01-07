@@ -48,11 +48,19 @@ type inotifyEventHandler func(name string) (done bool)
 // Returns true if handler signaled done for any event.
 func parseInotifyEvents(buf []byte, nread int, handler inotifyEventHandler) bool {
 	for offset := 0; offset < nread; {
+		// Bounds check before unsafe pointer cast
+		if offset+unix.SizeofInotifyEvent > nread {
+			break
+		}
 		// #nosec G103 -- unsafe.Pointer is required to parse inotify events from the kernel
 		event := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
 		nameLen := int(event.Len)
 		if nameLen > 0 {
-			name := string(buf[offset+unix.SizeofInotifyEvent : offset+unix.SizeofInotifyEvent+nameLen])
+			nameEnd := offset + unix.SizeofInotifyEvent + nameLen
+			if nameEnd > nread {
+				break
+			}
+			name := string(buf[offset+unix.SizeofInotifyEvent : nameEnd])
 			name = strings.TrimRight(name, "\x00")
 			if handler(name) {
 				return true

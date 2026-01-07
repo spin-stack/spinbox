@@ -117,23 +117,24 @@ func (c *Config) validateTimeouts() error {
 	}
 
 	// Validate bounds on cached durations
+	d := c.Timeouts.Durations()
 	durations := map[string]time.Duration{
-		"vm_start":          c.Timeouts.vmStart,
-		"device_detection":  c.Timeouts.deviceDetection,
-		"shutdown_grace":    c.Timeouts.shutdownGrace,
-		"event_reconnect":   c.Timeouts.eventReconnect,
-		"task_client_retry": c.Timeouts.taskClientRetry,
-		"io_wait":           c.Timeouts.ioWait,
-		"qmp_command":       c.Timeouts.qmpCommand,
+		"vm_start":          d.VMStart,
+		"device_detection":  d.DeviceDetection,
+		"shutdown_grace":    d.ShutdownGrace,
+		"event_reconnect":   d.EventReconnect,
+		"task_client_retry": d.TaskClientRetry,
+		"io_wait":           d.IOWait,
+		"qmp_command":       d.QMPCommand,
 	}
 
-	for name, d := range durations {
-		if d <= 0 {
-			return fmt.Errorf("%s must be a positive duration, got %s", name, d)
+	for name, dur := range durations {
+		if dur <= 0 {
+			return fmt.Errorf("%s must be a positive duration, got %s", name, dur)
 		}
 		// Reasonable upper bound to catch configuration errors (1 hour)
-		if d > time.Hour {
-			return fmt.Errorf("%s is unusually large (%s), maximum is 1h", name, d)
+		if dur > time.Hour {
+			return fmt.Errorf("%s is unusually large (%s), maximum is 1h", name, dur)
 		}
 	}
 
@@ -250,53 +251,16 @@ func (c *Config) validateMemHotplug() error {
 // Helper functions
 
 // canonicalizePath resolves symlinks and cleans the path for consistent validation.
-// This surfaces the real location but does not enforce a security boundary.
-// If the path doesn't exist yet (for directories we'll create), we clean it
-// and resolve as much of the path as possible.
+// For non-existent paths (directories we'll create), returns the cleaned path.
 func canonicalizePath(path string) (string, error) {
-	// First clean the path to normalize it (remove . and .. where possible)
 	cleaned := filepath.Clean(path)
-
-	// Try to resolve symlinks for the full path
 	resolved, err := filepath.EvalSymlinks(cleaned)
 	if err == nil {
 		return resolved, nil
 	}
-
-	// If path doesn't exist, resolve parent directories that do exist
-	// This handles the case where we need to create a directory
 	if os.IsNotExist(err) {
-		// Walk up the path to find the first existing parent
-		dir := cleaned
-		var nonExistent []string
-		for {
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				// Reached root, nothing exists
-				break
-			}
-
-			resolved, err := filepath.EvalSymlinks(parent)
-			if err == nil {
-				// Found an existing parent, reconstruct the path
-				for i := len(nonExistent) - 1; i >= 0; i-- {
-					resolved = filepath.Join(resolved, nonExistent[i])
-				}
-				resolved = filepath.Join(resolved, filepath.Base(dir))
-				return resolved, nil
-			}
-
-			if !os.IsNotExist(err) {
-				return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
-			}
-
-			nonExistent = append(nonExistent, filepath.Base(dir))
-			dir = parent
-		}
-		// Nothing exists, just return the cleaned path
 		return cleaned, nil
 	}
-
 	return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
 }
 
