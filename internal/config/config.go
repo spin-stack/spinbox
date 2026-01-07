@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 const (
@@ -22,6 +23,7 @@ const (
 type Config struct {
 	Paths      PathsConfig      `json:"paths"`
 	Runtime    RuntimeConfig    `json:"runtime"`
+	Timeouts   TimeoutsConfig   `json:"timeouts"`
 	CPUHotplug CPUHotplugConfig `json:"cpu_hotplug"`
 	MemHotplug MemHotplugConfig `json:"memory_hotplug"`
 }
@@ -38,6 +40,85 @@ type PathsConfig struct {
 // RuntimeConfig defines runtime behavior settings
 type RuntimeConfig struct {
 	VMM string `json:"vmm"` // VMM backend (currently only "qemu" supported)
+}
+
+// TimeoutsConfig defines timeout durations for various lifecycle operations.
+// All values are duration strings (e.g., "5s", "2m", "500ms").
+// These timeouts can be tuned based on hardware performance and workload characteristics.
+type TimeoutsConfig struct {
+	// VMStart is the timeout for VM boot (QEMU process start to vsock connection).
+	// Default: 10s. Increase for slow storage or complex configurations.
+	VMStart string `json:"vm_start"`
+
+	// DeviceDetection is the timeout for guest device detection (virtio-blk).
+	// Default: 5s. Increase for VMs with many disks or slow I/O.
+	DeviceDetection string `json:"device_detection"`
+
+	// ShutdownGrace is how long to wait for guest OS shutdown before SIGKILL.
+	// Default: 2s. Increase for applications with slow shutdown handlers.
+	ShutdownGrace string `json:"shutdown_grace"`
+
+	// EventReconnect is how long to retry event stream reconnection.
+	// Default: 2s. Increase for workloads with high VM pause frequency.
+	EventReconnect string `json:"event_reconnect"`
+
+	// TaskClientRetry is how long to retry vsock dial for task RPCs.
+	// Default: 1s. Increase for environments with vsock routing instability.
+	TaskClientRetry string `json:"task_client_retry"`
+
+	// IOWait is the timeout for waiting for I/O forwarder completion on exit.
+	// Default: 30s. Decrease for faster container cleanup, increase for large outputs.
+	IOWait string `json:"io_wait"`
+
+	// QMPCommand is the default timeout for QMP commands to QEMU.
+	// Default: 5s. Increase for complex QMP operations or slow hosts.
+	QMPCommand string `json:"qmp_command"`
+}
+
+// GetVMStart returns the VM start timeout as a time.Duration.
+// Panics if the configuration is invalid (should be caught by validation).
+func (t *TimeoutsConfig) GetVMStart() time.Duration {
+	return mustParseDuration(t.VMStart)
+}
+
+// GetDeviceDetection returns the device detection timeout as a time.Duration.
+func (t *TimeoutsConfig) GetDeviceDetection() time.Duration {
+	return mustParseDuration(t.DeviceDetection)
+}
+
+// GetShutdownGrace returns the shutdown grace period as a time.Duration.
+func (t *TimeoutsConfig) GetShutdownGrace() time.Duration {
+	return mustParseDuration(t.ShutdownGrace)
+}
+
+// GetEventReconnect returns the event reconnect timeout as a time.Duration.
+func (t *TimeoutsConfig) GetEventReconnect() time.Duration {
+	return mustParseDuration(t.EventReconnect)
+}
+
+// GetTaskClientRetry returns the task client retry timeout as a time.Duration.
+func (t *TimeoutsConfig) GetTaskClientRetry() time.Duration {
+	return mustParseDuration(t.TaskClientRetry)
+}
+
+// GetIOWait returns the I/O wait timeout as a time.Duration.
+func (t *TimeoutsConfig) GetIOWait() time.Duration {
+	return mustParseDuration(t.IOWait)
+}
+
+// GetQMPCommand returns the QMP command timeout as a time.Duration.
+func (t *TimeoutsConfig) GetQMPCommand() time.Duration {
+	return mustParseDuration(t.QMPCommand)
+}
+
+// mustParseDuration parses a duration string, panicking on error.
+// This is safe because validation should have already verified the format.
+func mustParseDuration(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		panic(fmt.Sprintf("invalid duration %q: %v (config validation should have caught this)", s, err))
+	}
+	return d
 }
 
 // CPUHotplugConfig defines CPU hotplug controller settings
@@ -146,6 +227,15 @@ func DefaultConfig() *Config {
 		Runtime: RuntimeConfig{
 			VMM: "qemu",
 		},
+		Timeouts: TimeoutsConfig{
+			VMStart:         "10s",
+			DeviceDetection: "5s",
+			ShutdownGrace:   "2s",
+			EventReconnect:  "2s",
+			TaskClientRetry: "1s",
+			IOWait:          "30s",
+			QMPCommand:      "5s",
+		},
 		CPUHotplug: CPUHotplugConfig{
 			MonitorInterval:      "5s",
 			ScaleUpCooldown:      "10s",
@@ -179,6 +269,7 @@ func (c *Config) applyDefaults() {
 
 	c.applyPathDefaults(defaults)
 	c.applyRuntimeDefaults(defaults)
+	c.applyTimeoutsDefaults(defaults)
 	c.applyCPUHotplugDefaults(defaults)
 	c.applyMemHotplugDefaults(defaults)
 }
@@ -201,6 +292,31 @@ func (c *Config) applyRuntimeDefaults(defaults *Config) {
 	// Runtime
 	if c.Runtime.VMM == "" {
 		c.Runtime.VMM = defaults.Runtime.VMM
+	}
+}
+
+func (c *Config) applyTimeoutsDefaults(defaults *Config) {
+	// Timeouts
+	if c.Timeouts.VMStart == "" {
+		c.Timeouts.VMStart = defaults.Timeouts.VMStart
+	}
+	if c.Timeouts.DeviceDetection == "" {
+		c.Timeouts.DeviceDetection = defaults.Timeouts.DeviceDetection
+	}
+	if c.Timeouts.ShutdownGrace == "" {
+		c.Timeouts.ShutdownGrace = defaults.Timeouts.ShutdownGrace
+	}
+	if c.Timeouts.EventReconnect == "" {
+		c.Timeouts.EventReconnect = defaults.Timeouts.EventReconnect
+	}
+	if c.Timeouts.TaskClientRetry == "" {
+		c.Timeouts.TaskClientRetry = defaults.Timeouts.TaskClientRetry
+	}
+	if c.Timeouts.IOWait == "" {
+		c.Timeouts.IOWait = defaults.Timeouts.IOWait
+	}
+	if c.Timeouts.QMPCommand == "" {
+		c.Timeouts.QMPCommand = defaults.Timeouts.QMPCommand
 	}
 }
 

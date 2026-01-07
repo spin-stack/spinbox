@@ -9,6 +9,15 @@
   "runtime": {
     "vmm": "qemu"
   },
+  "timeouts": {
+    "vm_start": "10s",
+    "device_detection": "5s",
+    "shutdown_grace": "2s",
+    "event_reconnect": "2s",
+    "task_client_retry": "1s",
+    "io_wait": "30s",
+    "qmp_command": "5s"
+  },
   "cpu_hotplug": {
     "monitor_interval": "5s",
     "scale_up_cooldown": "10s",

@@ -20,6 +20,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("runtime validation failed: %w", err)
 	}
 
+	if err := c.validateTimeouts(); err != nil {
+		return fmt.Errorf("timeouts validation failed: %w", err)
+	}
+
 	if err := c.validateCPUHotplug(); err != nil {
 		return fmt.Errorf("cpu_hotplug validation failed: %w", err)
 	}
@@ -100,6 +104,37 @@ func (c *Config) validateRuntime() error {
 	// VMM must be "qemu" (only supported backend)
 	if c.Runtime.VMM != "qemu" {
 		return fmt.Errorf("vmm must be \"qemu\" (only supported backend), got %q", c.Runtime.VMM)
+	}
+
+	return nil
+}
+
+// validateTimeouts validates timeout configuration
+func (c *Config) validateTimeouts() error {
+	// All timeouts must be valid duration strings
+	timeouts := map[string]string{
+		"vm_start":          c.Timeouts.VMStart,
+		"device_detection":  c.Timeouts.DeviceDetection,
+		"shutdown_grace":    c.Timeouts.ShutdownGrace,
+		"event_reconnect":   c.Timeouts.EventReconnect,
+		"task_client_retry": c.Timeouts.TaskClientRetry,
+		"io_wait":           c.Timeouts.IOWait,
+		"qmp_command":       c.Timeouts.QMPCommand,
+	}
+
+	for name, value := range timeouts {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("%s must be a valid duration (e.g., \"5s\", \"2m\"): %w", name, err)
+		}
+		// Timeouts must be positive
+		if d <= 0 {
+			return fmt.Errorf("%s must be a positive duration, got %s", name, value)
+		}
+		// Reasonable upper bound to catch configuration errors (1 hour)
+		if d > time.Hour {
+			return fmt.Errorf("%s is unusually large (%s), maximum is 1h", name, value)
+		}
 	}
 
 	return nil
