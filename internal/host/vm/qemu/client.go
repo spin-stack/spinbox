@@ -99,8 +99,8 @@ func (q *Instance) QMPClient() *qmpClient {
 
 // CPUHotplugger returns an interface for CPU hotplug operations
 func (q *Instance) CPUHotplugger() (vm.CPUHotplugger, error) {
-	if q.getState() == vmStateShutdown {
-		return nil, fmt.Errorf("vm shutdown: %w", errdefs.ErrFailedPrecondition)
+	if q.getState() != vmStateRunning {
+		return nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
 	}
 
 	q.mu.Lock()
