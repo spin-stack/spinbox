@@ -81,7 +81,6 @@ func (p *processIO) Copy(ctx context.Context, wg *sync.WaitGroup) (io.Closer, er
 }
 
 // ioConfig holds configuration for creating process I/O.
-// Note: context is passed separately to factory functions (not stored in struct).
 type ioConfig struct {
 	id      string
 	ioUID   int
