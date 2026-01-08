@@ -135,6 +135,7 @@ func (t *exitTracker) Subscribe(c *runc.Container) *subscription {
 }
 
 // removeProcessFromRunning removes processes for a container from the running map.
+//
 // Caller must hold t.mu.
 func (t *exitTracker) removeProcessFromRunning(pid int, c *runc.Container) {
 	cps := t.running[pid]
@@ -185,7 +186,7 @@ func (s *subscription) HandleStart(c *runc.Container, p process.Process, pid int
 	})
 
 	// Track exec processes for init exit ordering
-	if _, isInit := p.(*process.Init); !isInit {
+	if !p.IsInit() {
 		state := t.getOrCreateState(c)
 		state.runningExecs++
 	}
@@ -220,7 +221,7 @@ func (t *exitTracker) NotifyExit(e runcC.Exit) []containerProcess {
 
 	// Stash init exits for later (need to wait for execs to complete)
 	for _, cp := range cps {
-		if _, isInit := cp.Process.(*process.Init); isInit {
+		if cp.Process.IsInit() {
 			state := t.getOrCreateState(cp.Container)
 			state.initExit = &e
 		}
@@ -317,28 +318,6 @@ func (t *exitTracker) Cleanup(c *runc.Container) {
 
 	// Remove any running processes for this container
 	for pid := range t.running {
-		t.removeProcessFromRunningLocked(pid, c)
-	}
-}
-
-// removeProcessFromRunningLocked is like removeProcessFromRunning but assumes lock is held.
-// Caller must hold t.mu.
-func (t *exitTracker) removeProcessFromRunningLocked(pid int, c *runc.Container) {
-	cps := t.running[pid]
-	if len(cps) == 0 {
-		return
-	}
-
-	remaining := cps[:0]
-	for _, cp := range cps {
-		if cp.Container != c {
-			remaining = append(remaining, cp)
-		}
-	}
-
-	if len(remaining) > 0 {
-		t.running[pid] = remaining
-	} else {
-		delete(t.running, pid)
+		t.removeProcessFromRunning(pid, c)
 	}
 }
