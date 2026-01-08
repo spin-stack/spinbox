@@ -164,7 +164,7 @@ func formatInitArgs(args []string) string {
 			result.WriteString(" ")
 		}
 		// Quote arguments that contain spaces
-		if len(arg) > 0 && (arg[0] == '-' || !needsQuoting(arg)) {
+		if !needsQuoting(arg) {
 			result.WriteString(arg)
 		} else {
 			fmt.Fprintf(&result, "\"%s\"", arg)

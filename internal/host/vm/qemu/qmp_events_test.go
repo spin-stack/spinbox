@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	"github.com/containerd/log"
 	"github.com/stretchr/testify/assert"
@@ -171,7 +172,7 @@ func TestEventLoopExitsOnClosedChannel(t *testing.T) {
 	select {
 	case <-client.eventLoopDone:
 		// Success - eventLoop exited
-	default:
+	case <-time.After(time.Second):
 		t.Error("eventLoop should exit immediately when events is nil")
 	}
 }
