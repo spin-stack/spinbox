@@ -40,4 +40,6 @@ type Process interface {
 	Kill(ctx context.Context, sig uint32, all bool) error
 	// SetExited sets the exit status for the process
 	SetExited(status int)
+	// IsInit returns true if this is the init (main) process for a container
+	IsInit() bool
 }

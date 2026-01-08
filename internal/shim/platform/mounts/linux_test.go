@@ -381,7 +381,341 @@ func TestTransformMount(t *testing.T) {
 	})
 }
 
-// Benchmarks
+func TestHandleEROFS(t *testing.T) {
+	ctx := context.Background()
+	m := &linuxManager{}
+
+	t.Run("basic erofs mount", func(t *testing.T) {
+		disks := byte('a')
+		mnt := &types.Mount{
+			Type:    "erofs",
+			Source:  "/path/to/image.erofs",
+			Target:  "/rootfs",
+			Options: []string{"ro"},
+		}
+
+		mounts, diskOpts, err := m.handleEROFS(ctx, "container-id", &disks, mnt)
+
+		require.NoError(t, err)
+		require.Len(t, mounts, 1)
+		require.Len(t, diskOpts, 1)
+
+		assert.Equal(t, "erofs", mounts[0].Type)
+		assert.Equal(t, "/dev/vda", mounts[0].Source)
+		assert.Equal(t, "/rootfs", mounts[0].Target)
+
+		assert.Equal(t, "/path/to/image.erofs", diskOpts[0].source)
+		assert.True(t, diskOpts[0].readOnly)
+		assert.False(t, diskOpts[0].vmdk)
+		assert.Equal(t, byte('b'), disks)
+	})
+
+	t.Run("vmdk extension detected", func(t *testing.T) {
+		disks := byte('a')
+		mnt := &types.Mount{
+			Type:   "erofs",
+			Source: "/path/to/merged.vmdk",
+			Target: "/rootfs",
+		}
+
+		_, diskOpts, err := m.handleEROFS(ctx, "container-id", &disks, mnt)
+
+		require.NoError(t, err)
+		require.Len(t, diskOpts, 1)
+		assert.True(t, diskOpts[0].vmdk)
+	})
+
+	t.Run("filters device options", func(t *testing.T) {
+		disks := byte('a')
+		mnt := &types.Mount{
+			Type:   "format/erofs",
+			Source: "/path/to/fsmeta.erofs",
+			Options: []string{
+				"ro",
+				"device=/path/to/layer1.erofs",
+				"device=/path/to/layer2.erofs",
+			},
+		}
+
+		mounts, _, err := m.handleEROFS(ctx, "container-id", &disks, mnt)
+
+		require.NoError(t, err)
+		require.Len(t, mounts, 1)
+
+		// device= options should be filtered out
+		for _, opt := range mounts[0].Options {
+			assert.False(t, strings.HasPrefix(opt, "device="), "device= options should be filtered")
+		}
+		// ro should be preserved
+		assert.Contains(t, mounts[0].Options, "ro")
+	})
+
+	t.Run("increments disk letter correctly", func(t *testing.T) {
+		disks := byte('c')
+		mnt := &types.Mount{
+			Type:   "erofs",
+			Source: "/path/to/image.erofs",
+		}
+
+		mounts, _, err := m.handleEROFS(ctx, "container-id", &disks, mnt)
+
+		require.NoError(t, err)
+		assert.Equal(t, "/dev/vdc", mounts[0].Source)
+		assert.Equal(t, byte('d'), disks)
+	})
+
+	t.Run("truncates long container id in disk name", func(t *testing.T) {
+		disks := byte('a')
+		mnt := &types.Mount{
+			Type:   "erofs",
+			Source: "/path/to/image.erofs",
+		}
+
+		_, diskOpts, err := m.handleEROFS(ctx, "very-long-container-id-that-exceeds-the-maximum-allowed-length", &disks, mnt)
+
+		require.NoError(t, err)
+		require.Len(t, diskOpts, 1)
+		assert.LessOrEqual(t, len(diskOpts[0].name), 36)
+	})
+}
+
+func TestGenerateOverlayIfNeeded(t *testing.T) {
+	ctx := context.Background()
+	m := &linuxManager{}
+
+	t.Run("returns unchanged for single mount", func(t *testing.T) {
+		mounts := []*types.Mount{
+			{Type: "erofs", Source: "/dev/vda"},
+		}
+
+		result := m.generateOverlayIfNeeded(ctx, mounts)
+
+		assert.Len(t, result, 1)
+		assert.Equal(t, mounts, result)
+	})
+
+	t.Run("returns unchanged for empty mounts", func(t *testing.T) {
+		result := m.generateOverlayIfNeeded(ctx, []*types.Mount{})
+
+		assert.Empty(t, result)
+	})
+
+	t.Run("returns unchanged when overlay already exists", func(t *testing.T) {
+		mounts := []*types.Mount{
+			{Type: "erofs", Source: "/dev/vda"},
+			{Type: "ext4", Source: "/dev/vdb"},
+			{Type: "overlay", Source: "overlay"},
+		}
+
+		result := m.generateOverlayIfNeeded(ctx, mounts)
+
+		assert.Equal(t, mounts, result)
+	})
+
+	t.Run("returns unchanged when format/overlay exists", func(t *testing.T) {
+		mounts := []*types.Mount{
+			{Type: "erofs", Source: "/dev/vda"},
+			{Type: "ext4", Source: "/dev/vdb"},
+			{Type: "format/overlay", Source: "overlay"},
+		}
+
+		result := m.generateOverlayIfNeeded(ctx, mounts)
+
+		assert.Equal(t, mounts, result)
+	})
+
+	t.Run("returns unchanged for only erofs mounts", func(t *testing.T) {
+		mounts := []*types.Mount{
+			{Type: "erofs", Source: "/dev/vda"},
+			{Type: "erofs", Source: "/dev/vdb"},
+		}
+
+		result := m.generateOverlayIfNeeded(ctx, mounts)
+
+		assert.Equal(t, mounts, result)
+	})
+
+	t.Run("returns unchanged when ext4 is not last", func(t *testing.T) {
+		mounts := []*types.Mount{
+			{Type: "ext4", Source: "/dev/vda"},
+			{Type: "erofs", Source: "/dev/vdb"},
+		}
+
+		result := m.generateOverlayIfNeeded(ctx, mounts)
+
+		assert.Equal(t, mounts, result)
+	})
+
+	t.Run("generates overlay for erofs + ext4 pattern", func(t *testing.T) {
+		mounts := []*types.Mount{
+			{Type: "erofs", Source: "/dev/vda"},
+			{Type: "ext4", Source: "/dev/vdb"},
+		}
+
+		result := m.generateOverlayIfNeeded(ctx, mounts)
+
+		require.Len(t, result, 3) // original 2 + generated overlay
+		assert.Equal(t, "erofs", result[0].Type)
+		assert.Equal(t, "ext4", result[1].Type)
+		assert.Equal(t, "format/mkdir/overlay", result[2].Type)
+
+		// Check overlay options
+		overlayOpts := result[2].Options
+		hasLowerdir := false
+		hasUpperdir := false
+		hasWorkdir := false
+		hasMkdirUpper := false
+		hasMkdirWork := false
+
+		for _, opt := range overlayOpts {
+			switch {
+			case strings.HasPrefix(opt, "lowerdir="):
+				hasLowerdir = true
+				assert.Contains(t, opt, "{{ overlay 0 0 }}")
+			case strings.HasPrefix(opt, "upperdir="):
+				hasUpperdir = true
+				assert.Contains(t, opt, "{{ mount 1 }}/upper")
+			case strings.HasPrefix(opt, "workdir="):
+				hasWorkdir = true
+				assert.Contains(t, opt, "{{ mount 1 }}/work")
+			case opt == "X-containerd.mkdir.path={{ mount 1 }}/upper":
+				hasMkdirUpper = true
+			case opt == "X-containerd.mkdir.path={{ mount 1 }}/work":
+				hasMkdirWork = true
+			}
+		}
+
+		assert.True(t, hasLowerdir, "should have lowerdir")
+		assert.True(t, hasUpperdir, "should have upperdir")
+		assert.True(t, hasWorkdir, "should have workdir")
+		assert.True(t, hasMkdirUpper, "should have mkdir for upper")
+		assert.True(t, hasMkdirWork, "should have mkdir for work")
+	})
+
+	t.Run("generates overlay for multiple erofs + ext4", func(t *testing.T) {
+		mounts := []*types.Mount{
+			{Type: "erofs", Source: "/dev/vda"},
+			{Type: "erofs", Source: "/dev/vdb"},
+			{Type: "erofs", Source: "/dev/vdc"},
+			{Type: "ext4", Source: "/dev/vdd"},
+		}
+
+		result := m.generateOverlayIfNeeded(ctx, mounts)
+
+		require.Len(t, result, 5) // original 4 + generated overlay
+
+		// Check overlay uses correct indices
+		overlayOpts := result[4].Options
+		for _, opt := range overlayOpts {
+			if strings.HasPrefix(opt, "lowerdir=") {
+				assert.Contains(t, opt, "{{ overlay 0 2 }}", "should reference all 3 erofs layers")
+			}
+			if strings.HasPrefix(opt, "upperdir=") {
+				assert.Contains(t, opt, "{{ mount 3 }}", "ext4 is at index 3")
+			}
+		}
+	})
+}
+
+func TestAnalyzeOverlayOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		options  []string
+		expected overlayAnalysis
+	}{
+		{
+			name:    "empty options",
+			options: []string{},
+			expected: overlayAnalysis{
+				workdirIdx:   -1,
+				upperdirIdx:  -1,
+				overlayEnd:   -1,
+				hasLowerTmpl: false,
+			},
+		},
+		{
+			name: "all templates - no transform needed",
+			options: []string{
+				"lowerdir={{ overlay 0 4 }}",
+				"upperdir={{ mount 5 }}/upper",
+				"workdir={{ mount 5 }}/work",
+			},
+			expected: overlayAnalysis{
+				workdirIdx:    2,
+				upperdirIdx:   1,
+				overlayEnd:    4,
+				hasLowerTmpl:  true,
+				needTransform: false,
+			},
+		},
+		{
+			name: "host paths need transform",
+			options: []string{
+				"lowerdir={{ overlay 0 2 }}",
+				"upperdir=/tmp/upper",
+				"workdir=/tmp/work",
+			},
+			expected: overlayAnalysis{
+				workdirIdx:    2,
+				upperdirIdx:   1,
+				overlayEnd:    2,
+				hasLowerTmpl:  true,
+				needTransform: true,
+			},
+		},
+		{
+			name: "no lowerdir template",
+			options: []string{
+				"lowerdir=/lower1:/lower2",
+				"upperdir=/tmp/upper",
+				"workdir=/tmp/work",
+			},
+			expected: overlayAnalysis{
+				workdirIdx:    2,
+				upperdirIdx:   1,
+				overlayEnd:    -1,
+				hasLowerTmpl:  false,
+				needTransform: true,
+			},
+		},
+		{
+			name: "only lowerdir present",
+			options: []string{
+				"lowerdir={{ overlay 0 1 }}",
+			},
+			expected: overlayAnalysis{
+				workdirIdx:   -1,
+				upperdirIdx:  -1,
+				overlayEnd:   1,
+				hasLowerTmpl: true,
+			},
+		},
+		{
+			name: "reverse order indices in template",
+			options: []string{
+				"lowerdir={{ overlay 5 2 }}",
+			},
+			expected: overlayAnalysis{
+				workdirIdx:   -1,
+				upperdirIdx:  -1,
+				overlayEnd:   5, // max(5, 2)
+				hasLowerTmpl: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := analyzeOverlayOptions(tt.options)
+
+			assert.Equal(t, tt.expected.workdirIdx, result.workdirIdx, "workdirIdx mismatch")
+			assert.Equal(t, tt.expected.upperdirIdx, result.upperdirIdx, "upperdirIdx mismatch")
+			assert.Equal(t, tt.expected.overlayEnd, result.overlayEnd, "overlayEnd mismatch")
+			assert.Equal(t, tt.expected.hasLowerTmpl, result.hasLowerTmpl, "hasLowerTmpl mismatch")
+			assert.Equal(t, tt.expected.needTransform, result.needTransform, "needTransform mismatch")
+		})
+	}
+}
 
 func BenchmarkTruncateID(b *testing.B) {
 	for range b.N {

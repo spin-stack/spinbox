@@ -30,6 +30,7 @@ type MockProcess struct {
 	DeleteErr       error
 	KillErr         error
 	ResizeErr       error
+	IsInitValue     bool
 }
 
 // Compile-time check that MockProcess implements process.Process
@@ -54,6 +55,8 @@ func (m *MockProcess) Status(ctx context.Context) (string, error) {
 	}
 	return m.StatusValue, m.StatusErr
 }
+
+func (m *MockProcess) IsInit() bool { return m.IsInitValue }
 
 // MockContainer creates a fake container for testing.
 // Returns a minimal runc.Container with the given ID.

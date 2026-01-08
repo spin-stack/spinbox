@@ -75,7 +75,7 @@ func NewTaskService(ctx context.Context, bundle string, publisher events.Publish
 
 // service is the shim implementation of a remote shim over GRPC
 type service struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	context  context.Context
 	events   chan interface{}
@@ -132,9 +132,10 @@ func (s *service) Shutdown(ctx context.Context, r *task.ShutdownRequest) (*ptype
 }
 
 func (s *service) getContainer(id string) (*runc.Container, error) {
-	s.mu.Lock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	container := s.containers[id]
-	s.mu.Unlock()
 	if container == nil {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "container not created")
 	}

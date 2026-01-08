@@ -70,8 +70,8 @@ func (s *service) processExits() {
 		cps := s.exitTracker.NotifyExit(e)
 
 		for _, cp := range cps {
-			if ip, ok := cp.Process.(*process.Init); ok {
-				s.handleInitExit(e, cp.Container, ip)
+			if cp.Process.IsInit() {
+				s.handleInitExit(e, cp.Container, cp.Process.(*process.Init))
 			} else {
 				s.handleProcessExit(e, cp.Container, cp.Process)
 			}
@@ -134,7 +134,7 @@ func (s *service) handleProcessExit(e runcC.Exit, c *runc.Container, p process.P
 	})
 
 	// Decrement exec counter for non-init processes
-	if _, init := p.(*process.Init); !init {
+	if !p.IsInit() {
 		s.exitTracker.NotifyExecExit(c)
 	}
 }

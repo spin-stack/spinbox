@@ -253,3 +253,8 @@ func (e *execProcess) Status(ctx context.Context) (string, error) {
 	defer e.mu.Unlock()
 	return e.execState.Status(ctx)
 }
+
+// IsInit returns false since this is an exec process, not the init process
+func (e *execProcess) IsInit() bool {
+	return false
+}

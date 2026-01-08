@@ -17,6 +17,6 @@ func newManager() Manager {
 	return &darwinManager{}
 }
 
-func (m *darwinManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfs []*types.Mount, bundleRootfs string, mountDir string) (SetupResult, error) {
+func (m *darwinManager) Setup(_ context.Context, _ vm.Instance, _ string, _ []*types.Mount) (SetupResult, error) {
 	return SetupResult{}, fmt.Errorf("mounts not supported on darwin")
 }

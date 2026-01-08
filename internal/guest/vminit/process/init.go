@@ -453,6 +453,11 @@ func (p *Init) Stdio() stdio.Stdio {
 	return p.stdio
 }
 
+// IsInit returns true since this is the init process
+func (p *Init) IsInit() bool {
+	return true
+}
+
 func (p *Init) runtimeError(rErr error, msg string) error {
 	if rErr == nil {
 		return nil
