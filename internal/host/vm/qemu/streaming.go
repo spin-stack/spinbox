@@ -97,6 +97,9 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 	backoff := initialBackoff
 	pingDeadline := 50 * time.Millisecond
 
+	var dialAttempts, dialFailures, pingFailures int
+	var firstDialSuccess time.Duration
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -109,11 +112,17 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		}
 
 		// Connect directly via vsock using kernel's vhost-vsock driver
+		dialAttempts++
 		conn, err := vsock.Dial(q.guestCID, vsockports.DefaultRPCPort, nil)
 		if err != nil {
+			dialFailures++
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
+		}
+
+		if firstDialSuccess == 0 {
+			firstDialSuccess = time.Since(retryStart)
 		}
 
 		// Try to ping the TTRPC server with a deadline
@@ -124,6 +133,7 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 			continue
 		}
 		if err := pingTTRPC(conn); err != nil {
+			pingFailures++
 			_ = conn.Close()
 			pingDeadline += 10 * time.Millisecond
 			time.Sleep(backoff)
@@ -139,6 +149,7 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 			continue
 		}
 		if err := pingTTRPC(conn); err != nil {
+			pingFailures++
 			_ = conn.Close()
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
@@ -146,7 +157,13 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		}
 
 		// Connection is ready
-		log.G(ctx).WithField("retry_time", time.Since(retryStart)).Info("qemu: TTRPC connection established")
+		log.G(ctx).WithFields(log.Fields{
+			"retry_time":         time.Since(retryStart),
+			"first_dial_success": firstDialSuccess,
+			"dial_attempts":      dialAttempts,
+			"dial_failures":      dialFailures,
+			"ping_failures":      pingFailures,
+		}).Info("qemu: TTRPC connection established")
 		return conn, nil
 	}
 }
