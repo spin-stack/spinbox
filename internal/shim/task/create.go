@@ -182,11 +182,11 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	})
 
 	log.G(ctx).WithFields(log.Fields{
-		"t_kvm_check":  kvmDuration,
-		"t_bundle":     bundleDuration,
-		"t_vm_create":  vmCreateDuration,
-		"t_mounts":     mountDuration,
-		"t_network":    networkDuration,
+		"t_kvm_check": kvmDuration,
+		"t_bundle":    bundleDuration,
+		"t_vm_create": vmCreateDuration,
+		"t_mounts":    mountDuration,
+		"t_network":   networkDuration,
 	}).Info("setupVMInstance timings")
 
 	return nil
