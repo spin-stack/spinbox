@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -260,9 +261,7 @@ func (q *qmpClient) ObjectAdd(ctx context.Context, qomType, objID string, args m
 		"qom-type": qomType,
 		"id":       objID,
 	}
-	for k, v := range args {
-		arguments[k] = v
-	}
+	maps.Copy(arguments, args)
 
 	_, err := q.execute(ctx, "object-add", arguments)
 	return err

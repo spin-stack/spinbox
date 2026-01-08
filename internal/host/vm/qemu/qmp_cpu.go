@@ -5,6 +5,7 @@ package qemu
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/containerd/log"
 
@@ -57,9 +58,7 @@ func (q *qmpClient) HotplugCPU(ctx context.Context, cpuID int) error {
 			args = map[string]any{
 				"id": fmt.Sprintf("cpu%d", cpuID),
 			}
-			for k, v := range match.Props {
-				args[k] = v
-			}
+			maps.Copy(args, match.Props)
 			log.G(ctx).WithFields(log.Fields{
 				"cpu_id":   cpuID,
 				"driver":   driver,

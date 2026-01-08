@@ -79,12 +79,10 @@ func TestMemoryAlignmentValidation(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
-			} else {
+			} else if err != nil {
 				// For aligned sizes, we expect to fail at the QMP call (client closed)
 				// not at alignment validation
-				if err != nil {
-					assert.NotContains(t, err.Error(), "aligned")
-				}
+				assert.NotContains(t, err.Error(), "aligned")
 			}
 		})
 	}
