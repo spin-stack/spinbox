@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
@@ -377,9 +378,11 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// QEMU (running in init netns for vhost-vsock) will use these FDs to attach to
 	// TAP devices that stay in their sandbox namespaces. This is the Kata Containers approach:
 	// FDs are namespace-agnostic, so no need to move TAPs between namespaces.
+	tapStart := time.Now()
 	if err := q.openTapFiles(ctx, startOpts.NetworkNamespace); err != nil {
 		return err
 	}
+	tapDuration := time.Since(tapStart)
 
 	// Build kernel command line
 	cmdlineArgs := q.buildKernelCommandLine(startOpts)
@@ -396,14 +399,18 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		"cmdline": strings.Join(qemuArgs, " "),
 	}).Debug("qemu: starting VM process")
 
+	procStart := time.Now()
 	if err := q.startQemuProcess(ctx, qemuArgs); err != nil {
 		return err
 	}
+	procDuration := time.Since(procStart)
 
 	// Connect to QMP for control
+	qmpStart := time.Now()
 	if err := q.connectQMP(ctx); err != nil {
 		return err
 	}
+	qmpDuration := time.Since(qmpStart)
 
 	log.G(ctx).Info("qemu: QMP connected, waiting for vsock...")
 
@@ -416,9 +423,11 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	q.runCancel = runCancel
 
 	// Connect to vsock RPC server
+	vsockStart := time.Now()
 	if err := q.connectVsockClient(ctx); err != nil {
 		return err
 	}
+	vsockDuration := time.Since(vsockStart)
 
 	// Monitor liveness of the guest RPC server; if it goes away (guest reboot/poweroff)
 	// ensure QEMU exits so the shim can clean up.
@@ -428,7 +437,12 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	success = true
 	q.setState(vmStateRunning)
 
-	log.G(ctx).Info("qemu: VM fully initialized")
+	log.G(ctx).WithFields(log.Fields{
+		"t_tap":   tapDuration,
+		"t_proc":  procDuration,
+		"t_qmp":   qmpDuration,
+		"t_vsock": vsockDuration,
+	}).Info("qemu: VM Start() timings")
 
 	return nil
 }
