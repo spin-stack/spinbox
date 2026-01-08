@@ -86,10 +86,10 @@ func TestAPIStateValidation(t *testing.T) {
 	mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
 
 	tests := []struct {
-		name        string
-		state       vmState
-		operation   func(*Instance) error
-		wantErrMsg  string
+		name       string
+		state      vmState
+		operation  func(*Instance) error
+		wantErrMsg string
 	}{
 		{
 			name:       "AddDisk fails when Running",
