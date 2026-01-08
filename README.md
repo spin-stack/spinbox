@@ -385,7 +385,7 @@ images/        - Container/VM image builds
 ## Roadmap
 
 - **Remove KVM requirement**: Support [PVM (Protected Virtual Machine)](https://github.com/virt-pvm/linux) kernel for environments without `/dev/kvm` ([LWN article](https://lwn.net/Articles/963718/))
-- **Filesystem merge snapshots**: Leverage containerd's [fsmerge feature](https://github.com/containerd/containerd/pull/12374) for more efficient storage
+- ~~**Filesystem merge snapshots**: Leverage containerd's [fsmerge feature](https://github.com/containerd/containerd/pull/12374) for more efficient storage~~
 - **Metrics and tracing**: Add TTRPC tracing to provide detailed observability into VM and container behavior
 - **Annotations for features**: Allow enabling/disabling features (CPU/memory hotplug, etc.) via OCI annotations
 - ~~**Snapshot demo**: Demonstrate VM snapshots - restart a VM with previous state/changes preserved~~ ✓ [Done](https://asciinema.org/a/aIk4RocQFPk7I0QizhRwULKLz)
