@@ -44,13 +44,13 @@ const (
 
 // Config holds supervisor configuration parsed from kernel cmdline.
 type Config struct {
-	WorkspaceID   string
-	Secret        string
-	MetadataAddr  string
-	ControlPlane  string
-	BinaryPath    string
-	ContainerID   string // Extracted from bundle path
-	Namespace     string // Extracted from bundle path
+	WorkspaceID  string
+	Secret       string
+	MetadataAddr string
+	ControlPlane string
+	BinaryPath   string
+	ContainerID  string // Extracted from bundle path
+	Namespace    string // Extracted from bundle path
 }
 
 // ParseFromCmdline parses supervisor configuration from /proc/cmdline.
@@ -161,6 +161,7 @@ func (c *Config) Start(ctx context.Context) (int, error) {
 	}
 
 	// Ensure binary is executable
+	// #nosec G302 -- Supervisor binary must be executable (0755) to run.
 	if err := os.Chmod(c.BinaryPath, 0755); err != nil {
 		return 0, fmt.Errorf("failed to make supervisor binary executable: %w", err)
 	}

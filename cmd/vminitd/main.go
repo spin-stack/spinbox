@@ -110,7 +110,7 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 		time.Sleep(2 * time.Second)
 
 		// Retry a few times as the bundle may not be ready yet
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			if err := supervisor.StartSupervisor(ctx); err != nil {
 				log.G(ctx).WithError(err).Warn("failed to start supervisor, will retry")
 				time.Sleep(time.Duration(i+1) * time.Second)

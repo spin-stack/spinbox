@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package task implements the containerd task service for qemubox runtime.
 // It orchestrates VM lifecycle, container creation, and I/O streams within the shim.
 //

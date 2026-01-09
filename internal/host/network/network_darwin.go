@@ -18,3 +18,9 @@ func LoadNetworkConfig() NetworkConfig {
 func NewNetworkManager(ctx context.Context, config NetworkConfig) (NetworkManager, error) {
 	return nil, fmt.Errorf("network manager not supported on darwin")
 }
+
+// Metrics is a stub type for Darwin. CNI metrics are only supported on Linux.
+type Metrics struct{}
+
+// MetricsSnapshot is a stub type for Darwin.
+type MetricsSnapshot struct{}
