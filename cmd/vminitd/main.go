@@ -68,6 +68,10 @@ func main() {
 			log.G(ctx).WithField("panic", p).WithField("stack", string(debug.Stack())).Error("recovered from panic")
 		}
 
+		// Perform pre-shutdown cleanup to remove temporary files and unmount
+		// filesystems. This ensures snapshots don't contain stale container data.
+		system.Cleanup(ctx)
+
 		// Trigger VM shutdown via reboot syscall
 		// This will cause QEMU to exit cleanly
 		log.G(ctx).Info("powering off VM")
