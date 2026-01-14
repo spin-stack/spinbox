@@ -258,7 +258,7 @@ If the shim crashes during operation:
 sudo ./deploy/cleanup-cni.sh
 
 # Restart containerd
-systemctl restart spinbox-containerd
+systemctl restart spinbox
 ```
 
 ## Implementation Files

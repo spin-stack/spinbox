@@ -474,8 +474,8 @@ if [ "$SHIM_ONLY" = false ]; then
     echo "  → Installing systemd services..."
     mkdir -p /usr/share/spinbox/systemd
     cp "${SCRIPT_DIR}/usr/share/spinbox/systemd/"*.service /usr/share/spinbox/systemd/
-    ln -sf /usr/share/spinbox/systemd/spinbox-spin-erofs-snapshotter.service /etc/systemd/system/
-    ln -sf /usr/share/spinbox/systemd/spinbox-containerd.service /etc/systemd/system/
+    ln -sf /usr/share/spinbox/systemd/spinbox-erofs-snapshotter.service /etc/systemd/system/
+    ln -sf /usr/share/spinbox/systemd/spinbox.service /etc/systemd/system/
     systemctl daemon-reload
     log_ok "Systemd services installed"
 else
@@ -521,10 +521,10 @@ FULL_FILES=(
     "/usr/share/spinbox/bin/nerdctl"
     "/usr/share/spinbox/config/containerd/config.toml"
     "/usr/share/spinbox/config/cni/net.d/10-spinbox.conflist"
-    "/usr/share/spinbox/systemd/spinbox-spin-erofs-snapshotter.service"
-    "/usr/share/spinbox/systemd/spinbox-containerd.service"
-    "/etc/systemd/system/spinbox-spin-erofs-snapshotter.service"
-    "/etc/systemd/system/spinbox-containerd.service"
+    "/usr/share/spinbox/systemd/spinbox-erofs-snapshotter.service"
+    "/usr/share/spinbox/systemd/spinbox.service"
+    "/etc/systemd/system/spinbox-erofs-snapshotter.service"
+    "/etc/systemd/system/spinbox.service"
 )
 
 CNI_PLUGINS=(bridge host-local loopback)
@@ -590,12 +590,12 @@ Next steps:
      (See /usr/share/spinbox/config/spinbox/config.json for defaults)
 
   2. Enable and start services (snapshotter starts automatically with containerd):
-     systemctl enable spinbox-containerd
-     systemctl start spinbox-containerd
+     systemctl enable spinbox
+     systemctl start spinbox
 
   3. Check service status:
-     systemctl status spinbox-spin-erofs-snapshotter
-     systemctl status spinbox-containerd
+     systemctl status spinbox-erofs-snapshotter
+     systemctl status spinbox
 
   4. Add /usr/share/spinbox/bin to PATH:
      export PATH=/usr/share/spinbox/bin:\$PATH

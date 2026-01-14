@@ -2,9 +2,10 @@
 Description=EROFS Snapshotter for containerd
 Documentation=https://github.com/spin-stack/erofs-snapshotter
 After=network.target
-Before=spinbox-containerd.service
+Before=spinbox.service
 
 [Service]
+ExecStartPre=-/sbin/modprobe erofs
 ExecSearchPath=/usr/share/spinbox/bin
 ExecSearchPath=/usr/local/sbin
 ExecSearchPath=/usr/local/bin
@@ -31,4 +32,4 @@ ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do [ -S /run/spin-stack/erofs-sn
 
 [Install]
 WantedBy=multi-user.target
-RequiredBy=spinbox-containerd.service
+RequiredBy=spinbox.service

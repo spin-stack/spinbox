@@ -110,8 +110,8 @@ See `./install.sh --help` for all options.
 ### Start
 
 ```bash
-sudo systemctl enable --now spinbox-containerd
-sudo systemctl start --now spinbox-containerd
+sudo systemctl enable --now spinbox
+sudo systemctl start --now spinbox
 ```
 
 ### Run a Container

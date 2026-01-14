@@ -49,7 +49,7 @@
 // # Test Failures and Debugging
 //
 // If tests fail, check in order:
-//  1. containerd logs: journalctl -u spinbox-containerd
+//  1. containerd logs: journalctl -u spinbox
 //  2. VM logs: /var/log/spinbox/vm-*.log
 //  3. CNI state: ls -la /var/lib/cni/networks/
 //  4. Network devices: ip link show | grep tap
@@ -108,7 +108,7 @@ func (c *testLogCollector) dumpLogs() {
 
 	// Collect journald logs filtered by container ID
 	cmd := exec.Command("journalctl",
-		"-u", "spinbox-containerd",
+		"-u", "spinbox",
 		"--since", since,
 		"--no-pager",
 		"-o", "short-precise",

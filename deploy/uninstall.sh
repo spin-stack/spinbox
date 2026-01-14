@@ -37,26 +37,26 @@ fi
 echo "🛑 Stopping services..."
 
 # Stop and disable services
-if systemctl is-active --quiet spinbox-containerd; then
-    echo "  → Stopping spinbox-containerd service..."
-    systemctl stop spinbox-containerd
-    echo -e "    ${GREEN}✓${NC} spinbox-containerd stopped"
+if systemctl is-active --quiet spinbox; then
+    echo "  → Stopping spinbox service..."
+    systemctl stop spinbox
+    echo -e "    ${GREEN}✓${NC} spinbox stopped"
 fi
 
-if systemctl is-enabled --quiet spinbox-containerd 2>/dev/null; then
-    echo "  → Disabling spinbox-containerd service..."
-    systemctl disable spinbox-containerd
-    echo -e "    ${GREEN}✓${NC} spinbox-containerd disabled"
+if systemctl is-enabled --quiet spinbox 2>/dev/null; then
+    echo "  → Disabling spinbox service..."
+    systemctl disable spinbox
+    echo -e "    ${GREEN}✓${NC} spinbox disabled"
 fi
 
 echo ""
 echo "🗑️  Removing files..."
 
 # Remove systemd service symlinks
-if [ -L /etc/systemd/system/spinbox-containerd.service ]; then
-    echo "  → Removing spinbox-containerd.service symlink..."
-    rm -f /etc/systemd/system/spinbox-containerd.service
-    echo -e "    ${GREEN}✓${NC} spinbox-containerd.service symlink removed"
+if [ -L /etc/systemd/system/spinbox.service ]; then
+    echo "  → Removing spinbox.service symlink..."
+    rm -f /etc/systemd/system/spinbox.service
+    echo -e "    ${GREEN}✓${NC} spinbox.service symlink removed"
 fi
 
 systemctl daemon-reload
