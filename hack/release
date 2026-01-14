@@ -17,9 +17,9 @@ RELEASE_NAME="spinbox-${VERSION}-linux-x86_64"
 RELEASE_DIR="${OUTPUT_DIR}/release/${RELEASE_NAME}"
 
 rm -rf "${OUTPUT_DIR}/release"
-mkdir -p "${RELEASE_DIR}/usr/share/spinbox/bin"
-mkdir -p "${RELEASE_DIR}/usr/share/spinbox/kernel"
-mkdir -p "${RELEASE_DIR}/usr/share/spinbox/config"
+mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/bin"
+mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/kernel"
+mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/config"
 
 echo "Copying artifacts to release structure..."
 
@@ -33,23 +33,23 @@ artifacts=(
 for entry in "${artifacts[@]}"; do
   IFS=":" read -r src rel dest <<< "${entry}"
   if [ -f "${src}" ]; then
-    cp "${src}" "${RELEASE_DIR}/usr/share/spinbox/${rel}/${dest}"
+    cp "${src}" "${RELEASE_DIR}/usr/share/spin-stack/${rel}/${dest}"
     echo "  ok: ${dest}"
   fi
 done
 
 echo "Adding QEMU binaries and firmware..."
 if [ -f "${OUTPUT_DIR}/bin/qemu-system-x86_64" ]; then
-  cp "${OUTPUT_DIR}/bin/qemu-system-x86_64" "${RELEASE_DIR}/usr/share/spinbox/bin/"
-  chmod +x "${RELEASE_DIR}/usr/share/spinbox/bin/qemu-system-x86_64"
+  cp "${OUTPUT_DIR}/bin/qemu-system-x86_64" "${RELEASE_DIR}/usr/share/spin-stack/bin/"
+  chmod +x "${RELEASE_DIR}/usr/share/spin-stack/bin/qemu-system-x86_64"
   echo "  ok: qemu-system-x86_64"
 else
   echo "  warn: qemu-system-x86_64 not found - skipping"
 fi
 
-if [ -d "${OUTPUT_DIR}/share/spinbox/qemu" ]; then
-  mkdir -p "${RELEASE_DIR}/usr/share/spinbox/qemu"
-  cp -r "${OUTPUT_DIR}/share/spinbox/qemu/"* "${RELEASE_DIR}/usr/share/spinbox/qemu/"
+if [ -d "${OUTPUT_DIR}/share/spin-stack/qemu" ]; then
+  mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/qemu"
+  cp -r "${OUTPUT_DIR}/share/spin-stack/qemu/"* "${RELEASE_DIR}/usr/share/spin-stack/qemu/"
   echo "  ok: QEMU firmware files"
 else
   echo "  warn: QEMU firmware files not found - skipping"
@@ -57,32 +57,32 @@ fi
 
 missing_qemu_firmware=0
 for firmware in bios-256k.bin kvmvapic.bin vgabios-stdvga.bin; do
-  if [ ! -f "${RELEASE_DIR}/usr/share/spinbox/qemu/${firmware}" ]; then
+  if [ ! -f "${RELEASE_DIR}/usr/share/spin-stack/qemu/${firmware}" ]; then
     echo "👹 Error: missing QEMU firmware file ${firmware} in release"
     missing_qemu_firmware=1
   fi
 done
 
 if [ "${missing_qemu_firmware}" -ne 0 ]; then
-  if [ -d "${OUTPUT_DIR}/share/spinbox/qemu" ]; then
-    echo "Contents of ${OUTPUT_DIR}/share/spinbox/qemu:"
-    ls -la "${OUTPUT_DIR}/share/spinbox/qemu" || true
+  if [ -d "${OUTPUT_DIR}/share/spin-stack/qemu" ]; then
+    echo "Contents of ${OUTPUT_DIR}/share/spin-stack/qemu:"
+    ls -la "${OUTPUT_DIR}/share/spin-stack/qemu" || true
   fi
   exit 1
 fi
 
 echo "Copying configuration files..."
-cp -r deploy/config/* "${RELEASE_DIR}/usr/share/spinbox/config/"
+cp -r deploy/config/* "${RELEASE_DIR}/usr/share/spin-stack/config/"
 echo "  ok: config files (containerd, cni)"
 
 echo "Copying spinbox config example..."
-mkdir -p "${RELEASE_DIR}/usr/share/spinbox/config/spinbox"
-cp examples/config.json "${RELEASE_DIR}/usr/share/spinbox/config/spinbox/config.json"
+mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/config/spinbox"
+cp examples/config.json "${RELEASE_DIR}/usr/share/spin-stack/config/spinbox/config.json"
 echo "  ok: spinbox config.json example"
 
 echo "Copying systemd services..."
-mkdir -p "${RELEASE_DIR}/usr/share/spinbox/systemd"
-cp deploy/systemd/*.service "${RELEASE_DIR}/usr/share/spinbox/systemd/"
+mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/systemd"
+cp deploy/systemd/*.service "${RELEASE_DIR}/usr/share/spin-stack/systemd/"
 echo "  ok: systemd services"
 
 echo "Copying install scripts..."
@@ -102,7 +102,7 @@ if [ ! -f "${NERDCTL_TARBALL}" ]; then
 fi
 
 echo "Extracting nerdctl-full components (containerd, containerd-shim-runc-v2, nerdctl, ctr, runc)..."
-tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/spinbox/" \
+tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/spin-stack/" \
   bin/containerd \
   bin/containerd-shim-runc-v2 \
   bin/nerdctl \
@@ -110,8 +110,8 @@ tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/spinbox/" \
   bin/runc
 echo "  ok: containerd, containerd-shim-runc-v2, runc, ctr, nerdctl"
 
-mkdir -p "${RELEASE_DIR}/usr/share/spinbox/libexec/cni"
-tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/spinbox/libexec/cni" --strip-components=2 \
+mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/libexec/cni"
+tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/spin-stack/libexec/cni" --strip-components=2 \
   libexec/cni/bandwidth \
   libexec/cni/bridge \
   libexec/cni/dhcp \
@@ -137,8 +137,8 @@ fi
     -o tc-redirect-tap ./cmd/tc-redirect-tap)
 
 cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
-  "${RELEASE_DIR}/usr/share/spinbox/libexec/cni/"
-chmod +x "${RELEASE_DIR}/usr/share/spinbox/libexec/cni/tc-redirect-tap"
+  "${RELEASE_DIR}/usr/share/spin-stack/libexec/cni/"
+chmod +x "${RELEASE_DIR}/usr/share/spin-stack/libexec/cni/tc-redirect-tap"
 echo "  ok: tc-redirect-tap CNI plugin"
 
 echo "Downloading spin-erofs-snapshotter and erofs tools..."
@@ -160,8 +160,8 @@ for entry in "${EROFS_SNAPSHOTTER_BINARIES[@]}"; do
     curl -sSL -o "${bin_path}" "${EROFS_SNAPSHOTTER_BASE_URL}/${src}"
   fi
 
-  cp "${bin_path}" "${RELEASE_DIR}/usr/share/spinbox/bin/${dest}"
-  chmod +x "${RELEASE_DIR}/usr/share/spinbox/bin/${dest}"
+  cp "${bin_path}" "${RELEASE_DIR}/usr/share/spin-stack/bin/${dest}"
+  chmod +x "${RELEASE_DIR}/usr/share/spin-stack/bin/${dest}"
   echo "  ok: ${dest}"
 done
 

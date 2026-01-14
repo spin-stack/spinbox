@@ -118,7 +118,7 @@ var (
 // defaults
 var defaultConfig = Config{
 	Paths: PathsConfig{
-		ShareDir: "/usr/share/spinbox",
+		ShareDir: "/usr/share/spin-stack",
 		StateDir: "/var/lib/spin-stack",
 		LogDir:   "/var/log/spin-stack",
 	},

@@ -6,7 +6,7 @@ Before=spinbox.service
 
 [Service]
 ExecStartPre=-/sbin/modprobe erofs
-ExecSearchPath=/usr/share/spinbox/bin
+ExecSearchPath=/usr/share/spin-stack/bin
 ExecSearchPath=/usr/local/sbin
 ExecSearchPath=/usr/local/bin
 ExecSearchPath=/usr/sbin
@@ -15,7 +15,7 @@ ExecSearchPath=/sbin
 ExecSearchPath=/bin
 ExecStartPre=-/bin/mkdir -p /run/spin-stack/erofs-snapshotter
 ExecStartPre=-/bin/mkdir -p /var/lib/spin-stack/erofs-snapshotter
-ExecStart=/usr/share/spinbox/bin/spin-erofs-snapshotter \
+ExecStart=/usr/share/spin-stack/bin/spin-erofs-snapshotter \
   --root /var/lib/spin-stack/erofs-snapshotter \
   --address /run/spin-stack/erofs-snapshotter/snapshotter.sock \
   --containerd-address /var/run/spin-stack/containerd.sock \

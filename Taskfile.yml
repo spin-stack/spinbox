@@ -165,7 +165,7 @@ tasks:
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
         echo "✓ QEMU built: _output/bin/qemu-system-x86_64"
-        echo "✓ QEMU firmware: _output/share/spinbox/qemu/"
+        echo "✓ QEMU firmware: _output/share/spin-stack/qemu/"
 
   # ==========================================================================
   # Development Tasks
@@ -252,10 +252,10 @@ tasks:
         trap 'rm -rf "${WORKDIR}"' EXIT
 
         echo "📦 Verifying QEMU firmware in build output..."
-        if [ -d "{{.OUTPUT_DIR}}/share/spinbox/qemu" ]; then
-          ls -la "{{.OUTPUT_DIR}}/share/spinbox/qemu"
+        if [ -d "{{.OUTPUT_DIR}}/share/spin-stack/qemu" ]; then
+          ls -la "{{.OUTPUT_DIR}}/share/spin-stack/qemu"
         else
-          echo "👹 Error: {{.OUTPUT_DIR}}/share/spinbox/qemu not found"
+          echo "👹 Error: {{.OUTPUT_DIR}}/share/spin-stack/qemu not found"
           exit 1
         fi
 
@@ -265,9 +265,9 @@ tasks:
           exit 1
         fi
 
-        if ! grep -q "usr/share/spinbox/qemu/bios-256k.bin" "${TARBALL_LIST}"; then
+        if ! grep -q "usr/share/spin-stack/qemu/bios-256k.bin" "${TARBALL_LIST}"; then
           echo "👹 Error: bios-256k.bin missing from release tarball"
-          grep "usr/share/spinbox/qemu" "${TARBALL_LIST}" || true
+          grep "usr/share/spin-stack/qemu" "${TARBALL_LIST}" || true
           exit 1
         fi
 
@@ -307,7 +307,7 @@ tasks:
           exit 1
         fi
 
-        CTR_BIN="/usr/share/spinbox/bin/ctr"
+        CTR_BIN="/usr/share/spin-stack/bin/ctr"
         CTR_NAMESPACE="spinbox-ci"
         CTR_ID="qbx-ci-$(date +%s)"
 

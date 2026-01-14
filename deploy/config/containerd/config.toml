@@ -9,7 +9,7 @@ disabled_plugins = [
 
 imports = [
   "/etc/containerd/conf.d/*.toml",
-  "/usr/share/spinbox/config/containerd/conf.d/*.toml"
+  "/usr/share/spin-stack/config/containerd/conf.d/*.toml"
 ]
 
 oom_score = 0
@@ -67,10 +67,10 @@ grpc_histogram = false
     sandbox = "registry.k8s.io/pause:3.10.1"
 
     [plugins."io.containerd.cri.v1.images".registry]
-    config_path = "/usr/share/spinbox/config/containerd/certs.d:/usr/share/spinbox/config/docker/certs.d"
+    config_path = "/usr/share/spin-stack/config/containerd/certs.d:/usr/share/spin-stack/config/docker/certs.d"
 
   [plugins."io.containerd.cri.v1.runtime"]
-  cdi_spec_dirs = [ "/usr/share/spinbox/config/cdi", "/var/run/cdi" ]
+  cdi_spec_dirs = [ "/usr/share/spin-stack/config/cdi", "/var/run/cdi" ]
   enable_cdi = true
   enable_selinux = false
   enable_unprivileged_icmp = true
@@ -79,8 +79,8 @@ grpc_histogram = false
 
     [plugins."io.containerd.cri.v1.runtime".cni]
     bin_dir = ""
-    bin_dirs = [ "/usr/share/spinbox/libexec/cni" ]
-    conf_dir = "/usr/share/spinbox/config/cni/net.d"
+    bin_dirs = [ "/usr/share/spin-stack/libexec/cni" ]
+    conf_dir = "/usr/share/spin-stack/config/cni/net.d"
     conf_template = ""
     ip_pref = ""
     max_conf_num = 1
@@ -111,13 +111,13 @@ sandboxer = "podsandbox"
   enable_tls_streaming = false
 
   [plugins."io.containerd.internal.v1.opt"]
-  path = "/usr/share/spinbox/opt"
+  path = "/usr/share/spin-stack/opt"
 
   [plugins."io.containerd.nri.v1.nri"]
   disable = false
   disable_connections = false
-  plugin_config_path = "/usr/share/spinbox/config/nri/conf.d"
-  plugin_path = "/usr/share/spinbox/nri/plugins"
+  plugin_config_path = "/usr/share/spin-stack/config/nri/conf.d"
+  plugin_path = "/usr/share/spin-stack/nri/plugins"
   plugin_registration_timeout = "5s"
   plugin_request_timeout = "2s"
   socket_path = "/var/run/spin-stack/nri/nri.sock"

@@ -29,7 +29,7 @@ Controls filesystem paths for spinbox components.
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/spinbox",
+    "share_dir": "/usr/share/spin-stack",
     "state_dir": "/var/lib/spin-stack",
     "log_dir": "/var/log/spin-stack",
     "qemu_path": "",
@@ -40,7 +40,7 @@ Controls filesystem paths for spinbox components.
 
 ### `paths.share_dir`
 - **Type**: string
-- **Default**: `/usr/share/spinbox`
+- **Default**: `/usr/share/spin-stack`
 - **Required**: Yes
 - **Description**: Directory containing spinbox binaries, kernel, and initrd
 - **Validation**: Must exist and contain:
@@ -364,7 +364,7 @@ If configuration is missing or invalid, spinbox will:
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/spinbox",
+    "share_dir": "/usr/share/spin-stack",
     "state_dir": "/var/lib/spin-stack",
     "log_dir": "/var/log/spin-stack"
   },
@@ -392,7 +392,7 @@ Example spinbox config for aggressive hotplug testing:
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/spinbox",
+    "share_dir": "/usr/share/spin-stack",
     "state_dir": "/var/lib/spin-stack",
     "log_dir": "/var/log/spin-stack"
   },
@@ -419,7 +419,7 @@ Longer timeouts for debugging, fast hotplug monitoring.
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/spinbox",
+    "share_dir": "/usr/share/spin-stack",
     "state_dir": "/var/lib/spin-stack",
     "log_dir": "/var/log/spin-stack"
   },
@@ -446,7 +446,7 @@ High thresholds, large safety margin, no scale-down.
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/spinbox",
+    "share_dir": "/usr/share/spin-stack",
     "state_dir": "/var/lib/spin-stack",
     "log_dir": "/var/log/spin-stack"
   },
@@ -499,7 +499,7 @@ cat /etc/spinbox/config.json | jq .
 
 ### Error: "Kernel not found"
 ```
-paths validation failed: kernel not found at /usr/share/spinbox/kernel/spinbox-kernel-x86_64
+paths validation failed: kernel not found at /usr/share/spin-stack/kernel/spinbox-kernel-x86_64
 ```
 **Solution**: Build or install kernel:
 ```bash

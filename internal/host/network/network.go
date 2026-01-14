@@ -73,8 +73,8 @@ func LoadNetworkConfig() NetworkConfig {
 
 	// Priority 2: Spinbox-bundled CNI paths (if they exist)
 	// Used when spinbox is installed with its own CNI plugins
-	spinboxConfDir := filepath.Join("/usr/share/spinbox", "config", "cni", "net.d")
-	spinboxBinDir := filepath.Join("/usr/share/spinbox", "libexec", "cni")
+	spinboxConfDir := filepath.Join("/usr/share/spin-stack", "config", "cni", "net.d")
+	spinboxBinDir := filepath.Join("/usr/share/spin-stack", "libexec", "cni")
 	if _, err := os.Stat(spinboxConfDir); err == nil {
 		return NetworkConfig{
 			CNIConfDir: spinboxConfDir,

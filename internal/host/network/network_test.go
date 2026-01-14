@@ -18,7 +18,7 @@ func TestLoadNetworkConfig(t *testing.T) {
 
 		// LoadNetworkConfig has a three-tier fallback:
 		// 1. Environment variables (cleared above)
-		// 2. Spinbox-bundled paths (/usr/share/spinbox/config/cni/net.d)
+		// 2. Spinbox-bundled paths (/usr/share/spin-stack/config/cni/net.d)
 		// 3. Standard system paths (/etc/cni/net.d, /opt/cni/bin)
 		assert.NotEmpty(t, cfg.CNIConfDir)
 		assert.NotEmpty(t, cfg.CNIBinDir)

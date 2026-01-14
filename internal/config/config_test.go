@@ -74,8 +74,8 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
 	// Verify paths
-	if cfg.Paths.ShareDir != "/usr/share/spinbox" {
-		t.Errorf("expected ShareDir /usr/share/spinbox, got %s", cfg.Paths.ShareDir)
+	if cfg.Paths.ShareDir != "/usr/share/spin-stack" {
+		t.Errorf("expected ShareDir /usr/share/spin-stack, got %s", cfg.Paths.ShareDir)
 	}
 	if cfg.Paths.StateDir != "/var/lib/spin-stack" {
 		t.Errorf("expected StateDir /var/lib/spin-stack, got %s", cfg.Paths.StateDir)

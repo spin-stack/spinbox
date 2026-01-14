@@ -182,20 +182,20 @@ func TestPathFunctions(t *testing.T) {
 	}{
 		{
 			name: "KernelPath",
-			cfg:  config.PathsConfig{ShareDir: "/usr/share/spinbox"},
+			cfg:  config.PathsConfig{ShareDir: "/usr/share/spin-stack"},
 			fn:   KernelPath,
-			want: "/usr/share/spinbox/kernel/spinbox-kernel-x86_64",
+			want: "/usr/share/spin-stack/kernel/spinbox-kernel-x86_64",
 		},
 		{
 			name: "InitrdPath",
-			cfg:  config.PathsConfig{ShareDir: "/usr/share/spinbox"},
+			cfg:  config.PathsConfig{ShareDir: "/usr/share/spin-stack"},
 			fn:   InitrdPath,
-			want: "/usr/share/spinbox/kernel/spinbox-initrd",
+			want: "/usr/share/spin-stack/kernel/spinbox-initrd",
 		},
 		{
 			name: "QemuPath with explicit config",
 			cfg: config.PathsConfig{
-				ShareDir: "/usr/share/spinbox",
+				ShareDir: "/usr/share/spin-stack",
 				QEMUPath: "/custom/path/qemu-system-x86_64",
 			},
 			fn:   QemuPath,
@@ -204,7 +204,7 @@ func TestPathFunctions(t *testing.T) {
 		{
 			name: "QemuSharePath with explicit config",
 			cfg: config.PathsConfig{
-				ShareDir:      "/usr/share/spinbox",
+				ShareDir:      "/usr/share/spin-stack",
 				QEMUSharePath: "/custom/share/qemu",
 			},
 			fn:   QemuSharePath,

@@ -46,7 +46,7 @@ after 100
 set SHELL_PROMPT {\n\$ $}
 
 # Define ctr command
-set CTR "ctr --address /var/run/spinbox/containerd.sock"
+set CTR "ctr --address /var/run/spin-stack/containerd.sock"
 
 # ============================================
 # PHASE 1: Run container and make changes
@@ -95,7 +95,7 @@ after 500
 
 # Save the bash spawn id and spawn attach for better terminal handling
 set bash_spawn $spawn_id
-spawn ctr --address /var/run/spinbox/containerd.sock task attach snapshot-demo
+spawn ctr --address /var/run/spin-stack/containerd.sock task attach snapshot-demo
 set vm_spawn $spawn_id
 
 log_user 1
@@ -175,7 +175,7 @@ set spawn_id $bash_spawn
 
 comment "=== HOST: Create image from VM ==="
 
-set NERDCTL "nerdctl --address /var/run/spinbox/containerd.sock"
+set NERDCTL "nerdctl --address /var/run/spin-stack/containerd.sock"
 
 comment "Stop VM before creating snapshot"
 type_cmd "$CTR task kill snapshot-demo"
@@ -246,7 +246,7 @@ after 500
 
 # Save bash spawn id for cleanup later
 set bash_spawn $spawn_id
-spawn ctr --address /var/run/spinbox/containerd.sock task attach snapshot-new
+spawn ctr --address /var/run/spin-stack/containerd.sock task attach snapshot-new
 
 # Wait for login
 expect {

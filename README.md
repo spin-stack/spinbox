@@ -118,7 +118,7 @@ sudo systemctl start --now spinbox
 
 ```bash
 # Add spinbox binaries to PATH
-export PATH=/usr/share/spinbox/bin:$PATH
+export PATH=/usr/share/spin-stack/bin:$PATH
 
 # Pull an image
 ctr --address /var/run/spin-stack/containerd.sock image pull \

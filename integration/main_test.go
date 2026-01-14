@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 // cleanupOrphanedContainers removes any leftover qbx-* containers from previous failed runs.
 func cleanupOrphanedContainers() {
 	cfg := loadTestConfig()
-	ctrBin := "/usr/share/spinbox/bin/ctr"
+	ctrBin := "/usr/share/spin-stack/bin/ctr"
 
 	// List all tasks
 	cmd := exec.Command(ctrBin, "--address", cfg.Socket, "--namespace", cfg.Namespace, "tasks", "list")
@@ -97,7 +97,7 @@ func haveQEMU() bool {
 	if _, err := exec.LookPath("qemu-system-x86_64"); err == nil {
 		return true
 	}
-	if _, err := os.Stat("/usr/share/spinbox/bin/qemu-system-x86_64"); err == nil {
+	if _, err := os.Stat("/usr/share/spin-stack/bin/qemu-system-x86_64"); err == nil {
 		return true
 	}
 	return false

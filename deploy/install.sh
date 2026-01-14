@@ -175,7 +175,7 @@ check_containerd_config() {
       ${BLUE}  snapshotter = "spin-erofs"${NC}
 
       Note: You also need the spin-erofs proxy plugin configured.
-      See /usr/share/spinbox/config/containerd/config.toml for an example.
+      See /usr/share/spin-stack/config/containerd/config.toml for an example.
 
 EOF
     return 1
@@ -252,7 +252,7 @@ check_cni_config() {
     fi
     log_warn "No CNI configuration found in /etc/cni/net.d/"
     echo "      You may need to create a CNI network configuration."
-    echo "      Example: /usr/share/spinbox/config/cni/net.d/10-spinbox.conflist"
+    echo "      Example: /usr/share/spin-stack/config/cni/net.d/10-spinbox.conflist"
     return 1
 }
 
@@ -301,7 +301,7 @@ check_ubuntu_packages() {
 
 check_qemu_dependencies() {
     section "Checking QEMU binary dependencies..."
-    local qemu_bin="${SCRIPT_DIR}/usr/share/spinbox/bin/qemu-system-x86_64"
+    local qemu_bin="${SCRIPT_DIR}/usr/share/spin-stack/bin/qemu-system-x86_64"
     if [ ! -f "$qemu_bin" ]; then
         log_warn "QEMU binary not found in release package (will skip dependency check)"
         return 0
@@ -408,48 +408,48 @@ echo ""
 echo "Installing files..."
 
 if [ "$SHIM_ONLY" = true ]; then
-    echo "  → Installing shim binaries to /usr/share/spinbox/bin..."
-    mkdir -p /usr/share/spinbox/bin
+    echo "  → Installing shim binaries to /usr/share/spin-stack/bin..."
+    mkdir -p /usr/share/spin-stack/bin
     for bin in containerd-shim-spinbox-v1 qemu-system-x86_64; do
-        src="${SCRIPT_DIR}/usr/share/spinbox/bin/${bin}"
-        [ -f "$src" ] && cp "$src" /usr/share/spinbox/bin/ && chmod +x "/usr/share/spinbox/bin/${bin}"
+        src="${SCRIPT_DIR}/usr/share/spin-stack/bin/${bin}"
+        [ -f "$src" ] && cp "$src" /usr/share/spin-stack/bin/ && chmod +x "/usr/share/spin-stack/bin/${bin}"
     done
     log_ok "Shim binaries installed"
 else
-    install_dir "${SCRIPT_DIR}/usr/share/spinbox/bin" "/usr/share/spinbox/bin" "binaries" true
+    install_dir "${SCRIPT_DIR}/usr/share/spin-stack/bin" "/usr/share/spin-stack/bin" "binaries" true
 fi
 
-install_dir "${SCRIPT_DIR}/usr/share/spinbox/kernel" "/usr/share/spinbox/kernel" "kernel and initrd"
+install_dir "${SCRIPT_DIR}/usr/share/spin-stack/kernel" "/usr/share/spin-stack/kernel" "kernel and initrd"
 
 if [ "$SHIM_ONLY" = false ]; then
-    install_dir "${SCRIPT_DIR}/usr/share/spinbox/config" "/usr/share/spinbox/config" "configuration files"
+    install_dir "${SCRIPT_DIR}/usr/share/spin-stack/config" "/usr/share/spin-stack/config" "configuration files"
 else
     echo "  → Installing spinbox config reference..."
-    mkdir -p /usr/share/spinbox/config/spinbox
-    [ -f "${SCRIPT_DIR}/usr/share/spinbox/config/spinbox/config.json" ] && \
-        cp "${SCRIPT_DIR}/usr/share/spinbox/config/spinbox/config.json" /usr/share/spinbox/config/spinbox/
-    [ -d "${SCRIPT_DIR}/usr/share/spinbox/config/cni" ] && \
-        mkdir -p /usr/share/spinbox/config/cni && \
-        cp -r "${SCRIPT_DIR}/usr/share/spinbox/config/cni/"* /usr/share/spinbox/config/cni/
+    mkdir -p /usr/share/spin-stack/config/spinbox
+    [ -f "${SCRIPT_DIR}/usr/share/spin-stack/config/spinbox/config.json" ] && \
+        cp "${SCRIPT_DIR}/usr/share/spin-stack/config/spinbox/config.json" /usr/share/spin-stack/config/spinbox/
+    [ -d "${SCRIPT_DIR}/usr/share/spin-stack/config/cni" ] && \
+        mkdir -p /usr/share/spin-stack/config/cni && \
+        cp -r "${SCRIPT_DIR}/usr/share/spin-stack/config/cni/"* /usr/share/spin-stack/config/cni/
     log_ok "Reference configuration files installed"
 fi
 
-if [ -d "${SCRIPT_DIR}/usr/share/spinbox/qemu" ]; then
-    install_dir "${SCRIPT_DIR}/usr/share/spinbox/qemu" "/usr/share/spinbox/qemu" "QEMU firmware"
+if [ -d "${SCRIPT_DIR}/usr/share/spin-stack/qemu" ]; then
+    install_dir "${SCRIPT_DIR}/usr/share/spin-stack/qemu" "/usr/share/spin-stack/qemu" "QEMU firmware"
 fi
 
 if [ "$SHIM_ONLY" = false ]; then
-    if [ -d "${SCRIPT_DIR}/usr/share/spinbox/libexec/cni" ]; then
-        install_dir "${SCRIPT_DIR}/usr/share/spinbox/libexec/cni" "/usr/share/spinbox/libexec/cni" "CNI plugins" true
+    if [ -d "${SCRIPT_DIR}/usr/share/spin-stack/libexec/cni" ]; then
+        install_dir "${SCRIPT_DIR}/usr/share/spin-stack/libexec/cni" "/usr/share/spin-stack/libexec/cni" "CNI plugins" true
     fi
 else
     log_skip "Skipping CNI plugins (shim-only mode assumes system CNI plugins)"
 fi
 
 echo "  → Installing scripts..."
-cp "${SCRIPT_DIR}/install.sh" /usr/share/spinbox/
-cp "${SCRIPT_DIR}/uninstall.sh" /usr/share/spinbox/
-chmod +x /usr/share/spinbox/install.sh /usr/share/spinbox/uninstall.sh
+cp "${SCRIPT_DIR}/install.sh" /usr/share/spin-stack/
+cp "${SCRIPT_DIR}/uninstall.sh" /usr/share/spin-stack/
+chmod +x /usr/share/spin-stack/install.sh /usr/share/spin-stack/uninstall.sh
 log_ok "Scripts installed"
 
 echo "  → Creating state directories..."
@@ -463,19 +463,19 @@ log_ok "State directories created"
 echo "  → Installing spinbox configuration..."
 mkdir -p /etc/spinbox
 if [ ! -f /etc/spinbox/config.json ]; then
-    cp "${SCRIPT_DIR}/usr/share/spinbox/config/spinbox/config.json" /etc/spinbox/config.json
+    cp "${SCRIPT_DIR}/usr/share/spin-stack/config/spinbox/config.json" /etc/spinbox/config.json
     log_ok "Configuration file created at /etc/spinbox/config.json"
 else
     log_warn "/etc/spinbox/config.json already exists, skipping"
-    echo "      Example: /usr/share/spinbox/config/spinbox/config.json"
+    echo "      Example: /usr/share/spin-stack/config/spinbox/config.json"
 fi
 
 if [ "$SHIM_ONLY" = false ]; then
     echo "  → Installing systemd services..."
-    mkdir -p /usr/share/spinbox/systemd
-    cp "${SCRIPT_DIR}/usr/share/spinbox/systemd/"*.service /usr/share/spinbox/systemd/
-    ln -sf /usr/share/spinbox/systemd/spinbox-erofs-snapshotter.service /etc/systemd/system/
-    ln -sf /usr/share/spinbox/systemd/spinbox.service /etc/systemd/system/
+    mkdir -p /usr/share/spin-stack/systemd
+    cp "${SCRIPT_DIR}/usr/share/spin-stack/systemd/"*.service /usr/share/spin-stack/systemd/
+    ln -sf /usr/share/spin-stack/systemd/spinbox-erofs-snapshotter.service /etc/systemd/system/
+    ln -sf /usr/share/spin-stack/systemd/spinbox.service /etc/systemd/system/
     systemctl daemon-reload
     log_ok "Systemd services installed"
 else
@@ -500,29 +500,29 @@ check_file() {
 
 # Core files (both modes)
 CORE_FILES=(
-    "/usr/share/spinbox/bin/containerd-shim-spinbox-v1"
-    "/usr/share/spinbox/bin/qemu-system-x86_64"
-    "/usr/share/spinbox/qemu/bios-256k.bin"
-    "/usr/share/spinbox/qemu/kvmvapic.bin"
-    "/usr/share/spinbox/qemu/vgabios-stdvga.bin"
-    "/usr/share/spinbox/kernel/spinbox-kernel-x86_64"
-    "/usr/share/spinbox/kernel/spinbox-initrd"
-    "/usr/share/spinbox/config/spinbox/config.json"
+    "/usr/share/spin-stack/bin/containerd-shim-spinbox-v1"
+    "/usr/share/spin-stack/bin/qemu-system-x86_64"
+    "/usr/share/spin-stack/qemu/bios-256k.bin"
+    "/usr/share/spin-stack/qemu/kvmvapic.bin"
+    "/usr/share/spin-stack/qemu/vgabios-stdvga.bin"
+    "/usr/share/spin-stack/kernel/spinbox-kernel-x86_64"
+    "/usr/share/spin-stack/kernel/spinbox-initrd"
+    "/usr/share/spin-stack/config/spinbox/config.json"
     "/etc/spinbox/config.json"
 )
 
 # Full install additional files
 FULL_FILES=(
-    "/usr/share/spinbox/bin/containerd"
-    "/usr/share/spinbox/bin/containerd-shim-runc-v2"
-    "/usr/share/spinbox/bin/spin-erofs-snapshotter"
-    "/usr/share/spinbox/bin/ctr"
-    "/usr/share/spinbox/bin/runc"
-    "/usr/share/spinbox/bin/nerdctl"
-    "/usr/share/spinbox/config/containerd/config.toml"
-    "/usr/share/spinbox/config/cni/net.d/10-spinbox.conflist"
-    "/usr/share/spinbox/systemd/spinbox-erofs-snapshotter.service"
-    "/usr/share/spinbox/systemd/spinbox.service"
+    "/usr/share/spin-stack/bin/containerd"
+    "/usr/share/spin-stack/bin/containerd-shim-runc-v2"
+    "/usr/share/spin-stack/bin/spin-erofs-snapshotter"
+    "/usr/share/spin-stack/bin/ctr"
+    "/usr/share/spin-stack/bin/runc"
+    "/usr/share/spin-stack/bin/nerdctl"
+    "/usr/share/spin-stack/config/containerd/config.toml"
+    "/usr/share/spin-stack/config/cni/net.d/10-spinbox.conflist"
+    "/usr/share/spin-stack/systemd/spinbox-erofs-snapshotter.service"
+    "/usr/share/spin-stack/systemd/spinbox.service"
     "/etc/systemd/system/spinbox-erofs-snapshotter.service"
     "/etc/systemd/system/spinbox.service"
 )
@@ -536,7 +536,7 @@ else
     echo "Verifying full installation..."
     for f in "${CORE_FILES[@]}" "${FULL_FILES[@]}"; do check_file "$f"; done
     for plugin in "${CNI_PLUGINS[@]}"; do
-        check_file "/usr/share/spinbox/libexec/cni/${plugin}"
+        check_file "/usr/share/spin-stack/libexec/cni/${plugin}"
     done
 fi
 
@@ -570,10 +570,10 @@ Next steps:
      ${BLUE}  snapshotter = "spin-erofs"${NC}
 
      Note: You also need to configure the spin-erofs proxy plugin.
-     See /usr/share/spinbox/config/containerd/config.toml for an example.
+     See /usr/share/spin-stack/config/containerd/config.toml for an example.
 
   3. Ensure the shim is in containerd's PATH or use absolute path:
-     Shim location: /usr/share/spinbox/bin/containerd-shim-spinbox-v1
+     Shim location: /usr/share/spin-stack/bin/containerd-shim-spinbox-v1
 
   4. Restart containerd to pick up the new runtime:
      systemctl restart containerd
@@ -587,7 +587,7 @@ EOF
 Next steps:
   1. Review and customize configuration (if needed):
      vi /etc/spinbox/config.json
-     (See /usr/share/spinbox/config/spinbox/config.json for defaults)
+     (See /usr/share/spin-stack/config/spinbox/config.json for defaults)
 
   2. Enable and start services (snapshotter starts automatically with containerd):
      systemctl enable spinbox
@@ -597,8 +597,8 @@ Next steps:
      systemctl status spinbox-erofs-snapshotter
      systemctl status spinbox
 
-  4. Add /usr/share/spinbox/bin to PATH:
-     export PATH=/usr/share/spinbox/bin:\$PATH
+  4. Add /usr/share/spin-stack/bin to PATH:
+     export PATH=/usr/share/spin-stack/bin:\$PATH
 
 EOF
     fi

@@ -22,8 +22,8 @@ fi
 # Confirmation prompt
 echo -e "${YELLOW}WARNING: This will remove all Spinbox components and data.${NC}"
 echo "This includes:"
-echo "  - All binaries in /usr/share/spinbox"
-echo "  - All configuration files in /usr/share/spinbox/config"
+echo "  - All binaries in /usr/share/spin-stack"
+echo "  - All configuration files in /usr/share/spin-stack/config"
 echo "  - All state data in /var/lib/spin-stack (containers, images, etc.)"
 echo "  - Systemd service files"
 echo ""
@@ -63,10 +63,10 @@ systemctl daemon-reload
 echo -e "  ${GREEN}✓${NC} Systemd reloaded"
 
 # Remove binaries and configuration
-if [ -d /usr/share/spinbox ]; then
-    echo "  → Removing /usr/share/spinbox..."
-    rm -rf /usr/share/spinbox
-    echo -e "    ${GREEN}✓${NC} /usr/share/spinbox removed"
+if [ -d /usr/share/spin-stack ]; then
+    echo "  → Removing /usr/share/spin-stack..."
+    rm -rf /usr/share/spin-stack
+    echo -e "    ${GREEN}✓${NC} /usr/share/spin-stack removed"
 fi
 
 # Remove state data
