@@ -6,8 +6,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="${1:-demo}"
-CTR="ctr --address /var/run/spinbox/containerd.sock"
-NERDCTL="nerdctl --address /var/run/spinbox/containerd.sock"
+CTR="ctr --address /var/run/spin-stack/containerd.sock"
+NERDCTL="nerdctl --address /var/run/spin-stack/containerd.sock"
 
 # Validate mode and set defaults
 case "$MODE" in

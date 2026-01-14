@@ -21,7 +21,7 @@
 // - Test image available (configurable via SPINBOX_IMAGE)
 //
 // Default configuration expects:
-//   - Socket: /var/run/spinbox/containerd.sock
+//   - Socket: /var/run/spin-stack/containerd.sock
 //   - Runtime: io.containerd.spinbox.v1
 //   - Snapshotter: spin-erofs
 //   - Namespace: default
@@ -50,7 +50,7 @@
 //
 // If tests fail, check in order:
 //  1. containerd logs: journalctl -u spinbox
-//  2. VM logs: /var/log/spinbox/vm-*.log
+//  2. VM logs: /var/log/spin-stack/vm-*.log
 //  3. CNI state: ls -la /var/lib/cni/networks/
 //  4. Network devices: ip link show | grep tap
 //  5. QEMU processes: ps aux | grep qemu
@@ -136,7 +136,7 @@ func (c *testLogCollector) dumpLogs() {
 	}
 
 	// Collect VM console log if it exists
-	consoleLogPath := filepath.Join("/var/log/spinbox", c.containerID, "console.log")
+	consoleLogPath := filepath.Join("/var/log/spin-stack", c.containerID, "console.log")
 	if data, err := os.ReadFile(consoleLogPath); err == nil {
 		c.t.Logf("VM console log (%s):\n%s", consoleLogPath, string(data))
 	}
@@ -152,7 +152,7 @@ type testConfig struct {
 }
 
 const (
-	defaultSocket      = "/var/run/spinbox/containerd.sock"
+	defaultSocket      = "/var/run/spin-stack/containerd.sock"
 	defaultImage       = "ghcr.io/spin-stack/spinbox/sandbox:latest"
 	defaultRuntime     = "io.containerd.spinbox.v1"
 	defaultSnapshotter = "spin-erofs"

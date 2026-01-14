@@ -33,7 +33,7 @@ vars:
   OUTPUT_DIR: _output
   BIN_DIR: bin
   SCRIPTS_DIR: hack
-  BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/spinbox-buildkit-cache"}}'
+  BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/spin-stack-buildkit-cache"}}'
   BUILDKIT_CACHE_KERNEL: '{{.BUILDKIT_CACHE_DIR}}/kernel'
   BUILDKIT_CACHE_INITRD: '{{.BUILDKIT_CACHE_DIR}}/initrd'
   BUILDKIT_CACHE_QEMU: '{{.BUILDKIT_CACHE_DIR}}/qemu'
@@ -292,7 +292,7 @@ tasks:
         echo "✓ /dev/vsock present"
         ${SUDO} lsmod | grep vhost_vsock || true
 
-        SOCKET="/var/run/spinbox/containerd.sock"
+        SOCKET="/var/run/spin-stack/containerd.sock"
 
         for _ in $(seq 1 30); do
           if [ -S "${SOCKET}" ]; then
@@ -366,18 +366,18 @@ tasks:
           echo "---- spinbox logs ----"
           ${SUDO} journalctl -u spinbox --no-pager -n 200 || true
           echo "---- spinbox qemu.log (latest) ----"
-          QEMU_LOG=$(ls -1t /var/log/spinbox/*/qemu.log 2>/dev/null | head -n 1 || true)
+          QEMU_LOG=$(ls -1t /var/log/spin-stack/*/qemu.log 2>/dev/null | head -n 1 || true)
           if [ -n "${QEMU_LOG:-}" ]; then
             ${SUDO} tail -n 200 "${QEMU_LOG}" || true
           else
-            echo "No qemu.log found under /var/log/spinbox/"
+            echo "No qemu.log found under /var/log/spin-stack/"
           fi
           echo "---- spinbox console.log (latest) ----"
-          CONSOLE_LOG=$(ls -1t /var/log/spinbox/*/console.log 2>/dev/null | head -n 1 || true)
+          CONSOLE_LOG=$(ls -1t /var/log/spin-stack/*/console.log 2>/dev/null | head -n 1 || true)
           if [ -n "${CONSOLE_LOG:-}" ]; then
             ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
           else
-            echo "No console.log found under /var/log/spinbox/"
+            echo "No console.log found under /var/log/spin-stack/"
           fi
           exit 1
         fi
@@ -392,7 +392,7 @@ tasks:
           SPINBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
           SPINBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
           SPINBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
-          SPINBOX_FIFO_DIR="/run/spinbox/containerd/fifo" \
+          SPINBOX_FIFO_DIR="/run/spin-stack/containerd/fifo" \
           SPINBOX_TEST_ID="${TEST_ID}" \
           go test -v -tags=integration -count=1 ./integration -test.v || {
             echo "---- spinbox logs for ${TEST_ID} ----"
@@ -400,18 +400,18 @@ tasks:
             echo "---- spinbox logs ----"
             ${SUDO} journalctl -u spinbox --no-pager -n 200 || true
             echo "---- spinbox qemu.log (latest) ----"
-            QEMU_LOG=$(ls -1t /var/log/spinbox/*/qemu.log 2>/dev/null | head -n 1 || true)
+            QEMU_LOG=$(ls -1t /var/log/spin-stack/*/qemu.log 2>/dev/null | head -n 1 || true)
             if [ -n "${QEMU_LOG:-}" ]; then
               ${SUDO} tail -n 200 "${QEMU_LOG}" || true
             else
-              echo "No qemu.log found under /var/log/spinbox/"
+              echo "No qemu.log found under /var/log/spin-stack/"
             fi
             echo "---- spinbox console.log (latest) ----"
-            CONSOLE_LOG=$(ls -1t /var/log/spinbox/*/console.log 2>/dev/null | head -n 1 || true)
+            CONSOLE_LOG=$(ls -1t /var/log/spin-stack/*/console.log 2>/dev/null | head -n 1 || true)
             if [ -n "${CONSOLE_LOG:-}" ]; then
               ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
             else
-              echo "No console.log found under /var/log/spinbox/"
+              echo "No console.log found under /var/log/spin-stack/"
             fi
             exit 1
           }

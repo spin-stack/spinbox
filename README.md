@@ -121,11 +121,11 @@ sudo systemctl start --now spinbox
 export PATH=/usr/share/spinbox/bin:$PATH
 
 # Pull an image
-ctr --address /var/run/spinbox/containerd.sock image pull \
+ctr --address /var/run/spin-stack/containerd.sock image pull \
   --snapshotter spin-erofs ghcr.io/spin-stack/spinbox/sandbox:v0.0.11
 
 # Run with spinbox runtime
-ctr --address /var/run/spinbox/containerd.sock run -t --rm \
+ctr --address /var/run/spin-stack/containerd.sock run -t --rm \
   --snapshotter spin-erofs \
   --runtime io.containerd.spinbox.v1 \
   ghcr.io/spin-stack/spinbox/sandbox:v0.0.11 test-qemu-shim

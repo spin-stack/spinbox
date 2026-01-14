@@ -453,9 +453,9 @@ chmod +x /usr/share/spinbox/install.sh /usr/share/spinbox/uninstall.sh
 log_ok "Scripts installed"
 
 echo "  → Creating state directories..."
-mkdir -p /var/lib/spinbox /var/run/spinbox /var/log/spinbox /run/spinbox/vm
+mkdir -p /var/lib/spin-stack /var/run/spin-stack /var/log/spin-stack /run/spin-stack/vm
 if [ "$SHIM_ONLY" = false ]; then
-    mkdir -p /var/lib/spinbox/containerd /run/spinbox/containerd /run/spinbox/containerd/fifo
+    mkdir -p /var/lib/spin-stack/containerd /run/spin-stack/containerd /run/spin-stack/containerd/fifo
     mkdir -p /var/lib/spin-stack/erofs-snapshotter /run/spin-stack/erofs-snapshotter
 fi
 log_ok "State directories created"

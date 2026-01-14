@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-CTR="ctr --address /var/run/spinbox/containerd.sock"
+CTR="ctr --address /var/run/spin-stack/containerd.sock"
 
 cleanup_container() {
     local name="$1"

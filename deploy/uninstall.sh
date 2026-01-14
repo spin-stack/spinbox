@@ -24,7 +24,7 @@ echo -e "${YELLOW}WARNING: This will remove all Spinbox components and data.${NC
 echo "This includes:"
 echo "  - All binaries in /usr/share/spinbox"
 echo "  - All configuration files in /usr/share/spinbox/config"
-echo "  - All state data in /var/lib/spinbox (containers, images, etc.)"
+echo "  - All state data in /var/lib/spin-stack (containers, images, etc.)"
 echo "  - Systemd service files"
 echo ""
 read -p "Are you sure you want to continue? (yes/no): " -r
@@ -70,29 +70,29 @@ if [ -d /usr/share/spinbox ]; then
 fi
 
 # Remove state data
-if [ -d /var/lib/spinbox ]; then
-    echo "  → Removing /var/lib/spinbox..."
-    rm -rf /var/lib/spinbox
-    echo -e "    ${GREEN}✓${NC} /var/lib/spinbox removed"
+if [ -d /var/lib/spin-stack ]; then
+    echo "  → Removing /var/lib/spin-stack..."
+    rm -rf /var/lib/spin-stack
+    echo -e "    ${GREEN}✓${NC} /var/lib/spin-stack removed"
 fi
 
 # Remove runtime directories
-if [ -d /run/spinbox ]; then
-    echo "  → Removing /run/spinbox..."
-    rm -rf /run/spinbox
-    echo -e "    ${GREEN}✓${NC} /run/spinbox removed"
+if [ -d /run/spin-stack ]; then
+    echo "  → Removing /run/spin-stack..."
+    rm -rf /run/spin-stack
+    echo -e "    ${GREEN}✓${NC} /run/spin-stack removed"
 fi
 
-if [ -d /var/run/spinbox ]; then
-    echo "  → Removing /var/run/spinbox..."
-    rm -rf /var/run/spinbox
-    echo -e "    ${GREEN}✓${NC} /var/run/spinbox removed"
+if [ -d /var/run/spin-stack ]; then
+    echo "  → Removing /var/run/spin-stack..."
+    rm -rf /var/run/spin-stack
+    echo -e "    ${GREEN}✓${NC} /var/run/spin-stack removed"
 fi
 
 # Remove socket if it exists
-if [ -S /var/run/spinbox/containerd.sock ]; then
+if [ -S /var/run/spin-stack/containerd.sock ]; then
     echo "  → Removing containerd socket..."
-    rm -f /var/run/spinbox/containerd.sock
+    rm -f /var/run/spin-stack/containerd.sock
     echo -e "    ${GREEN}✓${NC} Socket removed"
 fi
 

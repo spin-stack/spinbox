@@ -18,7 +18,7 @@ ExecStartPre=-/bin/mkdir -p /var/lib/spin-stack/erofs-snapshotter
 ExecStart=/usr/share/spinbox/bin/spin-erofs-snapshotter \
   --root /var/lib/spin-stack/erofs-snapshotter \
   --address /run/spin-stack/erofs-snapshotter/snapshotter.sock \
-  --containerd-address /var/run/spinbox/containerd.sock \
+  --containerd-address /var/run/spin-stack/containerd.sock \
   --containerd-namespace default \
   --log-level debug \
   --set-immutable

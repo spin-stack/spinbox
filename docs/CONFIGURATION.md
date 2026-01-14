@@ -30,8 +30,8 @@ Controls filesystem paths for spinbox components.
 {
   "paths": {
     "share_dir": "/usr/share/spinbox",
-    "state_dir": "/var/lib/spinbox",
-    "log_dir": "/var/log/spinbox",
+    "state_dir": "/var/lib/spin-stack",
+    "log_dir": "/var/log/spin-stack",
     "qemu_path": "",
     "qemu_share_path": ""
   }
@@ -49,7 +49,7 @@ Controls filesystem paths for spinbox components.
 
 ### `paths.state_dir`
 - **Type**: string
-- **Default**: `/var/lib/spinbox`
+- **Default**: `/var/lib/spin-stack`
 - **Required**: Yes
 - **Description**: Directory for runtime state files
 - **Validation**: Must be writable (created automatically if missing)
@@ -57,7 +57,7 @@ Controls filesystem paths for spinbox components.
 
 ### `paths.log_dir`
 - **Type**: string
-- **Default**: `/var/log/spinbox`
+- **Default**: `/var/log/spin-stack`
 - **Required**: Yes
 - **Description**: Directory for VM logs
 - **Validation**: Must be writable (created automatically if missing)
@@ -365,8 +365,8 @@ If configuration is missing or invalid, spinbox will:
 {
   "paths": {
     "share_dir": "/usr/share/spinbox",
-    "state_dir": "/var/lib/spinbox",
-    "log_dir": "/var/log/spinbox"
+    "state_dir": "/var/lib/spin-stack",
+    "log_dir": "/var/log/spin-stack"
   },
   "runtime": {
     "vmm": "qemu"
@@ -393,8 +393,8 @@ Example spinbox config for aggressive hotplug testing:
 {
   "paths": {
     "share_dir": "/usr/share/spinbox",
-    "state_dir": "/var/lib/spinbox",
-    "log_dir": "/var/log/spinbox"
+    "state_dir": "/var/lib/spin-stack",
+    "log_dir": "/var/log/spin-stack"
   },
   "runtime": {
     "vmm": "qemu"
@@ -420,8 +420,8 @@ Longer timeouts for debugging, fast hotplug monitoring.
 {
   "paths": {
     "share_dir": "/usr/share/spinbox",
-    "state_dir": "/var/lib/spinbox",
-    "log_dir": "/var/log/spinbox"
+    "state_dir": "/var/lib/spin-stack",
+    "log_dir": "/var/log/spin-stack"
   },
   "runtime": {
     "vmm": "qemu"
@@ -447,8 +447,8 @@ High thresholds, large safety margin, no scale-down.
 {
   "paths": {
     "share_dir": "/usr/share/spinbox",
-    "state_dir": "/var/lib/spinbox",
-    "log_dir": "/var/log/spinbox"
+    "state_dir": "/var/lib/spin-stack",
+    "log_dir": "/var/log/spin-stack"
   },
   "runtime": {
     "vmm": "qemu"

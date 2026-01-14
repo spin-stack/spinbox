@@ -5,8 +5,8 @@
 
 set -euo pipefail
 
-CTR="ctr --address /var/run/spinbox/containerd.sock"
-NERDCTL="nerdctl --address /var/run/spinbox/containerd.sock"
+CTR="ctr --address /var/run/spin-stack/containerd.sock"
+NERDCTL="nerdctl --address /var/run/spin-stack/containerd.sock"
 CNI_NET_DIR="/var/lib/cni/networks/spinbox-net"
 CNI_SUBNET="10.88."
 

@@ -5,7 +5,7 @@ After=network.target dbus.service spinbox-erofs-snapshotter.service
 Requires=spinbox-erofs-snapshotter.service
 
 [Service]
-Environment=SPINBOX_VM_STATE_DIR=/run/spinbox/vm
+Environment=SPINBOX_VM_STATE_DIR=/run/spin-stack/vm
 Environment=SPINBOX_CNI_CONF_DIR=/usr/share/spinbox/config/cni/net.d
 Environment=SPINBOX_CNI_BIN_DIR=/usr/share/spinbox/libexec/cni
 ExecSearchPath=/usr/share/spinbox/bin

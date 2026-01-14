@@ -119,8 +119,8 @@ var (
 var defaultConfig = Config{
 	Paths: PathsConfig{
 		ShareDir: "/usr/share/spinbox",
-		StateDir: "/var/lib/spinbox",
-		LogDir:   "/var/log/spinbox",
+		StateDir: "/var/lib/spin-stack",
+		LogDir:   "/var/log/spin-stack",
 	},
 	Runtime: RuntimeConfig{
 		VMM: "qemu",

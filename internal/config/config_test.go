@@ -77,11 +77,11 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Paths.ShareDir != "/usr/share/spinbox" {
 		t.Errorf("expected ShareDir /usr/share/spinbox, got %s", cfg.Paths.ShareDir)
 	}
-	if cfg.Paths.StateDir != "/var/lib/spinbox" {
-		t.Errorf("expected StateDir /var/lib/spinbox, got %s", cfg.Paths.StateDir)
+	if cfg.Paths.StateDir != "/var/lib/spin-stack" {
+		t.Errorf("expected StateDir /var/lib/spin-stack, got %s", cfg.Paths.StateDir)
 	}
-	if cfg.Paths.LogDir != "/var/log/spinbox" {
-		t.Errorf("expected LogDir /var/log/spinbox, got %s", cfg.Paths.LogDir)
+	if cfg.Paths.LogDir != "/var/log/spin-stack" {
+		t.Errorf("expected LogDir /var/log/spin-stack, got %s", cfg.Paths.LogDir)
 	}
 
 	// Verify runtime
@@ -244,11 +244,11 @@ func TestApplyDefaults(t *testing.T) {
 		t.Errorf("expected custom ShareDir to be preserved, got %s", cfg.Paths.ShareDir)
 	}
 
-	if cfg.Paths.StateDir != "/var/lib/spinbox" {
+	if cfg.Paths.StateDir != "/var/lib/spin-stack" {
 		t.Errorf("expected default StateDir, got %s", cfg.Paths.StateDir)
 	}
 
-	if cfg.Paths.LogDir != "/var/log/spinbox" {
+	if cfg.Paths.LogDir != "/var/log/spin-stack" {
 		t.Errorf("expected default LogDir, got %s", cfg.Paths.LogDir)
 	}
 

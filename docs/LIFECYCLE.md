@@ -235,7 +235,7 @@ journalctl -u containerd | grep "state transition"
 
 #### "VM not running"
 - Cause: Operation attempted after VM exit
-- Check: VM logs at `/var/log/spinbox/vm-*.log`
+- Check: VM logs at `/var/log/spin-stack/vm-*.log`
 
 #### "device detection timeout"
 - Cause: Slow disk I/O or many devices

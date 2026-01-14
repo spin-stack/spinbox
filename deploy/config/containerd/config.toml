@@ -13,12 +13,12 @@ imports = [
 ]
 
 oom_score = 0
-root = "/var/lib/spinbox/containerd"
-state = "/run/spinbox/containerd"
+root = "/var/lib/spin-stack/containerd"
+state = "/run/spin-stack/containerd"
 version = 3
 
 [grpc]
-address = "/var/run/spinbox/containerd.sock"
+address = "/var/run/spin-stack/containerd.sock"
 gid = 0
 uid = 0
 
@@ -120,7 +120,7 @@ sandboxer = "podsandbox"
   plugin_path = "/usr/share/spinbox/nri/plugins"
   plugin_registration_timeout = "5s"
   plugin_request_timeout = "2s"
-  socket_path = "/var/run/spinbox/nri/nri.sock"
+  socket_path = "/var/run/spin-stack/nri/nri.sock"
 
     [plugins."io.containerd.nri.v1.nri".default_validator]
     enable = false
