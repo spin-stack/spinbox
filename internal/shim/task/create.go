@@ -24,8 +24,8 @@ import (
 	"github.com/spin-stack/spinbox/internal/shim/bundle"
 	"github.com/spin-stack/spinbox/internal/shim/extras"
 	"github.com/spin-stack/spinbox/internal/shim/lifecycle"
+	platformNetwork "github.com/spin-stack/spinbox/internal/shim/platform/network"
 	"github.com/spin-stack/spinbox/internal/shim/resources"
-	"github.com/spin-stack/spinbox/internal/shim/supervisor"
 	"github.com/spin-stack/spinbox/internal/shim/transform"
 )
 
@@ -63,13 +63,12 @@ type createState struct {
 	vmInstance    vm.Instance
 	mountCleanup  func(context.Context) error
 	mounts        []*types.Mount
-	netConfig     *vm.NetworkConfig
+	netResult     *platformNetwork.SetupResult // Network config and host-side metadata for labeling
 	netnsPath     string
 	ioForwarder   IOForwarder
 	containerIO   stdio.Stdio
 	guestIO       stdio.Stdio
 	cleanup       createCleanup
-	supervisorCfg *supervisor.Config
 	extrasDiskIdx *int // Index of extras disk (0-based) for kernel cmdline
 }
 
@@ -139,20 +138,6 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 		"hotplug_mb": resourceCfg.MemoryHotplugSize / (1024 * 1024),
 	}).Debug("VM resource configuration")
 
-	// Extract supervisor configuration from annotations
-	// Note: supervisor binary must be injected via io.spin.extras.files annotation
-	if supervisorCfg := supervisor.FromAnnotations(&b.Spec); supervisorCfg != nil {
-		if err := supervisorCfg.Validate(); err != nil {
-			return err
-		}
-		state.supervisorCfg = supervisorCfg
-		log.G(ctx).WithFields(log.Fields{
-			"workspace_id":  supervisorCfg.WorkspaceID,
-			"metadata_addr": supervisorCfg.MetadataAddr,
-			"control_plane": supervisorCfg.ControlPlane,
-		}).Info("supervisor configuration extracted from annotations")
-	}
-
 	// Create VM instance
 	vmi, err := s.vmLifecycle.CreateVM(ctx, r.ID, r.Bundle, resourceCfg)
 	if err != nil {
@@ -178,11 +163,11 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 
 	// Setup networking
 	state.netnsPath = "/var/run/netns/" + r.ID
-	netCfg, err := s.platformNetwork.Setup(ctx, s.networkManager, vmi, r.ID, state.netnsPath)
+	netResult, err := s.platformNetwork.Setup(ctx, s.networkManager, vmi, r.ID, state.netnsPath)
 	if err != nil {
 		return err
 	}
-	state.netConfig = netCfg
+	state.netResult = netResult
 
 	// Register network cleanup
 	state.cleanup.add("network", func(ctx context.Context) error {
@@ -244,14 +229,8 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 // startVM boots the VM and establishes the event stream connection.
 func (s *service) startVM(ctx context.Context, state *createState) error {
 	startOpts := []vm.StartOpt{
-		vm.WithNetworkConfig(state.netConfig),
+		vm.WithNetworkConfig(state.netResult.Config),
 		vm.WithNetworkNamespace(state.netnsPath),
-	}
-
-	// Add supervisor init args if supervisor is configured
-	if state.supervisorCfg != nil {
-		startOpts = append(startOpts, vm.WithInitArgs(state.supervisorCfg.InitArgs()...))
-		log.G(ctx).WithField("init_args", state.supervisorCfg.InitArgs()).Debug("adding supervisor init args to kernel cmdline")
 	}
 
 	// Add extras disk index to kernel cmdline
@@ -445,6 +424,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		state.cleanup.rollback(ctx)
 		return nil, errgrpc.ToGRPC(err)
 	}
+
+	// Update container labels with VM runtime metadata (best-effort, non-blocking)
+	updateContainerLabels(ctx, r.ID, state.vmInstance.VMInfo().CID, state.netResult)
 
 	// Phase 4: Create task in VM
 	resp, err := s.createTaskInVM(ctx, state)

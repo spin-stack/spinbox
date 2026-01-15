@@ -119,5 +119,6 @@ func (q *Instance) VMInfo() vm.VMInfo {
 		Type:          "qemu",
 		SupportsTAP:   true,
 		SupportsVSOCK: true,
+		CID:           q.guestCID,
 	}
 }

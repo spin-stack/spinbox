@@ -110,6 +110,9 @@ type VMInfo struct {
 
 	// SupportsVSOCK indicates whether the VMM supports vsock for communication
 	SupportsVSOCK bool
+
+	// CID is the vsock context ID assigned to this VM (0 if not applicable)
+	CID uint32
 }
 
 // CPUHotplugger provides CPU hotplug operations.

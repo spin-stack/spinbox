@@ -41,8 +41,8 @@ func (m *linuxManager) InitNetworkManager(ctx context.Context) (network.NetworkM
 // Setup sets up networking using NetworkManager for dynamic IP allocation
 // and TAP device management. NetworkManager handles bridge creation, IP allocation,
 // TAP device lifecycle, and NFTables rules.
-// Returns the network configuration that should be passed to the VM kernel.
-func (m *linuxManager) Setup(ctx context.Context, nm network.NetworkManager, vmi vm.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
+// Returns the network configuration with host-side metadata for container labeling.
+func (m *linuxManager) Setup(ctx context.Context, nm network.NetworkManager, vmi vm.Instance, containerID, netnsPath string) (*SetupResult, error) {
 	log.G(ctx).WithField("id", containerID).Info("setting up NetworkManager-based networking")
 
 	// Create environment for this container
@@ -99,13 +99,17 @@ func (m *linuxManager) Setup(ctx context.Context, nm network.NetworkManager, vmi
 
 	log.G(ctx).WithField("dns", dnsServers).Debug("configured DNS servers")
 
-	// Return network configuration for VM kernel
-	return &vm.NetworkConfig{
-		InterfaceName: "eth0",
-		IP:            env.NetworkInfo.IP.String(),
-		Gateway:       env.NetworkInfo.Gateway.String(),
-		Netmask:       env.NetworkInfo.Netmask,
-		DNS:           dnsServers,
+	// Return network configuration with host-side metadata
+	return &SetupResult{
+		Config: &vm.NetworkConfig{
+			InterfaceName: "eth0",
+			IP:            env.NetworkInfo.IP.String(),
+			Gateway:       env.NetworkInfo.Gateway.String(),
+			Netmask:       env.NetworkInfo.Netmask,
+			DNS:           dnsServers,
+		},
+		TAPName: env.NetworkInfo.TapName,
+		MAC:     env.NetworkInfo.MAC,
 	}, nil
 }
 
