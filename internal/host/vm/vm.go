@@ -42,6 +42,7 @@ type StartOpts struct {
 	InitArgs         []string
 	NetworkConfig    *NetworkConfig
 	NetworkNamespace string // Path to network namespace (e.g., "/var/run/netns/cni-xxx")
+	ExtrasDiskIndex  *int   // Index of extras disk (0-based), nil if none
 }
 
 // StartOpt configures VM start options.
@@ -65,6 +66,14 @@ func WithNetworkConfig(cfg *NetworkConfig) StartOpt {
 func WithNetworkNamespace(path string) StartOpt {
 	return func(o *StartOpts) {
 		o.NetworkNamespace = path
+	}
+}
+
+// WithExtrasDisk sets the index of the extras disk for kernel cmdline.
+// The guest will parse spin.extras_disk=N to find the device.
+func WithExtrasDisk(idx int) StartOpt {
+	return func(o *StartOpts) {
+		o.ExtrasDiskIndex = &idx
 	}
 }
 
@@ -127,6 +136,8 @@ type DeviceConfigurator interface {
 	AddTAPNIC(ctx context.Context, tapName string, mac net.HardwareAddr) error
 	// AddNIC adds a network interface with the specified configuration.
 	AddNIC(ctx context.Context, endpoint string, mac net.HardwareAddr, mode NetworkMode, features, flags uint32) error
+	// DiskCount returns the number of disks currently configured.
+	DiskCount() int
 }
 
 // GuestCommunicator provides communication channels with the guest VM.

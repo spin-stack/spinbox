@@ -106,6 +106,13 @@ func (q *Instance) AddTAPNIC(ctx context.Context, tapName string, mac net.Hardwa
 	return nil
 }
 
+// DiskCount returns the number of disks currently configured.
+func (q *Instance) DiskCount() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.disks)
+}
+
 // VMInfo returns metadata about the QEMU backend
 func (q *Instance) VMInfo() vm.VMInfo {
 	return vm.VMInfo{

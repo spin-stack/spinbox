@@ -14,6 +14,8 @@ import (
 	"syscall"
 
 	"github.com/containerd/log"
+
+	"github.com/spin-stack/spinbox/internal/guest/vminit/extras"
 )
 
 // Kernel cmdline parameter names (must match shim/supervisor package)
@@ -110,10 +112,18 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// FindBinary searches for the supervisor binary in bundle directories.
-// Bundle files are placed at /run/spin-stack/{namespace}/{id}/
+// FindBinary searches for the supervisor binary.
+// It first checks the extras directory (from extras disk), then falls back to bundle directories.
 func (c *Config) FindBinary(ctx context.Context) error {
-	// Search for supervisor binary in bundle directories
+	// First, check extras directory (preferred path - from extras disk)
+	if path, err := extras.GetFile(BinaryName); err == nil {
+		c.BinaryPath = path
+		log.G(ctx).WithField("path", path).Debug("found supervisor binary in extras directory")
+		return nil
+	}
+
+	// Fall back to bundle directories (legacy/backward compatibility)
+	// Bundle files are placed at /run/spin-stack/{namespace}/{id}/
 	entries, err := os.ReadDir(BundleBasePath)
 	if err != nil {
 		return fmt.Errorf("failed to read bundle base path: %w", err)
@@ -144,13 +154,13 @@ func (c *Config) FindBinary(ctx context.Context) error {
 					"path":      binaryPath,
 					"namespace": c.Namespace,
 					"container": c.ContainerID,
-				}).Debug("found supervisor binary")
+				}).Debug("found supervisor binary in bundle directory")
 				return nil
 			}
 		}
 	}
 
-	return fmt.Errorf("supervisor binary not found in %s", BundleBasePath)
+	return fmt.Errorf("supervisor binary not found in extras or %s", BundleBasePath)
 }
 
 // Start starts the supervisor binary as a background daemon.

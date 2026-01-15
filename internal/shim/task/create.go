@@ -18,9 +18,11 @@ import (
 	"github.com/containerd/log"
 
 	bundleAPI "github.com/spin-stack/spinbox/api/services/bundle/v1"
+	"github.com/spin-stack/spinbox/internal/config"
 	"github.com/spin-stack/spinbox/internal/host/network"
 	"github.com/spin-stack/spinbox/internal/host/vm"
 	"github.com/spin-stack/spinbox/internal/shim/bundle"
+	"github.com/spin-stack/spinbox/internal/shim/extras"
 	"github.com/spin-stack/spinbox/internal/shim/lifecycle"
 	"github.com/spin-stack/spinbox/internal/shim/resources"
 	"github.com/spin-stack/spinbox/internal/shim/supervisor"
@@ -68,6 +70,7 @@ type createState struct {
 	guestIO       stdio.Stdio
 	cleanup       createCleanup
 	supervisorCfg *supervisor.Config
+	extrasDiskIdx *int // Index of extras disk (0-based) for kernel cmdline
 }
 
 // validateCreateRequest performs all pre-creation validation.
@@ -142,15 +145,16 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 			return err
 		}
 
-		// Load supervisor binary from host
-		if err := supervisorCfg.LoadBinary(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to load supervisor binary, continuing without supervisor")
+		// Validate supervisor binary exists (will be included via extras disk)
+		if err := supervisorCfg.ValidateBinaryPath(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to validate supervisor binary path, continuing without supervisor")
 		} else {
 			state.supervisorCfg = supervisorCfg
 			log.G(ctx).WithFields(log.Fields{
 				"workspace_id":  supervisorCfg.WorkspaceID,
 				"metadata_addr": supervisorCfg.MetadataAddr,
 				"control_plane": supervisorCfg.ControlPlane,
+				"binary_path":   supervisorCfg.BinaryPath,
 			}).Info("supervisor configuration extracted from annotations")
 		}
 	}
@@ -192,6 +196,41 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 		return s.networkManager.ReleaseNetworkResources(ctx, env)
 	})
 
+	// Create extras disk if supervisor is configured
+	if state.supervisorCfg != nil {
+		cfg, err := config.Get()
+		if err != nil {
+			return fmt.Errorf("get config: %w", err)
+		}
+
+		// Build list of files to include in extras disk
+		extrasBuilder := extras.NewBuilder()
+		extrasBuilder.AddExecutable(supervisor.BundleFileName, state.supervisorCfg.BinaryPath)
+
+		// Create extras disk via manager (handles caching)
+		extrasMgr := extras.NewManager(cfg.Paths.ExtrasCacheDir)
+		diskPath, err := extrasMgr.GetOrCreateDisk(r.Bundle, extrasBuilder.Files())
+		if err != nil {
+			return fmt.Errorf("create extras disk: %w", err)
+		}
+
+		if diskPath != "" {
+			// Add as read-only disk
+			if err := vmi.AddDisk(ctx, "extras", diskPath, vm.WithReadOnly()); err != nil {
+				return fmt.Errorf("add extras disk: %w", err)
+			}
+
+			// Track index for kernel cmdline (disk indices are 0-based)
+			idx := vmi.DiskCount() - 1
+			state.extrasDiskIdx = &idx
+
+			log.G(ctx).WithFields(log.Fields{
+				"disk_path":  diskPath,
+				"disk_index": idx,
+			}).Debug("added extras disk with supervisor binary")
+		}
+	}
+
 	return nil
 }
 
@@ -206,6 +245,12 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 	if state.supervisorCfg != nil {
 		startOpts = append(startOpts, vm.WithInitArgs(state.supervisorCfg.InitArgs()...))
 		log.G(ctx).WithField("init_args", state.supervisorCfg.InitArgs()).Debug("adding supervisor init args to kernel cmdline")
+	}
+
+	// Add extras disk index to kernel cmdline
+	if state.extrasDiskIdx != nil {
+		startOpts = append(startOpts, vm.WithExtrasDisk(*state.extrasDiskIdx))
+		log.G(ctx).WithField("extras_disk_idx", *state.extrasDiskIdx).Debug("adding extras disk index to kernel cmdline")
 	}
 
 	prestart := time.Now()
@@ -237,14 +282,8 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 func (s *service) createTaskInVM(ctx context.Context, state *createState) (*taskAPI.CreateTaskResponse, error) {
 	r := state.request
 
-	// Inject supervisor binary into bundle if configured
-	if state.supervisorCfg != nil && len(state.supervisorCfg.BinaryContent) > 0 {
-		if err := state.bundle.AddExtraFile(supervisor.BundleFileName, state.supervisorCfg.BinaryContent); err != nil {
-			log.G(ctx).WithError(err).Error("failed to add supervisor binary to bundle")
-			return nil, err
-		}
-		log.G(ctx).WithField("size", len(state.supervisorCfg.BinaryContent)).Debug("added supervisor binary to bundle")
-	}
+	// Note: Supervisor binary is now delivered via extras disk (spin.extras_disk kernel param)
+	// instead of being embedded in the bundle. This avoids TTRPC 4MB message size limits.
 
 	// Dial TTRPC client for Create RPCs.
 	// NOTE: We intentionally do NOT cache this connection because vsock connections

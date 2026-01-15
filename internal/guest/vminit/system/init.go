@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/spin-stack/spinbox/internal/guest/vminit/devices"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/extras"
 )
 
 // Initialize performs all system initialization tasks for the VM guest.
@@ -40,6 +41,12 @@ func Initialize(ctx context.Context) error {
 	// This is necessary because the kernel may not have probed all virtio devices yet
 	// Not fatal if devices don't appear - they might appear later or not be needed
 	devices.WaitForBlockDevices(ctx)
+
+	// Extract files from extras disk if configured (spin.extras_disk kernel parameter)
+	// Not fatal if extraction fails - extras may not be configured for this container
+	if err := extras.Extract(ctx); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to extract extras disk, continuing anyway")
+	}
 
 	if err := setupCgroupControl(); err != nil {
 		return err

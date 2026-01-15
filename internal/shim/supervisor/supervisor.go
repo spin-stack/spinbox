@@ -54,13 +54,12 @@ const (
 
 // Config holds the supervisor configuration extracted from annotations.
 type Config struct {
-	Enabled       bool
-	WorkspaceID   string
-	Secret        string
-	MetadataAddr  string
-	ControlPlane  string
-	BinaryPath    string
-	BinaryContent []byte
+	Enabled      bool
+	WorkspaceID  string
+	Secret       string
+	MetadataAddr string
+	ControlPlane string
+	BinaryPath   string // Host path to supervisor binary (used by extras disk)
 }
 
 // FromAnnotations extracts supervisor configuration from OCI spec annotations.
@@ -116,8 +115,8 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// LoadBinary reads the supervisor binary from the configured path.
-func (c *Config) LoadBinary() error {
+// ValidateBinaryPath checks that the supervisor binary exists at the configured path.
+func (c *Config) ValidateBinaryPath() error {
 	if !c.Enabled {
 		return nil
 	}
@@ -128,12 +127,10 @@ func (c *Config) LoadBinary() error {
 		return fmt.Errorf("supervisor: binary path must be absolute: %s", c.BinaryPath)
 	}
 
-	data, err := os.ReadFile(cleanPath) //nolint:gosec // Path is from trusted annotation
-	if err != nil {
-		return fmt.Errorf("supervisor: failed to read binary from %s: %w", cleanPath, err)
+	if _, err := os.Stat(cleanPath); err != nil {
+		return fmt.Errorf("supervisor: binary not found at %s: %w", cleanPath, err)
 	}
 
-	c.BinaryContent = data
 	return nil
 }
 

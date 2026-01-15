@@ -30,11 +30,12 @@ type Config struct {
 
 // PathsConfig defines filesystem paths for spinbox components
 type PathsConfig struct {
-	ShareDir      string `json:"share_dir"`       // Binaries and config directory
-	StateDir      string `json:"state_dir"`       // State files directory
-	LogDir        string `json:"log_dir"`         // Logs directory
-	QEMUPath      string `json:"qemu_path"`       // QEMU binary location (auto-discovered if empty)
-	QEMUSharePath string `json:"qemu_share_path"` // QEMU firmware/BIOS directory (auto-discovered if empty)
+	ShareDir       string `json:"share_dir"`        // Binaries and config directory
+	StateDir       string `json:"state_dir"`        // State files directory
+	LogDir         string `json:"log_dir"`          // Logs directory
+	QEMUPath       string `json:"qemu_path"`        // QEMU binary location (auto-discovered if empty)
+	QEMUSharePath  string `json:"qemu_share_path"`  // QEMU firmware/BIOS directory (auto-discovered if empty)
+	ExtrasCacheDir string `json:"extras_cache_dir"` // Cache for extras disk images (default: /var/cache/spin-stack/extras)
 }
 
 // RuntimeConfig defines runtime behavior settings
@@ -118,9 +119,10 @@ var (
 // defaults
 var defaultConfig = Config{
 	Paths: PathsConfig{
-		ShareDir: "/usr/share/spin-stack",
-		StateDir: "/var/lib/spin-stack",
-		LogDir:   "/var/log/spin-stack",
+		ShareDir:       "/usr/share/spin-stack",
+		StateDir:       "/var/lib/spin-stack",
+		LogDir:         "/var/log/spin-stack",
+		ExtrasCacheDir: "/var/cache/spin-stack/extras",
 	},
 	Runtime: RuntimeConfig{
 		VMM: "qemu",
@@ -236,6 +238,7 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.Paths.ShareDir, d.Paths.ShareDir)
 	setDefault(&c.Paths.StateDir, d.Paths.StateDir)
 	setDefault(&c.Paths.LogDir, d.Paths.LogDir)
+	setDefault(&c.Paths.ExtrasCacheDir, d.Paths.ExtrasCacheDir)
 
 	// Runtime
 	setDefault(&c.Runtime.VMM, d.Runtime.VMM)

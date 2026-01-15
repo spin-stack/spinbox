@@ -31,6 +31,10 @@ type KernelCmdlineConfig struct {
 
 	// Log level (0-7, lower is more verbose)
 	LogLevel int
+
+	// ExtrasDiskIndex is the 0-based index of the extras disk (nil if none).
+	// The guest parses spin.extras_disk=N to locate the block device.
+	ExtrasDiskIndex *int
 }
 
 // DefaultKernelCmdlineConfig returns a default configuration.
@@ -83,6 +87,11 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	// Network configuration
 	if netParam := buildNetworkParam(cfg.Network); netParam != "" {
 		parts = append(parts, netParam)
+	}
+
+	// Extras disk index for guest to locate the extras block device
+	if cfg.ExtrasDiskIndex != nil {
+		parts = append(parts, fmt.Sprintf("spin.extras_disk=%d", *cfg.ExtrasDiskIndex))
 	}
 
 	// Init command with vsock args
