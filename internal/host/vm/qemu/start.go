@@ -439,6 +439,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	cfg.VsockCID = q.guestCID
 	cfg.Network = startOpts.NetworkConfig
 	cfg.InitArgs = startOpts.InitArgs
+	cfg.ExtrasDiskIndex = startOpts.ExtrasDiskIndex
 	return BuildKernelCmdline(cfg)
 }
 

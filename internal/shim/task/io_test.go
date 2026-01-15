@@ -40,6 +40,10 @@ func (m *mockVMInstance) AddNIC(ctx context.Context, endpoint string, mac net.Ha
 	return nil
 }
 
+func (m *mockVMInstance) DiskCount() int {
+	return 0
+}
+
 func (m *mockVMInstance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	return nil
 }
