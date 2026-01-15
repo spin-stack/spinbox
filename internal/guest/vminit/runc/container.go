@@ -65,8 +65,8 @@ func toRuncOptions(ctx context.Context, v any) *options.Options {
 	case *spinbox.SpinboxOpts:
 		// Convert SpinboxOpts to runc Options format
 		return &options.Options{
-			IoUid: o.IoUID,
-			IoGid: o.IoGID,
+			IoUid: o.IoUid,
+			IoGid: o.IoGid,
 		}
 	default:
 		log.G(ctx).WithField("type", fmt.Sprintf("%T", v)).
