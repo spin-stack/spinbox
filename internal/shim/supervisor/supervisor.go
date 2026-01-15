@@ -42,7 +42,7 @@ const (
 	DefaultMetadataAddr = "169.254.169.254:80"
 
 	// DefaultBinaryPath is the default location of the supervisor binary on the host.
-	DefaultBinaryPath = "/usr/local/bin/spin-supervisor"
+	DefaultBinaryPath = "/usr/share/spin-stack/bin/spin-supervisor"
 
 	// BundleFileName is the name of the supervisor binary in the bundle.
 	BundleFileName = "spin-supervisor"
