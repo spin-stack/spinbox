@@ -276,8 +276,19 @@ check_ubuntu_packages() {
     fi
 
     local packages=(
-        libpixman-1-0 libseccomp2 zlib1g libzstd1 libaio1t64
-        liburing2 libpmem1 librdmacm1 libibverbs1 libdw1 libbpf1
+        libaio1t64
+        libbpf1
+        libcap-ng0
+        libdw1
+        libglib2.0-0
+        libibverbs1
+        libpixman-1-0
+        libpmem1
+        librdmacm1
+        librdmacm1t64
+        libseccomp2
+        liburing2
+        zlib1g
     )
     local missing=()
     for pkg in "${packages[@]}"; do

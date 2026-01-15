@@ -165,6 +165,8 @@ RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt
         libseccomp2 \
         libaio1 \
         liburing2 \
+        libpmem1 \
+        librdmacm1t64 \
         zlib1g && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
