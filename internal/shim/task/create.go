@@ -140,23 +140,17 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	}).Debug("VM resource configuration")
 
 	// Extract supervisor configuration from annotations
+	// Note: supervisor binary must be injected via io.spin.extras.files annotation
 	if supervisorCfg := supervisor.FromAnnotations(&b.Spec); supervisorCfg != nil {
 		if err := supervisorCfg.Validate(); err != nil {
 			return err
 		}
-
-		// Validate supervisor binary exists (will be included via extras disk)
-		if err := supervisorCfg.ValidateBinaryPath(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to validate supervisor binary path, continuing without supervisor")
-		} else {
-			state.supervisorCfg = supervisorCfg
-			log.G(ctx).WithFields(log.Fields{
-				"workspace_id":  supervisorCfg.WorkspaceID,
-				"metadata_addr": supervisorCfg.MetadataAddr,
-				"control_plane": supervisorCfg.ControlPlane,
-				"binary_path":   supervisorCfg.BinaryPath,
-			}).Info("supervisor configuration extracted from annotations")
-		}
+		state.supervisorCfg = supervisorCfg
+		log.G(ctx).WithFields(log.Fields{
+			"workspace_id":  supervisorCfg.WorkspaceID,
+			"metadata_addr": supervisorCfg.MetadataAddr,
+			"control_plane": supervisorCfg.ControlPlane,
+		}).Info("supervisor configuration extracted from annotations")
 	}
 
 	// Create VM instance
@@ -196,17 +190,28 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 		return s.networkManager.ReleaseNetworkResources(ctx, env)
 	})
 
-	// Create extras disk if supervisor is configured
-	if state.supervisorCfg != nil {
+	// Build extras disk with files from annotations (k/v: destPath -> sourcePath)
+	// All files including supervisor binary must be specified via io.spin.extras.files
+	extrasBuilder := extras.NewBuilder()
+	customFiles, err := extras.FromAnnotations(&b.Spec)
+	if err != nil {
+		return fmt.Errorf("parse extras annotations: %w", err)
+	}
+	for _, f := range customFiles {
+		extrasBuilder.Add(f.DestPath, f.SourcePath, f.Mode)
+		log.G(ctx).WithFields(log.Fields{
+			"dest":   f.DestPath,
+			"source": f.SourcePath,
+			"mode":   fmt.Sprintf("%o", f.Mode),
+		}).Debug("added custom file to extras disk")
+	}
+
+	// Create extras disk if we have any files
+	if !extrasBuilder.IsEmpty() {
 		cfg, err := config.Get()
 		if err != nil {
 			return fmt.Errorf("get config: %w", err)
 		}
-
-		// Build list of files to include in extras disk
-		// destPath in VM <- sourcePath on host
-		extrasBuilder := extras.NewBuilder()
-		extrasBuilder.AddExecutable(supervisor.GuestBinaryPath, state.supervisorCfg.BinaryPath)
 
 		// Create extras disk via manager (handles caching)
 		extrasMgr := extras.NewManager(cfg.Paths.ExtrasCacheDir)
@@ -228,7 +233,8 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 			log.G(ctx).WithFields(log.Fields{
 				"disk_path":  diskPath,
 				"disk_index": idx,
-			}).Debug("added extras disk with supervisor binary")
+				"file_count": len(extrasBuilder.Files()),
+			}).Debug("added extras disk")
 		}
 	}
 
