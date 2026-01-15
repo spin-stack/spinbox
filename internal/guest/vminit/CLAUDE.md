@@ -66,6 +66,9 @@ vminit/
 │   └── exchange.go    # Event exchange (pub/sub)
 ├── streaming/         # I/O streaming
 │   └── plugin.go      # Stdio streaming service
+├── supervisor/        # Supervisor agent management
+│   ├── supervisor.go  # Binary discovery, RunWithMonitoring entry point
+│   └── monitor.go     # Process monitoring with auto-restart
 ├── runc/              # Runc wrapper
 │   ├── container.go   # Container abstraction
 │   ├── platform.go    # Platform configuration
@@ -337,3 +340,67 @@ go test -race ./internal/guest/vminit/...
 - **MUST** publish events for all lifecycle transitions
 - **MUST NOT** block on slow event subscribers
 - **SHOULD** buffer events to handle subscriber lag
+
+---
+
+## Supervisor Agent
+
+The supervisor package manages an optional supervisor agent binary that runs alongside containers in the VM.
+
+### Overview
+
+The supervisor binary is injected into the VM via the extras disk (`io.spin.extras.files` annotation) and started by vminitd after boot. The supervisor fetches its own configuration from the runner's metadata service via vsock.
+
+### Vsock Ports
+
+| Port | Service |
+|------|---------|
+| 1024 | TTRPC RPC (task management) |
+| 1025 | I/O streaming |
+| 1027 | Runner metadata service (supervisor config) |
+
+### Supervisor Monitoring Behavior
+
+vminitd monitors the supervisor process and automatically restarts it on crash:
+
+| Behavior | Value |
+|----------|-------|
+| Binary location | `/run/spin-stack/spin-supervisor` |
+| PID file | `/run/spin-supervisor.pid` |
+| Log file | `/var/log/spin-supervisor.log` |
+| Max restarts | 10 within 5-minute window |
+| Backoff | Exponential: 1s, 2s, 4s, 8s, 16s, 30s (max) |
+| Window reset | After 5 minutes of stable running |
+| Give up | After max restarts exceeded, logs error and stops |
+
+### Lifecycle
+
+1. **Startup**: vminitd waits 2 seconds after boot for extras disk extraction
+2. **Discovery**: Checks `/run/spin-stack/spin-supervisor` for binary
+3. **Skip if absent**: If binary not found, monitoring exits silently (no error)
+4. **Start**: Binary is made executable (0755) and started as background process
+5. **Monitor**: vminitd waits for process exit via `cmd.Wait()`
+6. **Crash recovery**: On unexpected exit, waits with backoff then restarts
+7. **Shutdown**: On context cancellation (VM shutdown), sends SIGTERM to supervisor
+
+### Configuration
+
+The supervisor binary handles its own configuration:
+- Connects to host via vsock (CID 2, port 1027)
+- Runner identifies VM by source CID
+- Runner returns signed token + workspace config
+- No secrets pass through vminitd or kernel cmdline
+
+### Debugging
+
+```bash
+# Inside VM: Check if supervisor is running
+cat /run/spin-supervisor.pid
+ps aux | grep spin-supervisor
+
+# Check supervisor logs
+cat /var/log/spin-supervisor.log
+
+# Check vminitd logs for supervisor events
+# (supervisor start/restart/stop events are logged by vminitd)
+```
