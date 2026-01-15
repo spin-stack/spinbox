@@ -105,23 +105,16 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
-	// Start supervisor agent in background (if configured via kernel cmdline)
-	// The supervisor binary will be available after the container bundle is created,
-	// so we start a goroutine that waits and retries until it finds the binary.
+	// Start supervisor agent in background with automatic restart on crash.
+	// The supervisor binary is injected via extras disk and will be available
+	// at /run/spin-stack/spin-supervisor after VM boot.
+	// RunWithMonitoring blocks until context is cancelled, handling all restarts.
 	go func() {
-		// Wait a bit for the first container bundle to be created
-		// The shim will send the bundle which includes the supervisor binary
+		// Wait a bit for extras disk to be mounted and files extracted
 		time.Sleep(2 * time.Second)
 
-		// Retry a few times as the bundle may not be ready yet
-		for i := range 10 {
-			if err := supervisor.StartSupervisor(ctx); err != nil {
-				log.G(ctx).WithError(err).Warn("failed to start supervisor, will retry")
-				time.Sleep(time.Duration(i+1) * time.Second)
-				continue
-			}
-			// Success or supervisor not needed
-			break
+		if err := supervisor.RunWithMonitoring(ctx); err != nil {
+			log.G(ctx).WithError(err).Error("supervisor monitor exited with error")
 		}
 	}()
 
