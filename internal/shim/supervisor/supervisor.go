@@ -2,13 +2,13 @@
 
 // Package supervisor provides integration support for the spin supervisor agent.
 // It handles extracting supervisor configuration from OCI annotations and
-// injecting the supervisor binary into the VM bundle.
+// passing runtime parameters to the guest via kernel cmdline.
+//
+// The supervisor binary must be injected via io.spin.extras.files annotation.
 package supervisor
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -30,10 +30,6 @@ const (
 
 	// AnnotationControlPlane is the control plane address for supervisor connection.
 	AnnotationControlPlane = "io.spin.supervisor.control_plane"
-
-	// AnnotationBinaryPath is the host path to the supervisor binary.
-	// If not set, defaults to DefaultBinaryPath.
-	AnnotationBinaryPath = "io.spin.supervisor.binary_path"
 )
 
 // Default values
@@ -41,14 +37,8 @@ const (
 	// DefaultMetadataAddr is the default metadata service address (link-local).
 	DefaultMetadataAddr = "169.254.169.254:80"
 
-	// DefaultBinaryPath is the default location of the supervisor binary on the host.
-	DefaultBinaryPath = "/usr/share/spin-stack/bin/spin-supervisor"
-
-	// BundleFileName is the name of the supervisor binary in the bundle.
-	BundleFileName = "spin-supervisor"
-
-	// GuestBinaryPath is where the supervisor binary will be available in the VM.
-	// The bundle service places files at /run/spin-stack/{namespace}/{id}/
+	// GuestBinaryPath is the expected location of the supervisor binary in the VM.
+	// Users must inject the binary to this path via io.spin.extras.files.
 	GuestBinaryPath = "/run/spin-stack/spin-supervisor"
 )
 
@@ -59,7 +49,6 @@ type Config struct {
 	Secret       string
 	MetadataAddr string
 	ControlPlane string
-	BinaryPath   string // Host path to supervisor binary (used by extras disk)
 }
 
 // FromAnnotations extracts supervisor configuration from OCI spec annotations.
@@ -82,15 +71,11 @@ func FromAnnotations(spec *specs.Spec) *Config {
 		Secret:       annotations[AnnotationSecret],
 		MetadataAddr: annotations[AnnotationMetadataAddr],
 		ControlPlane: annotations[AnnotationControlPlane],
-		BinaryPath:   annotations[AnnotationBinaryPath],
 	}
 
 	// Apply defaults
 	if cfg.MetadataAddr == "" {
 		cfg.MetadataAddr = DefaultMetadataAddr
-	}
-	if cfg.BinaryPath == "" {
-		cfg.BinaryPath = DefaultBinaryPath
 	}
 
 	return cfg
@@ -110,25 +95,6 @@ func (c *Config) Validate() error {
 	}
 	if c.ControlPlane == "" {
 		return fmt.Errorf("supervisor: missing required annotation %s", AnnotationControlPlane)
-	}
-
-	return nil
-}
-
-// ValidateBinaryPath checks that the supervisor binary exists at the configured path.
-func (c *Config) ValidateBinaryPath() error {
-	if !c.Enabled {
-		return nil
-	}
-
-	// Clean and validate the path
-	cleanPath := filepath.Clean(c.BinaryPath)
-	if !filepath.IsAbs(cleanPath) {
-		return fmt.Errorf("supervisor: binary path must be absolute: %s", c.BinaryPath)
-	}
-
-	if _, err := os.Stat(cleanPath); err != nil {
-		return fmt.Errorf("supervisor: binary not found at %s: %w", cleanPath, err)
 	}
 
 	return nil
