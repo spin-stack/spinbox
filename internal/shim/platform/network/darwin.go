@@ -20,6 +20,6 @@ func (m *darwinManager) InitNetworkManager(ctx context.Context) (network.Network
 	return nil, fmt.Errorf("network manager not supported on darwin")
 }
 
-func (m *darwinManager) Setup(ctx context.Context, nm network.NetworkManager, vmi vm.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
+func (m *darwinManager) Setup(_ context.Context, _ network.NetworkManager, _ vm.Instance, _, _ string) (*SetupResult, error) {
 	return nil, fmt.Errorf("networking not supported on darwin")
 }
