@@ -14,42 +14,35 @@ import (
 )
 
 func TestNewFile(t *testing.T) {
-	f := NewFile("/path/to/binary", 0755)
-	assert.Equal(t, "binary", f.Name)
-	assert.Equal(t, "/path/to/binary", f.Path)
+	f := NewFile("/usr/local/bin/myapp", "/host/path/to/binary", 0755)
+	assert.Equal(t, "/usr/local/bin/myapp", f.DestPath)
+	assert.Equal(t, "/host/path/to/binary", f.SourcePath)
 	assert.Equal(t, int64(0755), f.Mode)
-}
-
-func TestNewFileWithName(t *testing.T) {
-	f := NewFileWithName("custom-name", "/path/to/binary", 0644)
-	assert.Equal(t, "custom-name", f.Name)
-	assert.Equal(t, "/path/to/binary", f.Path)
-	assert.Equal(t, int64(0644), f.Mode)
 }
 
 func TestBuilder(t *testing.T) {
 	b := NewBuilder()
 	assert.True(t, b.IsEmpty())
 
-	b.AddExecutable("bin1", "/path/to/bin1")
+	b.AddExecutable("/usr/local/bin/bin1", "/host/path/to/bin1")
 	assert.False(t, b.IsEmpty())
 	assert.Len(t, b.Files(), 1)
 
-	b.Add(NewFileWithName("config", "/path/to/config", 0644))
+	b.Add("/etc/myapp/config", "/host/path/to/config", 0644)
 	assert.Len(t, b.Files(), 2)
 
 	files := b.Files()
-	assert.Equal(t, "bin1", files[0].Name)
+	assert.Equal(t, "/usr/local/bin/bin1", files[0].DestPath)
 	assert.Equal(t, int64(0755), files[0].Mode)
-	assert.Equal(t, "config", files[1].Name)
+	assert.Equal(t, "/etc/myapp/config", files[1].DestPath)
 	assert.Equal(t, int64(0644), files[1].Mode)
 }
 
 func TestBuilderChaining(t *testing.T) {
 	b := NewBuilder().
-		AddExecutable("bin1", "/path/to/bin1").
-		AddExecutable("bin2", "/path/to/bin2").
-		Add(NewFile("/path/to/file", 0600))
+		AddExecutable("/usr/local/bin/bin1", "/host/path/to/bin1").
+		AddExecutable("/usr/local/bin/bin2", "/host/path/to/bin2").
+		Add("/etc/myapp/file", "/host/path/to/file", 0600)
 
 	assert.Len(t, b.Files(), 3)
 }
@@ -66,9 +59,9 @@ func TestManager_GetOrCreateDisk(t *testing.T) {
 
 	mgr := NewManager(cacheDir)
 
-	// Test with files
+	// Test with files - destPath is where it goes in VM, sourcePath is where it is on host
 	files := []File{
-		NewFileWithName("testbin", testFile, 0755),
+		NewFile("/usr/local/bin/testbin", testFile, 0755),
 	}
 
 	diskPath, err := mgr.GetOrCreateDisk(stateDir, files)
@@ -76,9 +69,9 @@ func TestManager_GetOrCreateDisk(t *testing.T) {
 	assert.NotEmpty(t, diskPath)
 	assert.FileExists(t, diskPath)
 
-	// Verify tar content
+	// Verify tar content - key is the destPath (tar entry name)
 	verifyTarContent(t, diskPath, map[string][]byte{
-		"testbin": testContent,
+		"/usr/local/bin/testbin": testContent,
 	})
 }
 
@@ -107,7 +100,7 @@ func TestManager_CacheHit(t *testing.T) {
 	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0644))
 
 	mgr := NewManager(cacheDir)
-	files := []File{NewFileWithName("testbin", testFile, 0755)}
+	files := []File{NewFile("/usr/local/bin/testbin", testFile, 0755)}
 
 	// First call - cache miss
 	disk1, err := mgr.GetOrCreateDisk(stateDir1, files)
@@ -153,17 +146,17 @@ func TestManager_DifferentContentDifferentCache(t *testing.T) {
 
 	mgr := NewManager(cacheDir)
 
-	// First disk with file1
-	files1 := []File{NewFileWithName("testbin", testFile1, 0755)}
+	// First disk with file1 - same destPath but different source content
+	files1 := []File{NewFile("/usr/local/bin/testbin", testFile1, 0755)}
 	_, err := mgr.GetOrCreateDisk(stateDir1, files1)
 	require.NoError(t, err)
 
-	// Second disk with file2 (different content)
-	files2 := []File{NewFileWithName("testbin", testFile2, 0755)}
+	// Second disk with file2 (different content at same destination)
+	files2 := []File{NewFile("/usr/local/bin/testbin", testFile2, 0755)}
 	_, err = mgr.GetOrCreateDisk(stateDir2, files2)
 	require.NoError(t, err)
 
-	// Cache should have two files (different hashes)
+	// Cache should have two files (different hashes due to different content)
 	cacheFiles, err := os.ReadDir(cacheDir)
 	require.NoError(t, err)
 	assert.Len(t, cacheFiles, 2)
@@ -174,22 +167,22 @@ func TestManager_MultipleFiles(t *testing.T) {
 	stateDir := t.TempDir()
 	srcDir := t.TempDir()
 
-	// Create multiple test files
+	// Create multiple test files with different destination paths
 	files := []File{
-		createTestFile(t, srcDir, "binary1", []byte("binary1 content"), 0755),
-		createTestFile(t, srcDir, "binary2", []byte("binary2 content"), 0755),
-		createTestFile(t, srcDir, "config.txt", []byte("config content"), 0644),
+		createTestFile(t, srcDir, "/usr/local/bin/binary1", "binary1", []byte("binary1 content"), 0755),
+		createTestFile(t, srcDir, "/usr/local/bin/binary2", "binary2", []byte("binary2 content"), 0755),
+		createTestFile(t, srcDir, "/etc/myapp/config.txt", "config.txt", []byte("config content"), 0644),
 	}
 
 	mgr := NewManager(cacheDir)
 	diskPath, err := mgr.GetOrCreateDisk(stateDir, files)
 	require.NoError(t, err)
 
-	// Verify tar contains all files
+	// Verify tar contains all files with their destination paths as entry names
 	verifyTarContent(t, diskPath, map[string][]byte{
-		"binary1":    []byte("binary1 content"),
-		"binary2":    []byte("binary2 content"),
-		"config.txt": []byte("config content"),
+		"/usr/local/bin/binary1": []byte("binary1 content"),
+		"/usr/local/bin/binary2": []byte("binary2 content"),
+		"/etc/myapp/config.txt":  []byte("config content"),
 	})
 }
 
@@ -197,9 +190,9 @@ func TestManager_HashDeterminism(t *testing.T) {
 	cacheDir := t.TempDir()
 	srcDir := t.TempDir()
 
-	// Create test files
-	file1 := createTestFile(t, srcDir, "aaa", []byte("content aaa"), 0755)
-	file2 := createTestFile(t, srcDir, "bbb", []byte("content bbb"), 0755)
+	// Create test files with different destination paths
+	file1 := createTestFile(t, srcDir, "/usr/local/bin/aaa", "aaa", []byte("content aaa"), 0755)
+	file2 := createTestFile(t, srcDir, "/usr/local/bin/bbb", "bbb", []byte("content bbb"), 0755)
 
 	mgr := NewManager(cacheDir)
 
@@ -207,7 +200,7 @@ func TestManager_HashDeterminism(t *testing.T) {
 	hash1, err := mgr.computeHash([]File{file1, file2})
 	require.NoError(t, err)
 
-	// Order 2: bbb, aaa (should produce same hash due to sorting)
+	// Order 2: bbb, aaa (should produce same hash due to sorting by destPath)
 	hash2, err := mgr.computeHash([]File{file2, file1})
 	require.NoError(t, err)
 
@@ -216,11 +209,13 @@ func TestManager_HashDeterminism(t *testing.T) {
 
 // Helper functions
 
-func createTestFile(t *testing.T, dir, name string, content []byte, mode int64) File {
+// createTestFile creates a test file on disk and returns a File struct.
+// destPath is the destination in the VM, srcName is the filename to create on disk.
+func createTestFile(t *testing.T, dir, destPath, srcName string, content []byte, mode int64) File {
 	t.Helper()
-	path := filepath.Join(dir, name)
+	path := filepath.Join(dir, srcName)
 	require.NoError(t, os.WriteFile(path, content, os.FileMode(mode)))
-	return NewFileWithName(name, path, mode)
+	return NewFile(destPath, path, mode)
 }
 
 func verifyTarContent(t *testing.T, tarPath string, expected map[string][]byte) {

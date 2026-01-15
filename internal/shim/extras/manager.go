@@ -78,29 +78,29 @@ func (m *Manager) GetOrCreateDisk(stateDir string, files []File) (string, error)
 }
 
 // computeHash computes a deterministic SHA256 hash of all files.
-// Files are sorted by name to ensure consistent ordering.
+// Files are sorted by destination path to ensure consistent ordering.
 func (m *Manager) computeHash(files []File) (string, error) {
-	// Sort files by name for deterministic hashing
+	// Sort files by destination path for deterministic hashing
 	sorted := make([]File, len(files))
 	copy(sorted, files)
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Name < sorted[j].Name
+		return sorted[i].DestPath < sorted[j].DestPath
 	})
 
 	h := sha256.New()
 	for _, f := range sorted {
-		// Hash: name + mode + file content
-		h.Write([]byte(f.Name))
+		// Hash: destPath + mode + file content
+		h.Write([]byte(f.DestPath))
 		_, _ = fmt.Fprintf(h, "%d", f.Mode) // hash.Write never returns an error
 
-		file, err := os.Open(f.Path)
+		file, err := os.Open(f.SourcePath)
 		if err != nil {
-			return "", fmt.Errorf("open %s: %w", f.Path, err)
+			return "", fmt.Errorf("open %s: %w", f.SourcePath, err)
 		}
 		_, err = io.Copy(h, file)
 		file.Close()
 		if err != nil {
-			return "", fmt.Errorf("hash %s: %w", f.Path, err)
+			return "", fmt.Errorf("hash %s: %w", f.SourcePath, err)
 		}
 	}
 
@@ -108,6 +108,7 @@ func (m *Manager) computeHash(files []File) (string, error) {
 }
 
 // createTar creates a tar archive at path containing all files.
+// The tar stores files with their destination paths as names.
 func (m *Manager) createTar(path string, files []File) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -119,28 +120,28 @@ func (m *Manager) createTar(path string, files []File) error {
 	defer tw.Close()
 
 	for _, file := range files {
-		fi, err := os.Stat(file.Path)
+		fi, err := os.Stat(file.SourcePath)
 		if err != nil {
-			return fmt.Errorf("stat %s: %w", file.Path, err)
+			return fmt.Errorf("stat %s: %w", file.SourcePath, err)
 		}
 
 		hdr := &tar.Header{
-			Name: file.Name,
+			Name: file.DestPath, // Store destination path as tar entry name
 			Mode: file.Mode,
 			Size: fi.Size(),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
-			return fmt.Errorf("write header for %s: %w", file.Name, err)
+			return fmt.Errorf("write header for %s: %w", file.DestPath, err)
 		}
 
-		src, err := os.Open(file.Path)
+		src, err := os.Open(file.SourcePath)
 		if err != nil {
-			return fmt.Errorf("open %s: %w", file.Path, err)
+			return fmt.Errorf("open %s: %w", file.SourcePath, err)
 		}
 		_, err = io.Copy(tw, src)
 		src.Close()
 		if err != nil {
-			return fmt.Errorf("copy %s: %w", file.Name, err)
+			return fmt.Errorf("copy %s: %w", file.DestPath, err)
 		}
 	}
 

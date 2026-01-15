@@ -14,8 +14,6 @@ import (
 	"syscall"
 
 	"github.com/containerd/log"
-
-	"github.com/spin-stack/spinbox/internal/guest/vminit/extras"
 )
 
 // Kernel cmdline parameter names (must match shim/supervisor package)
@@ -36,6 +34,10 @@ const (
 
 	// BinaryName is the supervisor binary filename in the bundle.
 	BinaryName = "spin-supervisor"
+
+	// BinaryPath is the expected path for supervisor binary from extras disk.
+	// This matches the GuestBinaryPath in the shim supervisor package.
+	BinaryPath = "/run/spin-stack/spin-supervisor"
 
 	// PidFile is where the supervisor PID is written.
 	PidFile = "/run/spin-supervisor.pid"
@@ -113,12 +115,12 @@ func (c *Config) Validate() error {
 }
 
 // FindBinary searches for the supervisor binary.
-// It first checks the extras directory (from extras disk), then falls back to bundle directories.
+// It first checks the expected path from extras disk, then falls back to bundle directories.
 func (c *Config) FindBinary(ctx context.Context) error {
-	// First, check extras directory (preferred path - from extras disk)
-	if path, err := extras.GetFile(BinaryName); err == nil {
-		c.BinaryPath = path
-		log.G(ctx).WithField("path", path).Debug("found supervisor binary in extras directory")
+	// First, check the expected path from extras disk
+	if _, err := os.Stat(BinaryPath); err == nil {
+		c.BinaryPath = BinaryPath
+		log.G(ctx).WithField("path", BinaryPath).Debug("found supervisor binary at expected path")
 		return nil
 	}
 
@@ -160,7 +162,7 @@ func (c *Config) FindBinary(ctx context.Context) error {
 		}
 	}
 
-	return fmt.Errorf("supervisor binary not found in extras or %s", BundleBasePath)
+	return fmt.Errorf("supervisor binary not found at %s or in %s", BinaryPath, BundleBasePath)
 }
 
 // Start starts the supervisor binary as a background daemon.

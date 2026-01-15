@@ -204,8 +204,9 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 		}
 
 		// Build list of files to include in extras disk
+		// destPath in VM <- sourcePath on host
 		extrasBuilder := extras.NewBuilder()
-		extrasBuilder.AddExecutable(supervisor.BundleFileName, state.supervisorCfg.BinaryPath)
+		extrasBuilder.AddExecutable(supervisor.GuestBinaryPath, state.supervisorCfg.BinaryPath)
 
 		// Create extras disk via manager (handles caching)
 		extrasMgr := extras.NewManager(cfg.Paths.ExtrasCacheDir)

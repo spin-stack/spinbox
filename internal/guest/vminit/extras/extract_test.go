@@ -15,15 +15,17 @@ import (
 
 func TestExtractFromDevice(t *testing.T) {
 	ctx := context.Background()
+
+	// Create a temp directory to use as extraction target
 	targetDir := t.TempDir()
 
-	// Create a test tar file
+	// Create a test tar file with absolute paths
 	tarPath := createTestTar(t, map[string]tarFile{
-		"binary1": {content: []byte("binary1 content"), mode: 0755},
-		"config":  {content: []byte("config content"), mode: 0644},
+		filepath.Join(targetDir, "binary1"): {content: []byte("binary1 content"), mode: 0755},
+		filepath.Join(targetDir, "config"):  {content: []byte("config content"), mode: 0644},
 	})
 
-	err := ExtractFromDevice(ctx, tarPath, targetDir)
+	err := ExtractFromDevice(ctx, tarPath)
 	require.NoError(t, err)
 
 	// Verify extracted files
@@ -45,67 +47,69 @@ func TestExtractFromDevice(t *testing.T) {
 	assert.Equal(t, os.FileMode(0644), fi2.Mode().Perm())
 }
 
-func TestExtractFromDevice_PathTraversal(t *testing.T) {
+func TestExtractFromDevice_SkipsRelativePaths(t *testing.T) {
 	ctx := context.Background()
+
 	targetDir := t.TempDir()
 
-	// Create tar with path traversal attempt
+	// Create tar with both absolute and relative paths
+	// Relative paths should be skipped
 	tarPath := createTestTar(t, map[string]tarFile{
-		"../evil":     {content: []byte("evil"), mode: 0644},
-		"foo/bar/baz": {content: []byte("nested"), mode: 0644},
+		"relative/path":                      {content: []byte("should be skipped"), mode: 0644},
+		"../evil":                            {content: []byte("should be skipped"), mode: 0644},
+		filepath.Join(targetDir, "absolute"): {content: []byte("should be extracted"), mode: 0644},
 	})
 
-	err := ExtractFromDevice(ctx, tarPath, targetDir)
+	err := ExtractFromDevice(ctx, tarPath)
 	require.NoError(t, err)
 
-	// Files should be extracted with base names only
-	assert.FileExists(t, filepath.Join(targetDir, "evil"))
-	assert.FileExists(t, filepath.Join(targetDir, "baz"))
+	// Only absolute path should be extracted
+	assert.FileExists(t, filepath.Join(targetDir, "absolute"))
 
-	// Should NOT exist outside targetDir
-	assert.NoFileExists(t, filepath.Join(filepath.Dir(targetDir), "evil"))
+	// Relative paths should NOT be extracted anywhere
+	assert.NoFileExists(t, filepath.Join(targetDir, "relative", "path"))
+	assert.NoFileExists(t, filepath.Join(targetDir, "evil"))
 }
 
-func TestGetFile(t *testing.T) {
-	// Temporarily change TargetDir for testing
-	oldTarget := TargetDir
-	defer func() {
-		// Note: TargetDir is a const, so this test assumes we can create files there
-		// In real tests, we'd need to use a different approach
-	}()
-	_ = oldTarget
+func TestExtractFromDevice_CreatesParentDirs(t *testing.T) {
+	ctx := context.Background()
 
-	// Create a temp dir and file
-	tempDir := t.TempDir()
-	testFile := filepath.Join(tempDir, "testbin")
-	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0755))
+	targetDir := t.TempDir()
 
-	// Test GetFile with the actual file path
-	// Since TargetDir is a const, we test the file existence logic directly
-	path := filepath.Join(tempDir, "testbin")
-	_, err := os.Stat(path)
-	assert.NoError(t, err)
+	// Create tar with nested path
+	nestedPath := filepath.Join(targetDir, "deep", "nested", "path", "file.txt")
+	tarPath := createTestTar(t, map[string]tarFile{
+		nestedPath: {content: []byte("nested content"), mode: 0644},
+	})
 
-	// Test non-existent file
-	path = filepath.Join(tempDir, "nonexistent")
-	_, err = os.Stat(path)
-	assert.True(t, os.IsNotExist(err))
+	err := ExtractFromDevice(ctx, tarPath)
+	require.NoError(t, err)
+
+	// File should exist with parent directories created
+	assert.FileExists(t, nestedPath)
+	content, err := os.ReadFile(nestedPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("nested content"), content)
 }
 
-func TestFileExists(t *testing.T) {
-	tempDir := t.TempDir()
+func TestExtractFromDevice_CleansPath(t *testing.T) {
+	ctx := context.Background()
 
-	// Create a test file
-	testFile := filepath.Join(tempDir, "exists")
-	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0644))
+	targetDir := t.TempDir()
 
-	// Test existence
-	_, err := os.Stat(testFile)
-	assert.NoError(t, err)
+	// Create tar with path that needs cleaning (but is still absolute)
+	dirtyPath := targetDir + "/foo/../bar/./file.txt"
+	cleanPath := filepath.Join(targetDir, "bar", "file.txt")
 
-	// Test non-existence
-	_, err = os.Stat(filepath.Join(tempDir, "nonexistent"))
-	assert.True(t, os.IsNotExist(err))
+	tarPath := createTestTar(t, map[string]tarFile{
+		dirtyPath: {content: []byte("content"), mode: 0644},
+	})
+
+	err := ExtractFromDevice(ctx, tarPath)
+	require.NoError(t, err)
+
+	// File should be at the cleaned path
+	assert.FileExists(t, cleanPath)
 }
 
 // Helper types and functions

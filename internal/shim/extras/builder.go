@@ -8,8 +8,8 @@ package extras
 // Example usage:
 //
 //	builder := extras.NewBuilder()
-//	builder.AddExecutable("spin-supervisor", "/usr/share/spin-stack/bin/spin-supervisor")
-//	builder.AddExecutable("metrics-agent", "/path/to/metrics-agent")
+//	builder.AddExecutable("/usr/local/bin/supervisor", "/usr/share/spin-stack/bin/spin-supervisor")
+//	builder.Add("/etc/myapp/config.json", "/host/path/to/config.json", 0644)
 //	files := builder.Files()
 type Builder struct {
 	files []File
@@ -20,15 +20,17 @@ func NewBuilder() *Builder {
 	return &Builder{}
 }
 
-// Add adds a file to the extras disk.
-func (b *Builder) Add(f File) *Builder {
-	b.files = append(b.files, f)
+// Add adds a file mapping: destPath in VM <- sourcePath on host.
+func (b *Builder) Add(destPath, sourcePath string, mode int64) *Builder {
+	b.files = append(b.files, NewFile(destPath, sourcePath, mode))
 	return b
 }
 
 // AddExecutable adds an executable file (mode 0755).
-func (b *Builder) AddExecutable(name, path string) *Builder {
-	return b.Add(NewFileWithName(name, path, 0755))
+// destPath is where the file will be placed in the VM.
+// sourcePath is the location of the file on the host.
+func (b *Builder) AddExecutable(destPath, sourcePath string) *Builder {
+	return b.Add(destPath, sourcePath, 0755)
 }
 
 // Files returns all collected files.
