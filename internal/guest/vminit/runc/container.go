@@ -18,6 +18,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/typeurl/v2"
 
+	spinbox "github.com/spin-stack/spinbox/api/types/spinbox/v1"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
 	"github.com/spin-stack/spinbox/internal/host/mountutil"
@@ -55,20 +56,39 @@ func getRuntimePath() string {
 	return resolvedRuntimePath
 }
 
+// toRuncOptions converts various option types to runc options.
+// Handles both containerd's runc.Options and spinbox's SpinboxOpts.
+func toRuncOptions(ctx context.Context, v any) *options.Options {
+	switch o := v.(type) {
+	case *options.Options:
+		return o
+	case *spinbox.SpinboxOpts:
+		// Convert SpinboxOpts to runc Options format
+		return &options.Options{
+			IoUid: o.IoUID,
+			IoGid: o.IoGID,
+		}
+	default:
+		log.G(ctx).WithField("type", fmt.Sprintf("%T", v)).
+			Warn("unexpected options type, using defaults")
+		return &options.Options{}
+	}
+}
+
 // NewContainer returns a new runc container
 func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest, streams stream.Manager) (*Container, error) {
 	opts := &options.Options{}
 	if r.Options.GetValue() != nil {
 		v, err := typeurl.UnmarshalAny(r.Options)
 		if err != nil {
-			return nil, err
-		}
-		if v != nil {
-			parsed, ok := v.(*options.Options)
-			if !ok {
-				return nil, fmt.Errorf("unexpected options type %T", v)
-			}
-			opts = parsed
+			// Log warning for unregistered options types but continue with defaults.
+			// This handles cases where containerd sends runtime-specific options
+			// (e.g., io.containerd.spinbox.v1.SpinboxOpts) that aren't registered.
+			log.G(ctx).WithError(err).WithField("type_url", r.Options.GetTypeUrl()).
+				Warn("failed to unmarshal options, using defaults")
+		} else if v != nil {
+			// Convert options to runc format based on type
+			opts = toRuncOptions(ctx, v)
 		}
 	}
 
