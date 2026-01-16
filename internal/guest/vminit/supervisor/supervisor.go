@@ -83,10 +83,11 @@ func findBinary(ctx context.Context) string {
 func RunWithMonitoring(ctx context.Context) error {
 	binaryPath := findBinary(ctx)
 	if binaryPath == "" {
-		log.G(ctx).Debug("supervisor binary not found, skipping")
+		log.G(ctx).Info("supervisor binary not found at /run/spin-stack/spin-supervisor, skipping")
 		return nil
 	}
 
+	log.G(ctx).WithField("path", binaryPath).Info("starting supervisor with monitoring")
 	monitor := NewMonitor(binaryPath)
 	return monitor.Run(ctx)
 }

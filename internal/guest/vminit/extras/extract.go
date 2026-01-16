@@ -43,6 +43,8 @@ func parseExtrasConfig(ctx context.Context) (*extrasConfig, error) {
 		return nil, fmt.Errorf("read cmdline: %w", err)
 	}
 
+	log.G(ctx).WithField("cmdline", string(cmdline)).Debug("parsing kernel cmdline for extras config")
+
 	cfg := &extrasConfig{}
 
 	for param := range strings.FieldsSeq(string(cmdline)) {
@@ -56,7 +58,7 @@ func parseExtrasConfig(ctx context.Context) (*extrasConfig, error) {
 			log.G(ctx).WithFields(log.Fields{
 				"index":  index,
 				"device": cfg.device,
-			}).Debug("found extras disk in kernel cmdline")
+			}).Info("found extras disk in kernel cmdline")
 		}
 		if param == "spin.extras_force=1" || param == "spin.extras_force" {
 			cfg.force = true
@@ -86,7 +88,7 @@ func Extract(ctx context.Context) error {
 		return err
 	}
 	if cfg.device == "" {
-		log.G(ctx).Debug("no extras disk configured")
+		log.G(ctx).Info("no extras disk configured (spin.extras_disk not in kernel cmdline)")
 		return nil
 	}
 
