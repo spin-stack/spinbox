@@ -8,7 +8,6 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/log"
 
 	platformNetwork "github.com/spin-stack/spinbox/internal/shim/platform/network"
@@ -29,7 +28,13 @@ const (
 
 // updateContainerLabels updates the container's labels in containerd with VM runtime metadata.
 // This is a best-effort operation - failures are logged but do not cause container creation to fail.
-func updateContainerLabels(ctx context.Context, containerID string, cid uint32, netResult *platformNetwork.SetupResult) {
+// containerdAddress is the gRPC address for connecting back to containerd.
+func updateContainerLabels(ctx context.Context, containerID string, cid uint32, netResult *platformNetwork.SetupResult, containerdAddress string) {
+	if containerdAddress == "" {
+		log.G(ctx).Debug("skipping label update: containerd address not available")
+		return
+	}
+
 	if netResult == nil || netResult.Config == nil {
 		log.G(ctx).Debug("skipping label update: no network result")
 		return
@@ -39,13 +44,6 @@ func updateContainerLabels(ctx context.Context, containerID string, cid uint32, 
 	ns, ok := namespaces.Namespace(ctx)
 	if !ok {
 		log.G(ctx).Warn("skipping label update: namespace not found in context")
-		return
-	}
-
-	// Get containerd socket address
-	address, err := shim.ReadAddress("address")
-	if err != nil {
-		log.G(ctx).WithError(err).Warn("skipping label update: failed to read containerd address")
 		return
 	}
 
@@ -66,7 +64,7 @@ func updateContainerLabels(ctx context.Context, containerID string, cid uint32, 
 	}
 
 	// Create containerd client
-	client, err := containerd.New(address, containerd.WithDefaultNamespace(ns))
+	client, err := containerd.New(containerdAddress, containerd.WithDefaultNamespace(ns))
 	if err != nil {
 		log.G(ctx).WithError(err).Warn("skipping label update: failed to create containerd client")
 		return

@@ -12,6 +12,12 @@ import (
 	"github.com/spin-stack/spinbox/internal/shim/task"
 )
 
+const (
+	// PropertyGRPCAddress is the property key for the containerd gRPC address.
+	// This is set by containerd's shim runtime during plugin initialization.
+	propertyGRPCAddress = "io.containerd.plugin.grpc.address"
+)
+
 func init() {
 	registry.Register(&plugin.Registration{
 		Type: TTRPCPlugin,
@@ -39,7 +45,13 @@ func init() {
 			if !ok {
 				return nil, fmt.Errorf("unexpected shutdown service type %T", ss)
 			}
-			return task.NewTaskService(ic.Context, publisher, shutdownSvc)
+
+			// Extract containerd gRPC address from plugin properties.
+			// This address is passed by containerd's shim runtime and is needed
+			// for updating container labels after VM creation.
+			containerdAddress := ic.Properties[propertyGRPCAddress]
+
+			return task.NewTaskService(ic.Context, publisher, shutdownSvc, containerdAddress)
 		},
 	})
 }

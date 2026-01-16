@@ -426,7 +426,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	}
 
 	// Update container labels with VM runtime metadata (best-effort, non-blocking)
-	updateContainerLabels(ctx, r.ID, state.vmInstance.VMInfo().CID, state.netResult)
+	updateContainerLabels(ctx, r.ID, state.vmInstance.VMInfo().CID, state.netResult, s.containerdAddress)
 
 	// Phase 4: Create task in VM
 	resp, err := s.createTaskInVM(ctx, state)

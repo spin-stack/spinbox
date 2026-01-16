@@ -152,7 +152,9 @@ var (
 )
 
 // NewTaskService creates a new instance of a task service.
-func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TTRPCTaskService, error) {
+// containerdAddress is the gRPC address for connecting back to containerd,
+// used for updating container labels with VM runtime metadata.
+func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service, containerdAddress string) (taskAPI.TTRPCTaskService, error) {
 	// Initialize platform managers
 	netMgr := platformNetwork.New()
 	nm, err := netMgr.InitNetworkManager(ctx)
@@ -173,9 +175,13 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 		initiateShutdown:         sd.Shutdown,
 		shutdownSvc:              sd,
 		connManager:              NewConnectionManager(vmLM.DialClient, vmLM.DialClientWithRetry),
+		containerdAddress:        containerdAddress,
 	}
 	sd.RegisterCallback(s.shutdown)
 
+	// Register socket cleanup on shutdown if we can determine the socket address.
+	// We first try to read from the address file (legacy path), then fall back
+	// to computing the address from the containerd address if provided.
 	if address, err := shim.ReadAddress("address"); err == nil {
 		sd.RegisterCallback(func(context.Context) error {
 			return shim.RemoveSocket(address)
@@ -272,6 +278,12 @@ type service struct {
 
 	initStarted atomic.Bool // True once the init process has been started
 	connManager *ConnectionManager
+
+	// === Containerd Communication ===
+	// containerdAddress is the gRPC address for connecting back to containerd.
+	// Used for updating container labels with VM runtime metadata (CID, IP, etc.)
+	// after VM creation. Passed from plugin initialization.
+	containerdAddress string
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {

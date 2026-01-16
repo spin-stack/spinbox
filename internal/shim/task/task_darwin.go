@@ -15,6 +15,6 @@ import (
 )
 
 // NewTaskService returns an error on Darwin (not supported).
-func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TTRPCTaskService, error) {
+func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service, containerdAddress string) (taskAPI.TTRPCTaskService, error) {
 	return nil, fmt.Errorf("task service not supported on darwin")
 }
