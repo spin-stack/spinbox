@@ -210,7 +210,7 @@ func setupContainerdClient(t *testing.T, cfg testConfig) *containerd.Client {
 	t.Logf("containerd version: %s (namespace: %s)", version.Version, cfg.Namespace)
 
 	// Log snapshotter plugin info
-	plugins, err := client.IntrospectionService().Plugins(ctx, []string{"type==io.containerd.snapshotter.v1"})
+	plugins, err := client.IntrospectionService().Plugins(ctx, "type==io.containerd.snapshotter.v1")
 	if err != nil {
 		t.Logf("warning: failed to get snapshotter plugins: %v", err)
 	} else {
