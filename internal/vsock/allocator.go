@@ -63,9 +63,8 @@ func (a *Allocator) Allocate() (*Lease, error) {
 			continue
 		}
 
-		info, _ := f.Stat()
 		meta := readMetadata(f)
-		if isCoolingDown(now, meta, info, a.cooldown) {
+		if isCoolingDown(now, meta, a.cooldown) {
 			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 			_ = f.Close()
 			continue
@@ -134,23 +133,25 @@ func writeMetadata(f *os.File, meta cidMetadata) error {
 	return enc.Encode(meta)
 }
 
-func isCoolingDown(now time.Time, meta cidMetadata, info os.FileInfo, cooldown time.Duration) bool {
+func isCoolingDown(now time.Time, meta cidMetadata, cooldown time.Duration) bool {
 	if cooldown <= 0 {
 		return false
 	}
 
+	// Only apply cooldown if there's evidence of prior use.
+	// A CID that was never allocated (empty metadata) is immediately available.
 	var last time.Time
 	switch {
 	case meta.ReleasedAt != nil:
+		// CID was explicitly released - cooldown from release time
 		last = *meta.ReleasedAt
 	case !meta.AllocatedAt.IsZero():
+		// CID was allocated but not released (crash recovery) - cooldown from allocation time
 		last = meta.AllocatedAt
-	case info != nil:
-		last = info.ModTime()
-	}
-
-	if last.IsZero() {
+	default:
+		// No prior allocation record - CID is immediately available
 		return false
 	}
+
 	return now.Sub(last) < cooldown
 }

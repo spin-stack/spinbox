@@ -297,7 +297,6 @@ func TestIsCoolingDown(t *testing.T) {
 	tests := []struct {
 		name     string
 		meta     cidMetadata
-		info     os.FileInfo
 		cooldown time.Duration
 		want     bool
 	}{
@@ -308,7 +307,7 @@ func TestIsCoolingDown(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:     "no release time, no alloc time",
+			name:     "no release time, no alloc time - immediately available",
 			meta:     cidMetadata{},
 			cooldown: cooldown,
 			want:     false,
@@ -330,7 +329,7 @@ func TestIsCoolingDown(t *testing.T) {
 			want:     false,
 		},
 		{
-			name: "allocated recently, no release",
+			name: "allocated recently, no release (crash recovery)",
 			meta: cidMetadata{
 				AllocatedAt: now.Add(-500 * time.Millisecond),
 			},
@@ -338,7 +337,7 @@ func TestIsCoolingDown(t *testing.T) {
 			want:     true,
 		},
 		{
-			name: "allocated long ago, no release",
+			name: "allocated long ago, no release (crash recovery)",
 			meta: cidMetadata{
 				AllocatedAt: now.Add(-2 * time.Second),
 			},
@@ -349,7 +348,7 @@ func TestIsCoolingDown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isCoolingDown(now, tt.meta, tt.info, tt.cooldown)
+			got := isCoolingDown(now, tt.meta, tt.cooldown)
 			if got != tt.want {
 				t.Errorf("isCoolingDown() = %v, want %v", got, tt.want)
 			}
