@@ -23,6 +23,7 @@ import (
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
 	api "github.com/spin-stack/spinbox/api/services/system/v1"
+	"github.com/spin-stack/spinbox/internal/version"
 )
 
 const (
@@ -210,7 +211,7 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 		return nil, errgrpc.ToGRPC(err)
 	}
 	return &api.InfoResponse{
-		Version:       "dev",
+		Version:       version.Short(),
 		KernelVersion: string(v),
 	}, nil
 }

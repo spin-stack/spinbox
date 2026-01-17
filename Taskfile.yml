@@ -38,8 +38,18 @@ vars:
   BUILDKIT_CACHE_INITRD: '{{.BUILDKIT_CACHE_DIR}}/initrd'
   BUILDKIT_CACHE_QEMU: '{{.BUILDKIT_CACHE_DIR}}/qemu'
 
-  # Build flags
-  LDFLAGS: "-s -w"
+  # Version info (set via environment or computed)
+  VERSION:
+    sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
+  GIT_COMMIT:
+    sh: git rev-parse HEAD 2>/dev/null || echo "unknown"
+  BUILD_DATE:
+    sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
+
+  # Build flags with version info
+  VERSION_PKG: "github.com/spin-stack/spinbox/internal/version"
+  VERSION_LDFLAGS: "-X {{.VERSION_PKG}}.Version={{.VERSION}} -X {{.VERSION_PKG}}.GitCommit={{.GIT_COMMIT}} -X {{.VERSION_PKG}}.BuildDate={{.BUILD_DATE}}"
+  LDFLAGS: "-s -w {{.VERSION_LDFLAGS}}"
   GO_BUILDTAGS: "no_grpc"
   GO_TAGS: '-tags "{{.GO_BUILDTAGS}}"'
   GO_LDFLAGS: "-ldflags '{{.LDFLAGS}}'"

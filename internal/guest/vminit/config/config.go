@@ -11,6 +11,7 @@ import (
 
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 
+	"github.com/spin-stack/spinbox/internal/version"
 	"github.com/spin-stack/spinbox/internal/vsock"
 )
 
@@ -103,11 +104,16 @@ func ApplyPluginConfig(pluginConfig any, configMap map[string]any) error {
 	return nil
 }
 
+// ErrVersionRequested is returned when the version flag is provided.
+var ErrVersionRequested = fmt.Errorf("version requested")
+
 // ParseFlags parses command-line flags and returns the config and set flags map.
+// Returns ErrVersionRequested if -version or --version is provided.
 func ParseFlags(args []string) (*ServiceConfig, map[string]bool, string, error) {
 	var (
-		config     ServiceConfig
-		configFile string
+		config       ServiceConfig
+		configFile   string
+		printVersion bool
 	)
 
 	fs := flag.NewFlagSet("vminitd", flag.ContinueOnError)
@@ -116,9 +122,16 @@ func ParseFlags(args []string) (*ServiceConfig, map[string]bool, string, error) 
 	fs.IntVar(&config.RPCPort, "vsock-rpc-port", vsock.DefaultRPCPort, "vsock port to listen for rpc on")
 	fs.IntVar(&config.StreamPort, "vsock-stream-port", vsock.DefaultStreamPort, "vsock port to listen for streams on")
 	fs.IntVar(&config.VSockContextID, "vsock-cid", vsock.GuestCID, "vsock context ID for vsock listen")
+	fs.BoolVar(&printVersion, "version", false, "Print version information and exit")
+	fs.BoolVar(&printVersion, "v", false, "Print version information and exit (shorthand)")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, "", err
+	}
+
+	if printVersion {
+		fmt.Println("vminitd", version.Info())
+		return nil, nil, "", ErrVersionRequested
 	}
 
 	// Track which flags were explicitly set by the user

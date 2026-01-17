@@ -36,6 +36,9 @@ const (
 func main() {
 	cfg, setFlags, configFile, err := config.ParseFlags(os.Args[1:])
 	if err != nil {
+		if errors.Is(err, config.ErrVersionRequested) {
+			os.Exit(0)
+		}
 		log.L.WithError(err).Fatal("failed to parse flags")
 	}
 

@@ -14,6 +14,7 @@ import (
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
 	api "github.com/spin-stack/spinbox/api/services/system/v1"
+	"github.com/spin-stack/spinbox/internal/version"
 )
 
 // Test helper functions
@@ -178,8 +179,8 @@ func TestSystemServiceInfo(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if resp.Version != "dev" {
-			t.Errorf("version = %q, want %q", resp.Version, "dev")
+		if resp.Version != version.Short() {
+			t.Errorf("version = %q, want %q", resp.Version, version.Short())
 		}
 
 		// KernelVersion will be set if /proc/version exists
