@@ -142,7 +142,7 @@ chmod +x "${RELEASE_DIR}/usr/share/spin-stack/libexec/cni/tc-redirect-tap"
 echo "  ok: tc-redirect-tap CNI plugin"
 
 echo "Downloading spin-erofs-snapshotter and erofs tools..."
-EROFS_SNAPSHOTTER_VERSION="${EROFS_SNAPSHOTTER_VERSION:-v20260116.04}"
+EROFS_SNAPSHOTTER_VERSION="${EROFS_SNAPSHOTTER_VERSION:-v20260116.05}"
 EROFS_SNAPSHOTTER_BASE_URL="https://github.com/spin-stack/erofs-snapshotter/releases/download/${EROFS_SNAPSHOTTER_VERSION}"
 
 EROFS_SNAPSHOTTER_BINARIES=(

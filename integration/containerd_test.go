@@ -208,6 +208,29 @@ func setupContainerdClient(t *testing.T, cfg testConfig) *containerd.Client {
 	}
 
 	t.Logf("containerd version: %s (namespace: %s)", version.Version, cfg.Namespace)
+
+	// Log snapshotter plugin info
+	plugins, err := client.IntrospectionService().Plugins(ctx, []string{"type==io.containerd.snapshotter.v1"})
+	if err != nil {
+		t.Logf("warning: failed to get snapshotter plugins: %v", err)
+	} else {
+		for _, p := range plugins.Plugins {
+			if p.ID == cfg.Snapshotter {
+				t.Logf("snapshotter %s: type=%s capabilities=%v", p.ID, p.Type, p.Capabilities)
+				break
+			}
+		}
+	}
+
+	// Try to get the spin-erofs-snapshotter binary version
+	if cfg.Snapshotter == "spin-erofs" {
+		if out, err := exec.Command("spin-erofs-snapshotter", "--version").CombinedOutput(); err == nil {
+			t.Logf("spin-erofs-snapshotter version: %s", strings.TrimSpace(string(out)))
+		} else {
+			t.Logf("spin-erofs-snapshotter --version: %v", err)
+		}
+	}
+
 	return client
 }
 
