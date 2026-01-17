@@ -224,10 +224,11 @@ func setupContainerdClient(t *testing.T, cfg testConfig) *containerd.Client {
 
 	// Try to get the spin-erofs-snapshotter binary version
 	if cfg.Snapshotter == "spin-erofs" {
-		if out, err := exec.Command("spin-erofs-snapshotter", "--version").CombinedOutput(); err == nil {
+		snapshotterBin := "/usr/share/spin-stack/bin/spin-erofs-snapshotter"
+		if out, err := exec.Command(snapshotterBin, "--version").CombinedOutput(); err == nil {
 			t.Logf("spin-erofs-snapshotter version: %s", strings.TrimSpace(string(out)))
 		} else {
-			t.Logf("spin-erofs-snapshotter --version: %v", err)
+			t.Logf("%s --version: %v", snapshotterBin, err)
 		}
 	}
 
