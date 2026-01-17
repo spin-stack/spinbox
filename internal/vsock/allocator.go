@@ -2,10 +2,12 @@
 package vsock
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 )
@@ -65,6 +67,15 @@ func (a *Allocator) Allocate() (*Lease, error) {
 
 		meta := readMetadata(f)
 		if isCoolingDown(now, meta, a.cooldown) {
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = f.Close()
+			continue
+		}
+
+		// Check if a QEMU process is already using this CID.
+		// This handles crash recovery: after shim restart, file locks are released
+		// but QEMU may still be running with this CID registered in the kernel.
+		if isCIDInUseByQEMU(cid) {
 			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 			_ = f.Close()
 			continue
@@ -154,4 +165,65 @@ func isCoolingDown(now time.Time, meta cidMetadata, cooldown time.Duration) bool
 	}
 
 	return now.Sub(last) < cooldown
+}
+
+// isCIDInUseByQEMU checks if a CID is currently in use by a running QEMU process.
+// This is necessary because after a shim restart, file locks are released but
+// QEMU processes may still be running with their CIDs registered in the kernel.
+func isCIDInUseByQEMU(cid uint32) bool {
+	// Pattern matches: guest-cid=N or guest_cid=N (QEMU uses hyphen, but be flexible)
+	pattern := regexp.MustCompile(fmt.Sprintf(`guest[-_]cid[=:]%d\b`, cid))
+
+	procDir, err := os.Open("/proc")
+	if err != nil {
+		return false // Can't check, assume not in use
+	}
+	defer procDir.Close()
+
+	entries, err := procDir.Readdirnames(-1)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		// Skip non-numeric entries (not PIDs)
+		if len(entry) == 0 || entry[0] < '0' || entry[0] > '9' {
+			continue
+		}
+
+		cmdlinePath := filepath.Join("/proc", entry, "cmdline")
+		f, err := os.Open(cmdlinePath)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(f)
+		scanner.Split(scanNullTerminated)
+		for scanner.Scan() {
+			if pattern.MatchString(scanner.Text()) {
+				f.Close()
+				return true
+			}
+		}
+		f.Close()
+	}
+
+	return false
+}
+
+// scanNullTerminated is a bufio.SplitFunc that splits on null bytes.
+// /proc/*/cmdline uses null bytes to separate arguments.
+func scanNullTerminated(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i, b := range data {
+		if b == 0 {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }

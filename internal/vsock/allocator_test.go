@@ -566,3 +566,74 @@ func TestAllocator_SkipsLockedCIDs(t *testing.T) {
 		t.Errorf("CID = %d, want 11 (first available after locked 10)", lease.CID)
 	}
 }
+
+func TestIsCIDInUseByQEMU(t *testing.T) {
+	// Test with a CID that is definitely not in use
+	// CID 99999 is very unlikely to be used by any QEMU process
+	if isCIDInUseByQEMU(99999) {
+		t.Error("isCIDInUseByQEMU(99999) = true, want false")
+	}
+
+	// Test with CID 0 - reserved, should not be in use
+	if isCIDInUseByQEMU(0) {
+		t.Error("isCIDInUseByQEMU(0) = true, want false")
+	}
+}
+
+func TestScanNullTerminated(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []byte
+		atEOF  bool
+		wantAd int
+		wantTk string
+	}{
+		{
+			name:   "empty at EOF",
+			input:  []byte{},
+			atEOF:  true,
+			wantAd: 0,
+			wantTk: "",
+		},
+		{
+			name:   "single token with null",
+			input:  []byte("hello\x00world"),
+			atEOF:  false,
+			wantAd: 6,
+			wantTk: "hello",
+		},
+		{
+			name:   "token at EOF without null",
+			input:  []byte("hello"),
+			atEOF:  true,
+			wantAd: 5,
+			wantTk: "hello",
+		},
+		{
+			name:   "incomplete token",
+			input:  []byte("hello"),
+			atEOF:  false,
+			wantAd: 0,
+			wantTk: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			advance, token, err := scanNullTerminated(tt.input, tt.atEOF)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if advance != tt.wantAd {
+				t.Errorf("advance = %d, want %d", advance, tt.wantAd)
+			}
+			gotTk := ""
+			if token != nil {
+				gotTk = string(token)
+			}
+			if gotTk != tt.wantTk {
+				t.Errorf("token = %q, want %q", gotTk, tt.wantTk)
+			}
+		})
+	}
+}
