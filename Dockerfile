@@ -141,9 +141,13 @@ ARG GO_DEBUG_GCFLAGS
 ARG GO_GCFLAGS
 ARG GO_BUILD_FLAGS
 ARG TARGETPLATFORM
+# VMINITD_CACHE_BUST forces rebuild when set to a new value (e.g., git commit SHA)
+# This prevents stale vminitd binaries from being served from BuildKit cache
+ARG VMINITD_CACHE_BUST
 
 RUN --mount=type=bind,target=.,rw \
     --mount=type=cache,target=/root/.cache/go-build,id=vminit-build-$TARGETPLATFORM \
+    echo "Building vminitd (cache bust: ${VMINITD_CACHE_BUST:-none})" && \
     go build ${GO_DEBUG_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o /build/vminitd -ldflags '-extldflags \"-static\" -s -w' -tags 'osusergo netgo static_build'  ./cmd/vminitd
 
 FROM base AS crun-build

@@ -116,6 +116,8 @@ tasks:
       - |
         set -eou pipefail
         echo "🐳 Building initrd..."
+        # Use git commit SHA to bust vminitd cache and prevent stale builds
+        COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
         {{.BUILDX}} build \
           --file Dockerfile \
           --target initrd \
@@ -125,9 +127,10 @@ tasks:
           --build-arg KERNEL_VERSION=6.18 \
           --build-arg KERNEL_ARCH=x86_64 \
           --build-arg KERNEL_NPROC=8 \
+          --build-arg VMINITD_CACHE_BUST="${COMMIT_SHA}" \
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
-        echo "✓ Initrd built: _output/spinbox-initrd"
+        echo "✓ Initrd built: _output/spinbox-initrd (commit: ${COMMIT_SHA})"
 
   build:kernel:
     desc: Build kernel
