@@ -125,6 +125,23 @@ func mountFilesystems() error {
 		return fmt.Errorf("failed to create /run/lock: %w", err)
 	}
 
+	// Create /var/lib/spin-stack for supervisor binary (must be executable)
+	// This is a separate tmpfs without noexec since /run has noexec
+	// #nosec G301 -- /var/lib/spin-stack needs to be readable for supervisor execution.
+	if err := os.MkdirAll("/var/lib/spin-stack", 0755); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("failed to create /var/lib/spin-stack: %w", err)
+	}
+	if err := mount.All([]mount.Mount{
+		{
+			Type:    "tmpfs",
+			Source:  "tmpfs",
+			Target:  "/var/lib/spin-stack",
+			Options: []string{"nosuid", "nodev", "size=32m"},
+		},
+	}, "/"); err != nil {
+		return fmt.Errorf("failed to mount /var/lib/spin-stack: %w", err)
+	}
+
 	// Create /dev subdirectories after devtmpfs is mounted
 	// #nosec G301 -- /dev/pts and /dev/shm must be accessible inside the VM.
 	for _, dir := range []string{"/dev/pts", "/dev/shm"} {

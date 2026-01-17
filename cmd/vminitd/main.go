@@ -107,7 +107,7 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 
 	// Start supervisor agent in background with automatic restart on crash.
 	// The supervisor binary is injected via extras disk and will be available
-	// at /run/spin-stack/spin-supervisor after VM boot.
+	// at /var/lib/spin-stack/bin/spin-supervisor after VM boot.
 	// RunWithMonitoring blocks until context is cancelled, handling all restarts.
 	go func() {
 		// Wait a bit for extras disk to be mounted and files extracted

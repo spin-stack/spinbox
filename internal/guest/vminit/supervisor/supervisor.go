@@ -22,7 +22,8 @@ const (
 	BinaryName = "spin-supervisor"
 
 	// BinaryPath is the expected path for supervisor binary from extras disk.
-	BinaryPath = "/run/spin-stack/spin-supervisor"
+	// Uses /var/lib instead of /run because /run is mounted noexec.
+	BinaryPath = "/var/lib/spin-stack/bin/spin-supervisor"
 
 	// PidFile is where the supervisor PID is written.
 	PidFile = "/run/spin-supervisor.pid"
@@ -83,7 +84,7 @@ func findBinary(ctx context.Context) string {
 func RunWithMonitoring(ctx context.Context) error {
 	binaryPath := findBinary(ctx)
 	if binaryPath == "" {
-		log.G(ctx).Info("supervisor binary not found at /run/spin-stack/spin-supervisor, skipping")
+		log.G(ctx).Info("supervisor binary not found, skipping")
 		return nil
 	}
 
