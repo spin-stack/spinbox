@@ -10,6 +10,7 @@ import (
 	"github.com/containerd/log"
 
 	"github.com/spin-stack/spinbox/internal/host/vm/qemu"
+	"github.com/spin-stack/spinbox/internal/shim/hotplug"
 )
 
 const (
@@ -24,42 +25,6 @@ type qmpMemoryClient interface {
 	HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error
 	UnplugMemory(ctx context.Context, slotID int) error
 	QueryMemorySizeSummary(ctx context.Context) (*qemu.MemorySizeSummary, error)
-}
-
-// Controller manages dynamic memory allocation for a VM based on memory usage
-type Controller struct {
-	containerID   string
-	qmpClient     qmpMemoryClient
-	stats         StatsProvider
-	offlineMemory MemoryOffliner
-	onlineMemory  MemoryOnliner
-
-	// Resource limits
-	bootMemory int64 // Minimum memory (never go below this)
-	maxMemory  int64 // Maximum memory (ceiling)
-
-	// Current state
-	currentMemory int64        // Current online memory in bytes
-	usedSlots     map[int]bool // Track which memory slots are used
-
-	// Configuration
-	config Config
-
-	// Hysteresis tracking
-	lastScaleUp          time.Time
-	lastScaleDown        time.Time
-	consecutiveHighUsage int // Track sustained high usage
-	consecutiveLowUsage  int // Track sustained low usage
-
-	// Memory usage sampling
-	lastSampleTime  time.Time
-	lastMemoryUsage int64
-
-	// State management
-	mu        sync.Mutex
-	started   bool // Track if Start() has been called
-	stopCh    chan struct{}
-	stoppedCh chan struct{}
 }
 
 // StatsProvider returns cgroup memory usage in bytes
@@ -133,6 +98,34 @@ type noopMemoryController struct{}
 func (n *noopMemoryController) Start(ctx context.Context) {}
 func (n *noopMemoryController) Stop()                     {}
 
+// Controller manages dynamic memory allocation for a VM based on memory usage
+type Controller struct {
+	containerID   string
+	qmpClient     qmpMemoryClient
+	stats         StatsProvider
+	offlineMemory MemoryOffliner
+	onlineMemory  MemoryOnliner
+
+	// Resource limits
+	bootMemory int64 // Minimum memory (never go below this)
+	maxMemory  int64 // Maximum memory (ceiling)
+
+	// Current state (protected by mu)
+	mu            sync.Mutex
+	currentMemory int64        // Current online memory in bytes
+	usedSlots     map[int]bool // Track which memory slots are used
+
+	// Configuration
+	config Config
+
+	// Memory usage sampling
+	lastSampleTime  time.Time
+	lastMemoryUsage int64
+
+	// Shared monitor handles lifecycle and stability tracking
+	monitor *hotplug.Monitor
+}
+
 // NewController creates a new memory hotplug controller.
 // Returns a no-op controller if hotplug is not needed (maxMemory <= bootMemory).
 // In production, qmpClient should be a *qemu.QMPClient.
@@ -155,8 +148,7 @@ func NewController(
 		config.MaxSlots = defaultMemorySlots
 	}
 
-	// Create channels only when controller will actually run
-	return &Controller{
+	c := &Controller{
 		containerID:   containerID,
 		qmpClient:     qmpClient,
 		stats:         stats,
@@ -167,120 +159,72 @@ func NewController(
 		currentMemory: bootMemory,
 		usedSlots:     make(map[int]bool),
 		config:        config,
-		stopCh:        make(chan struct{}),
-		stoppedCh:     make(chan struct{}),
 	}
+
+	// Create shared monitor with memory-specific scaler
+	c.monitor = hotplug.NewMonitor(c, hotplug.MonitorConfig{
+		MonitorInterval:    config.MonitorInterval,
+		ScaleUpCooldown:    config.ScaleUpCooldown,
+		ScaleDownCooldown:  config.ScaleDownCooldown,
+		ScaleUpStability:   config.ScaleUpStability,
+		ScaleDownStability: config.ScaleDownStability,
+		EnableScaleDown:    config.EnableScaleDown,
+	})
+
+	return c
 }
 
 // Start begins monitoring memory usage and managing hotplug
 func (c *Controller) Start(ctx context.Context) {
-	c.mu.Lock()
-	if c.started {
-		c.mu.Unlock()
-		return // Already started
-	}
-	c.started = true
-	c.mu.Unlock()
+	log.G(ctx).WithFields(log.Fields{
+		"container_id":       c.containerID,
+		"boot_memory_mb":     c.bootMemory / (1024 * 1024),
+		"max_memory_mb":      c.maxMemory / (1024 * 1024),
+		"scale_up_threshold": c.config.ScaleUpThreshold,
+		"scale_down_enabled": c.config.EnableScaleDown,
+	}).Info("memory-hotplug: controller starting")
 
-	go func() {
-		defer close(c.stoppedCh)
-
-		log.G(ctx).WithFields(log.Fields{
-			"container_id":       c.containerID,
-			"boot_memory_mb":     c.bootMemory / (1024 * 1024),
-			"max_memory_mb":      c.maxMemory / (1024 * 1024),
-			"monitor_interval":   c.config.MonitorInterval,
-			"scale_up_threshold": c.config.ScaleUpThreshold,
-			"scale_down_enabled": c.config.EnableScaleDown,
-		}).Info("memory-hotplug: controller started")
-
-		c.monitorLoop(ctx)
-
-		log.G(ctx).WithField("container_id", c.containerID).
-			Info("memory-hotplug: controller stopped")
-	}()
+	c.monitor.Start(ctx)
 }
 
 // Stop terminates the monitoring loop
 func (c *Controller) Stop() {
-	select {
-	case <-c.stopCh:
-		// Already stopped
-		return
-	default:
-		close(c.stopCh)
-	}
-
-	// Wait for monitoring loop to finish
-	<-c.stoppedCh
+	c.monitor.Stop()
 }
 
-// monitorLoop periodically checks memory usage and adjusts allocation
-func (c *Controller) monitorLoop(ctx context.Context) {
-	ticker := time.NewTicker(c.config.MonitorInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.stopCh:
-			return
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := c.checkAndAdjust(ctx); err != nil {
-				log.G(ctx).WithError(err).WithField("container_id", c.containerID).
-					Warn("memory-hotplug: failed to check and adjust memory")
-			}
-		}
-	}
+// Name implements hotplug.ResourceScaler
+func (c *Controller) Name() string {
+	return "memory"
 }
 
-// checkAndAdjust checks current memory usage and adjusts if needed
-func (c *Controller) checkAndAdjust(ctx context.Context) error {
+// ContainerID implements hotplug.ResourceScaler
+func (c *Controller) ContainerID() string {
+	return c.containerID
+}
+
+// EvaluateScaling implements hotplug.ResourceScaler
+func (c *Controller) EvaluateScaling(ctx context.Context) (hotplug.ScaleDirection, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Query current memory state from QEMU
 	summary, err := c.qmpClient.QueryMemorySizeSummary(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to query memory summary: %w", err)
+		return hotplug.ScaleNone, fmt.Errorf("query memory summary: %w", err)
 	}
 
 	totalMemory := summary.BaseMemory + summary.PluggedMemory
 	c.currentMemory = totalMemory
 
-	// Calculate target memory
-	targetMemory, err := c.calculateTargetMemory(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to calculate target memory: %w", err)
-	}
-
-	if targetMemory == c.currentMemory {
-		return nil
-	}
-
-	// Scale up
-	if targetMemory > c.currentMemory {
-		return c.scaleUp(ctx, targetMemory)
-	}
-
-	// Scale down
-	if targetMemory < c.currentMemory && c.config.EnableScaleDown {
-		return c.scaleDown(ctx, targetMemory)
-	}
-
-	return nil
-}
-
-// calculateTargetMemory determines the target memory size based on usage
-func (c *Controller) calculateTargetMemory(ctx context.Context) (int64, error) {
+	// Sample memory usage
 	usagePct, ok, err := c.sampleMemory(ctx)
 	if err != nil {
-		return c.currentMemory, err
+		log.G(ctx).WithError(err).WithField("container_id", c.containerID).
+			Warn("memory-hotplug: failed to sample memory usage")
+		return hotplug.ScaleNone, nil
 	}
 	if !ok {
-		// Not enough data yet
-		return c.currentMemory, nil
+		return hotplug.ScaleNone, nil
 	}
 
 	// Calculate free memory
@@ -288,89 +232,39 @@ func (c *Controller) calculateTargetMemory(ctx context.Context) (int64, error) {
 	freeMemory := c.currentMemory - usedMemory
 	safetyMargin := c.config.OOMSafetyMarginMB * 1024 * 1024
 
-	switch {
-	// Scale up: usage > threshold AND free memory < safety margin
-	case usagePct >= c.config.ScaleUpThreshold && freeMemory < safetyMargin:
-		// Check cooldown
-		if time.Since(c.lastScaleUp) < c.config.ScaleUpCooldown {
-			return c.currentMemory, nil
-		}
+	log.G(ctx).WithFields(log.Fields{
+		"container_id":      c.containerID,
+		"usage_pct":         fmt.Sprintf("%.2f", usagePct),
+		"current_memory_mb": c.currentMemory / (1024 * 1024),
+		"free_mb":           freeMemory / (1024 * 1024),
+	}).Debug("memory-hotplug: memory usage sample")
 
-		c.consecutiveHighUsage++
-		c.consecutiveLowUsage = 0
+	// Check scale up: usage > threshold AND free memory < safety margin
+	if usagePct >= c.config.ScaleUpThreshold && freeMemory < safetyMargin && c.currentMemory < c.maxMemory {
+		return hotplug.ScaleUp, nil
+	}
 
-		if c.consecutiveHighUsage >= c.config.ScaleUpStability {
-			newMemory := c.currentMemory + c.config.IncrementSize
-			if newMemory > c.maxMemory {
-				newMemory = c.maxMemory
-			}
-			if newMemory > c.currentMemory {
-				return newMemory, nil
-			}
-		}
-	case usagePct < c.config.ScaleDownThreshold:
-		// Scale down: usage < threshold
-		// Check cooldown
-		if time.Since(c.lastScaleDown) < c.config.ScaleDownCooldown {
-			return c.currentMemory, nil
-		}
-
-		c.consecutiveLowUsage++
-		c.consecutiveHighUsage = 0
-
-		if c.consecutiveLowUsage >= c.config.ScaleDownStability {
+	// Check scale down: usage < threshold
+	if c.config.EnableScaleDown && c.currentMemory > c.bootMemory {
+		if usagePct < c.config.ScaleDownThreshold {
+			// Verify we'd still have safety margin after removal
 			newMemory := c.currentMemory - c.config.IncrementSize
-			if newMemory < c.bootMemory {
-				newMemory = c.bootMemory
-			}
-
-			// Ensure we still have safety margin after removal
-			projectedUsed := usedMemory
-			projectedFree := newMemory - projectedUsed
-			if projectedFree >= safetyMargin && newMemory < c.currentMemory {
-				return newMemory, nil
+			if newMemory >= c.bootMemory {
+				projectedFree := newMemory - usedMemory
+				if projectedFree >= safetyMargin {
+					return hotplug.ScaleDown, nil
+				}
 			}
 		}
-	default:
-		// Reset counters
-		c.consecutiveHighUsage = 0
-		c.consecutiveLowUsage = 0
 	}
 
-	return c.currentMemory, nil
+	return hotplug.ScaleNone, nil
 }
 
-// sampleMemory samples current memory usage and returns percentage
-// Returns (usagePercentage, dataValid, error)
-func (c *Controller) sampleMemory(ctx context.Context) (float64, bool, error) {
-	usageBytes, err := c.stats(ctx)
-	if err != nil {
-		return 0, false, fmt.Errorf("failed to get memory stats: %w", err)
-	}
-
-	now := time.Now()
-	if c.lastSampleTime.IsZero() {
-		// First sample
-		c.lastSampleTime = now
-		c.lastMemoryUsage = usageBytes
-		return 0, false, nil
-	}
-
-	// Calculate usage percentage
-	usagePct := float64(usageBytes) / float64(c.currentMemory) * 100.0
-
-	c.lastSampleTime = now
-	c.lastMemoryUsage = usageBytes
-
-	return usagePct, true, nil
-}
-
-// scaleUp adds memory to the VM
-func (c *Controller) scaleUp(ctx context.Context, targetMemory int64) error {
-	amountToAdd := targetMemory - c.currentMemory
-	if amountToAdd <= 0 {
-		return nil
-	}
+// ScaleUp implements hotplug.ResourceScaler
+func (c *Controller) ScaleUp(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Find available slot
 	slotID := c.findFreeSlot()
@@ -379,6 +273,12 @@ func (c *Controller) scaleUp(ctx context.Context, targetMemory int64) error {
 			Warn("memory-hotplug: no free memory slots available")
 		return fmt.Errorf("no free memory slots available")
 	}
+
+	targetMemory := c.currentMemory + c.config.IncrementSize
+	if targetMemory > c.maxMemory {
+		targetMemory = c.maxMemory
+	}
+	amountToAdd := targetMemory - c.currentMemory
 
 	usagePct := float64(c.lastMemoryUsage) / float64(c.currentMemory) * 100.0
 	freeMemory := c.currentMemory - c.lastMemoryUsage
@@ -415,25 +315,26 @@ func (c *Controller) scaleUp(ctx context.Context, targetMemory int64) error {
 		return fmt.Errorf("memory allocated but failed to online in guest: %w", err)
 	}
 
-	c.lastScaleUp = time.Now()
-	c.consecutiveHighUsage = 0
 	c.currentMemory = targetMemory
-
 	return nil
 }
 
-// scaleDown removes memory from the VM
-func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
-	amountToRemove := c.currentMemory - targetMemory
-	if amountToRemove <= 0 {
-		return nil
-	}
+// ScaleDown implements hotplug.ResourceScaler
+func (c *Controller) ScaleDown(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Find used slot to remove (last added, LIFO)
 	slotID := c.findUsedSlot()
 	if slotID < 0 {
 		return fmt.Errorf("no used memory slots to remove")
 	}
+
+	targetMemory := c.currentMemory - c.config.IncrementSize
+	if targetMemory < c.bootMemory {
+		targetMemory = c.bootMemory
+	}
+	amountToRemove := c.currentMemory - targetMemory
 
 	usagePct := float64(c.lastMemoryUsage) / float64(c.currentMemory) * 100.0
 	projectedFree := targetMemory - c.lastMemoryUsage
@@ -467,12 +368,38 @@ func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
 
 	// Mark slot as free
 	delete(c.usedSlots, slotID)
-
-	c.lastScaleDown = time.Now()
-	c.consecutiveLowUsage = 0
 	c.currentMemory = targetMemory
 
 	return nil
+}
+
+// sampleMemory samples current memory usage and returns percentage
+// Returns (usagePercentage, dataValid, error)
+func (c *Controller) sampleMemory(ctx context.Context) (float64, bool, error) {
+	if c.stats == nil {
+		return 0, false, nil
+	}
+
+	usageBytes, err := c.stats(ctx)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to get memory stats: %w", err)
+	}
+
+	now := time.Now()
+	if c.lastSampleTime.IsZero() {
+		// First sample
+		c.lastSampleTime = now
+		c.lastMemoryUsage = usageBytes
+		return 0, false, nil
+	}
+
+	// Calculate usage percentage
+	usagePct := float64(usageBytes) / float64(c.currentMemory) * 100.0
+
+	c.lastSampleTime = now
+	c.lastMemoryUsage = usageBytes
+
+	return usagePct, true, nil
 }
 
 // findFreeSlot finds the first available memory slot

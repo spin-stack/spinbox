@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/shim/hotplug"
 )
 
 // mockCPUHotplugger implements vm.CPUHotplugger for testing
@@ -139,9 +140,6 @@ func TestController_StartStop(t *testing.T) {
 
 	// Stop the controller
 	ctrl.Stop()
-
-	// Note: calling Stop() twice would panic (stopCh is closed twice)
-	// The controller should be stopped only once
 }
 
 func TestController_StartIdempotent(t *testing.T) {
@@ -163,58 +161,6 @@ func TestController_StartIdempotent(t *testing.T) {
 	ctrl.Stop()
 }
 
-func TestController_CanScaleUp(t *testing.T) {
-	mock := &mockCPUHotplugger{}
-	cfg := DefaultConfig()
-	cfg.ScaleUpCooldown = 100 * time.Millisecond
-
-	ctrl := &Controller{
-		cpuHotplugger: mock,
-		config:        cfg,
-	}
-
-	// First check should allow scale up (no previous scale up)
-	assert.True(t, ctrl.canScaleUp())
-
-	// Set last scale up to now
-	ctrl.lastScaleUp = time.Now()
-
-	// Should not allow scale up during cooldown
-	assert.False(t, ctrl.canScaleUp())
-
-	// Wait for cooldown to expire
-	time.Sleep(150 * time.Millisecond)
-
-	// Should allow scale up again
-	assert.True(t, ctrl.canScaleUp())
-}
-
-func TestController_CanScaleDown(t *testing.T) {
-	mock := &mockCPUHotplugger{}
-	cfg := DefaultConfig()
-	cfg.ScaleDownCooldown = 100 * time.Millisecond
-
-	ctrl := &Controller{
-		cpuHotplugger: mock,
-		config:        cfg,
-	}
-
-	// First check should allow scale down
-	assert.True(t, ctrl.canScaleDown())
-
-	// Set last scale down to now
-	ctrl.lastScaleDown = time.Now()
-
-	// Should not allow scale down during cooldown
-	assert.False(t, ctrl.canScaleDown())
-
-	// Wait for cooldown to expire
-	time.Sleep(150 * time.Millisecond)
-
-	// Should allow scale down again
-	assert.True(t, ctrl.canScaleDown())
-}
-
 func TestController_ScaleUp(t *testing.T) {
 	t.Run("adds vCPU successfully", func(t *testing.T) {
 		mock := &mockCPUHotplugger{
@@ -231,13 +177,12 @@ func TestController_ScaleUp(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		err := ctrl.scaleUp(ctx, 2)
+		err := ctrl.ScaleUp(ctx)
 
 		require.NoError(t, err)
 		assert.Equal(t, 2, ctrl.currentCPUs)
 		assert.Equal(t, int32(1), mock.hotplugCalls.Load())
 		assert.Equal(t, int32(1), mock.lastHotplugID.Load()) // Should add CPU 1 (0 already exists)
-		assert.False(t, ctrl.lastScaleUp.IsZero())
 	})
 
 	t.Run("handles hotplug error", func(t *testing.T) {
@@ -256,7 +201,7 @@ func TestController_ScaleUp(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		err := ctrl.scaleUp(ctx, 2)
+		err := ctrl.ScaleUp(ctx)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "hotplug CPU")
@@ -285,7 +230,7 @@ func TestController_ScaleUp(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		err := ctrl.scaleUp(ctx, 2)
+		err := ctrl.ScaleUp(ctx)
 
 		require.NoError(t, err)
 		assert.Equal(t, 1, onlineCalls)
@@ -308,13 +253,12 @@ func TestController_ScaleDown(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		err := ctrl.scaleDown(ctx, 1)
+		err := ctrl.ScaleDown(ctx)
 
 		require.NoError(t, err)
 		assert.Equal(t, 1, ctrl.currentCPUs)
 		assert.Equal(t, int32(1), mock.unplugCalls.Load())
 		assert.Equal(t, int32(1), mock.lastUnplugID.Load()) // Should remove CPU 1 (never remove CPU 0)
-		assert.False(t, ctrl.lastScaleDown.IsZero())
 	})
 
 	t.Run("does not remove CPU 0", func(t *testing.T) {
@@ -332,15 +276,16 @@ func TestController_ScaleDown(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		err := ctrl.scaleDown(ctx, 0)
+		err := ctrl.ScaleDown(ctx)
 
-		require.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no removable CPU")
 		assert.Equal(t, int32(0), mock.unplugCalls.Load()) // Should not attempt to unplug CPU 0
 	})
 
-	t.Run("continues on unplug error", func(t *testing.T) {
+	t.Run("continues on unplug error (best effort)", func(t *testing.T) {
 		mock := &mockCPUHotplugger{
-			cpus:      []vm.CPUInfo{{CPUIndex: 0}, {CPUIndex: 1}, {CPUIndex: 2}},
+			cpus:      []vm.CPUInfo{{CPUIndex: 0}, {CPUIndex: 1}},
 			unplugErr: errors.New("unplug failed"),
 		}
 		cfg := DefaultConfig()
@@ -349,15 +294,15 @@ func TestController_ScaleDown(t *testing.T) {
 			containerID:   "test",
 			cpuHotplugger: mock,
 			config:        cfg,
-			currentCPUs:   3,
+			currentCPUs:   2,
 			bootCPUs:      1,
 		}
 
 		ctx := context.Background()
-		err := ctrl.scaleDown(ctx, 1)
+		err := ctrl.ScaleDown(ctx)
 
 		require.NoError(t, err) // Should not fail (best-effort)
-		assert.Equal(t, int32(2), mock.unplugCalls.Load())
+		assert.Equal(t, int32(1), mock.unplugCalls.Load())
 	})
 
 	t.Run("calls offliner callback", func(t *testing.T) {
@@ -382,30 +327,39 @@ func TestController_ScaleDown(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		err := ctrl.scaleDown(ctx, 1)
+		err := ctrl.ScaleDown(ctx)
 
 		require.NoError(t, err)
 		assert.Equal(t, 1, offlineCalls)
 	})
 }
 
-func TestController_CalculateTargetCPUs(t *testing.T) {
-	t.Run("maintains current when no stats provider", func(t *testing.T) {
+func TestController_EvaluateScaling(t *testing.T) {
+	t.Run("returns ScaleNone when no stats provider", func(t *testing.T) {
+		mock := &mockCPUHotplugger{
+			cpus: []vm.CPUInfo{{CPUIndex: 0}},
+		}
+
 		ctrl := &Controller{
-			containerID: "test",
-			currentCPUs: 2,
-			maxCPUs:     4,
-			bootCPUs:    1,
-			config:      DefaultConfig(),
+			containerID:   "test",
+			cpuHotplugger: mock,
+			currentCPUs:   1,
+			maxCPUs:       4,
+			bootCPUs:      1,
+			config:        DefaultConfig(),
 		}
 
 		ctx := context.Background()
-		target := ctrl.calculateTargetCPUs(ctx)
+		direction, err := ctrl.EvaluateScaling(ctx)
 
-		assert.Equal(t, 2, target) // Should maintain current
+		require.NoError(t, err)
+		assert.Equal(t, hotplug.ScaleNone, direction)
 	})
 
-	t.Run("scales up on high usage", func(t *testing.T) {
+	t.Run("returns ScaleUp on high usage", func(t *testing.T) {
+		mock := &mockCPUHotplugger{
+			cpus: []vm.CPUInfo{{CPUIndex: 0}},
+		}
 		cfg := DefaultConfig()
 		cfg.ScaleUpThreshold = 80.0
 
@@ -422,30 +376,35 @@ func TestController_CalculateTargetCPUs(t *testing.T) {
 		}
 
 		ctrl := &Controller{
-			containerID: "test",
-			currentCPUs: 1,
-			maxCPUs:     4,
-			bootCPUs:    1,
-			config:      cfg,
-			stats:       statsProvider,
+			containerID:   "test",
+			cpuHotplugger: mock,
+			currentCPUs:   1,
+			maxCPUs:       4,
+			bootCPUs:      1,
+			config:        cfg,
+			stats:         statsProvider,
 		}
 
 		ctx := context.Background()
 
 		// First call initializes baseline
-		_ = ctrl.calculateTargetCPUs(ctx)
+		_, _ = ctrl.EvaluateScaling(ctx)
 
 		// Simulate time passing
 		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
 		ctrl.lastUsageUsec = 0
 
-		// Second call should trigger scale up
-		target := ctrl.calculateTargetCPUs(ctx)
+		// Second call should return ScaleUp
+		direction, err := ctrl.EvaluateScaling(ctx)
 
-		assert.Equal(t, 2, target) // Should want to scale up
+		require.NoError(t, err)
+		assert.Equal(t, hotplug.ScaleUp, direction)
 	})
 
-	t.Run("scales down on low usage", func(t *testing.T) {
+	t.Run("returns ScaleDown on low usage", func(t *testing.T) {
+		mock := &mockCPUHotplugger{
+			cpus: []vm.CPUInfo{{CPUIndex: 0}, {CPUIndex: 1}},
+		}
 		cfg := DefaultConfig()
 		cfg.ScaleDownThreshold = 50.0
 		cfg.EnableScaleDown = true
@@ -462,30 +421,35 @@ func TestController_CalculateTargetCPUs(t *testing.T) {
 		}
 
 		ctrl := &Controller{
-			containerID: "test",
-			currentCPUs: 2,
-			maxCPUs:     4,
-			bootCPUs:    1,
-			config:      cfg,
-			stats:       statsProvider,
+			containerID:   "test",
+			cpuHotplugger: mock,
+			currentCPUs:   2,
+			maxCPUs:       4,
+			bootCPUs:      1,
+			config:        cfg,
+			stats:         statsProvider,
 		}
 
 		ctx := context.Background()
 
 		// First call initializes baseline
-		_ = ctrl.calculateTargetCPUs(ctx)
+		_, _ = ctrl.EvaluateScaling(ctx)
 
 		// Simulate time passing
 		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
 		ctrl.lastUsageUsec = 0
 
-		// Second call should suggest scale down
-		target := ctrl.calculateTargetCPUs(ctx)
+		// Second call should return ScaleDown
+		direction, err := ctrl.EvaluateScaling(ctx)
 
-		assert.Equal(t, 1, target) // Should want to scale down
+		require.NoError(t, err)
+		assert.Equal(t, hotplug.ScaleDown, direction)
 	})
 
-	t.Run("no scale up when throttled", func(t *testing.T) {
+	t.Run("returns ScaleNone when throttled", func(t *testing.T) {
+		mock := &mockCPUHotplugger{
+			cpus: []vm.CPUInfo{{CPUIndex: 0}},
+		}
 		cfg := DefaultConfig()
 		cfg.ScaleUpThreshold = 80.0
 		cfg.ScaleUpThrottleLimit = 5.0
@@ -502,18 +466,19 @@ func TestController_CalculateTargetCPUs(t *testing.T) {
 		}
 
 		ctrl := &Controller{
-			containerID: "test",
-			currentCPUs: 1,
-			maxCPUs:     4,
-			bootCPUs:    1,
-			config:      cfg,
-			stats:       statsProvider,
+			containerID:   "test",
+			cpuHotplugger: mock,
+			currentCPUs:   1,
+			maxCPUs:       4,
+			bootCPUs:      1,
+			config:        cfg,
+			stats:         statsProvider,
 		}
 
 		ctx := context.Background()
 
 		// First call initializes baseline
-		_ = ctrl.calculateTargetCPUs(ctx)
+		_, _ = ctrl.EvaluateScaling(ctx)
 
 		// Simulate time passing
 		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
@@ -521,9 +486,32 @@ func TestController_CalculateTargetCPUs(t *testing.T) {
 		ctrl.lastThrottledUsec = 0
 
 		// Second call should NOT scale up due to throttling
-		target := ctrl.calculateTargetCPUs(ctx)
+		direction, err := ctrl.EvaluateScaling(ctx)
 
-		assert.Equal(t, 1, target) // Should maintain current due to throttling
+		require.NoError(t, err)
+		assert.Equal(t, hotplug.ScaleNone, direction)
+	})
+
+	t.Run("syncs CPU count on mismatch", func(t *testing.T) {
+		mock := &mockCPUHotplugger{
+			cpus: []vm.CPUInfo{{CPUIndex: 0}, {CPUIndex: 1}},
+		}
+		cfg := DefaultConfig()
+
+		ctrl := &Controller{
+			containerID:   "test",
+			cpuHotplugger: mock,
+			config:        cfg,
+			currentCPUs:   1, // Mismatch - we think 1, but QEMU has 2
+			maxCPUs:       4,
+			bootCPUs:      1,
+		}
+
+		ctx := context.Background()
+		_, err := ctrl.EvaluateScaling(ctx)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, ctrl.currentCPUs) // Should sync with actual
 	})
 }
 
@@ -601,127 +589,19 @@ func TestController_SampleCPU(t *testing.T) {
 	})
 }
 
-func TestController_CheckAndAdjust(t *testing.T) {
-	t.Run("syncs CPU count on mismatch", func(t *testing.T) {
-		mock := &mockCPUHotplugger{
-			cpus: []vm.CPUInfo{{CPUIndex: 0}, {CPUIndex: 1}},
-		}
-		cfg := DefaultConfig()
+func TestController_ResourceScalerInterface(t *testing.T) {
+	mock := &mockCPUHotplugger{
+		cpus: []vm.CPUInfo{{CPUIndex: 0}},
+	}
+	cfg := DefaultConfig()
 
-		ctrl := &Controller{
-			containerID:   "test",
-			cpuHotplugger: mock,
-			config:        cfg,
-			currentCPUs:   1, // Mismatch - we think 1, but QEMU has 2
-			maxCPUs:       4,
-			bootCPUs:      1,
-		}
+	ctrl := NewController("test-container", mock, nil, nil, nil, 1, 4, cfg).(*Controller)
 
-		ctx := context.Background()
-		err := ctrl.checkAndAdjust(ctx)
+	// Verify it implements ResourceScaler
+	var _ hotplug.ResourceScaler = ctrl
 
-		require.NoError(t, err)
-		assert.Equal(t, 2, ctrl.currentCPUs) // Should sync with actual
-	})
-
-	t.Run("respects scale up stability", func(t *testing.T) {
-		mock := &mockCPUHotplugger{
-			cpus: []vm.CPUInfo{{CPUIndex: 0}},
-		}
-		cfg := DefaultConfig()
-		cfg.ScaleUpStability = 3
-		cfg.ScaleUpThreshold = 80.0
-
-		// Create a stats provider that returns incrementing usage values
-		// to simulate high CPU usage over time
-		baseUsage := uint64(0)
-		statsProvider := func(ctx context.Context) (uint64, uint64, error) {
-			baseUsage += 90000 // Add 90ms of CPU time each call (90% over 100ms at 1 CPU)
-			return baseUsage, 0, nil
-		}
-
-		ctrl := &Controller{
-			containerID:   "test",
-			cpuHotplugger: mock,
-			stats:         statsProvider,
-			config:        cfg,
-			currentCPUs:   1,
-			maxCPUs:       4,
-			bootCPUs:      1,
-		}
-
-		ctx := context.Background()
-
-		// First call: Initialize baseline (no action)
-		err := ctrl.checkAndAdjust(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, 0, ctrl.consecutiveHighUsage)
-
-		// Simulate time passing
-		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
-
-		// Second call: First high usage reading
-		err = ctrl.checkAndAdjust(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, 1, ctrl.consecutiveHighUsage)
-		assert.Equal(t, int32(0), mock.hotplugCalls.Load()) // Should not scale yet
-
-		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
-
-		// Third call: Second high usage reading
-		err = ctrl.checkAndAdjust(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, 2, ctrl.consecutiveHighUsage)
-		assert.Equal(t, int32(0), mock.hotplugCalls.Load()) // Still not enough
-
-		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
-
-		// Fourth call: Third high usage reading - now should scale
-		err = ctrl.checkAndAdjust(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int32(1), mock.hotplugCalls.Load()) // Should have scaled up now
-	})
-
-	t.Run("respects scale down cooldown", func(t *testing.T) {
-		mock := &mockCPUHotplugger{
-			cpus: []vm.CPUInfo{{CPUIndex: 0}, {CPUIndex: 1}},
-		}
-		cfg := DefaultConfig()
-		cfg.ScaleDownCooldown = 1 * time.Hour // Long cooldown
-
-		// Low usage stats
-		var callCount int32
-		statsProvider := func(ctx context.Context) (uint64, uint64, error) {
-			count := atomic.AddInt32(&callCount, 1)
-			if count == 1 {
-				return 0, 0, nil
-			}
-			return 10000, 0, nil // Very low usage
-		}
-
-		ctrl := &Controller{
-			containerID:   "test",
-			cpuHotplugger: mock,
-			stats:         statsProvider,
-			config:        cfg,
-			currentCPUs:   2,
-			maxCPUs:       4,
-			bootCPUs:      1,
-			lastScaleDown: time.Now(), // Just scaled down
-		}
-
-		ctx := context.Background()
-
-		// Initialize and check
-		_ = ctrl.checkAndAdjust(ctx)
-		ctrl.lastSampleTime = time.Now().Add(-100 * time.Millisecond)
-		ctrl.lastUsageUsec = 0
-
-		err := ctrl.checkAndAdjust(ctx)
-
-		require.NoError(t, err)
-		assert.Equal(t, int32(0), mock.unplugCalls.Load()) // Should not scale down due to cooldown
-	})
+	assert.Equal(t, "cpu", ctrl.Name())
+	assert.Equal(t, "test-container", ctrl.ContainerID())
 }
 
 // Benchmarks
@@ -748,7 +628,7 @@ func BenchmarkController_SampleCPU(b *testing.B) {
 	}
 }
 
-func BenchmarkController_CheckAndAdjust(b *testing.B) {
+func BenchmarkController_EvaluateScaling(b *testing.B) {
 	mock := &mockCPUHotplugger{
 		cpus: []vm.CPUInfo{{CPUIndex: 0}},
 	}
@@ -766,6 +646,6 @@ func BenchmarkController_CheckAndAdjust(b *testing.B) {
 
 	b.ResetTimer()
 	for range b.N {
-		_ = ctrl.checkAndAdjust(ctx)
+		_, _ = ctrl.EvaluateScaling(ctx)
 	}
 }
