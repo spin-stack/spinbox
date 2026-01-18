@@ -155,6 +155,30 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	return instance.Shutdown(ctx)
 }
 
+// SetVMExitCallback registers a callback to be invoked when the VM process exits.
+// This provides a reliable signal for detecting VM death even when vsock connections
+// don't receive EOF cleanly. Must be called after CreateVM() and before Start().
+func (m *Manager) SetVMExitCallback(cb func()) error {
+	m.mu.RLock()
+	instance := m.instance
+	m.mu.RUnlock()
+
+	if instance == nil {
+		return fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
+	}
+
+	// Type-assert to QEMU instance which has the SetProcessExitCallback method.
+	// This is a QEMU-specific feature, but the interface allows other VMMs to
+	// implement similar functionality if needed.
+	type processExitCallbackSetter interface {
+		SetProcessExitCallback(func())
+	}
+	if setter, ok := instance.(processExitCallbackSetter); ok {
+		setter.SetProcessExitCallback(cb)
+	}
+	return nil
+}
+
 // CheckKVM verifies that KVM is available on the system.
 func CheckKVM() error {
 	fd, err := unix.Open("/dev/kvm", syscall.O_RDWR|syscall.O_CLOEXEC, 0)

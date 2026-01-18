@@ -166,6 +166,8 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 	s := &service{
 		stateMachine:             lifecycle.NewStateMachine(),
 		events:                   make(chan any, eventChannelBuffer),
+		eventsDone:               make(chan struct{}),
+		vmExitCh:                 make(chan struct{}),
 		cpuHotplugControllers:    make(map[string]cpuhotplug.CPUHotplugController),
 		memoryHotplugControllers: make(map[string]memhotplug.MemoryHotplugController),
 		networkManager:           nm,
@@ -232,6 +234,72 @@ type taskIO struct {
 	exec map[string]processIOState
 }
 
+// containerSnapshot holds immutable copies of container state for use outside locks.
+// This enables the "collect-then-execute" pattern: acquire lock, copy data, release lock,
+// then operate on the snapshot without risk of data races.
+type containerSnapshot struct {
+	id     string
+	pid    uint32
+	initIO *ioSnapshot
+	execIO map[string]*ioSnapshot
+}
+
+// ioSnapshot holds immutable copies of I/O paths for a process.
+type ioSnapshot struct {
+	stdin, stdout, stderr string
+	terminal              bool
+}
+
+// snapshotContainer creates a snapshot of the current container state.
+// Must be called with containerMu held.
+func (s *service) snapshotContainerLocked() *containerSnapshot {
+	if s.container == nil {
+		return nil
+	}
+
+	snap := &containerSnapshot{
+		id:  s.containerID,
+		pid: s.container.pid,
+	}
+
+	if s.container.io != nil {
+		snap.initIO = &ioSnapshot{
+			stdin:    s.container.io.init.host.stdin,
+			stdout:   s.container.io.init.host.stdout,
+			stderr:   s.container.io.init.host.stderr,
+			terminal: s.container.io.init.terminal,
+		}
+		if len(s.container.io.exec) > 0 {
+			snap.execIO = make(map[string]*ioSnapshot, len(s.container.io.exec))
+			for execID, pio := range s.container.io.exec {
+				snap.execIO[execID] = &ioSnapshot{
+					stdin:  pio.host.stdin,
+					stdout: pio.host.stdout,
+					stderr: pio.host.stderr,
+				}
+			}
+		}
+	}
+
+	return snap
+}
+
+// getContainerSnapshot returns a snapshot of the container state.
+// Returns nil if no container exists.
+func (s *service) getContainerSnapshot() *containerSnapshot {
+	s.containerMu.Lock()
+	defer s.containerMu.Unlock()
+	return s.snapshotContainerLocked()
+}
+
+// getContainerID returns the current container ID.
+// This is a convenience method for cases where only the ID is needed.
+func (s *service) getContainerID() string {
+	s.containerMu.Lock()
+	defer s.containerMu.Unlock()
+	return s.containerID
+}
+
 // service is the shim implementation of a remote shim over TTRPC.
 type service struct {
 	// === State Machine ===
@@ -269,14 +337,24 @@ type service struct {
 	events chan any
 
 	// === Shutdown Coordination ===
-	initiateShutdown func()      // Callback to trigger shutdown service
-	eventsClosed     atomic.Bool // True when events channel is closed
-	eventsCloseOnce  sync.Once   // Ensures events channel closed exactly once
+	initiateShutdown func()        // Callback to trigger shutdown service
+	eventsClosed     atomic.Bool   // True when events channel is closed
+	eventsDone       chan struct{} // Closed before events channel to signal send() to stop
+	eventsCloseOnce  sync.Once     // Ensures events channel closed exactly once
 	shutdownSvc      shutdown.Service
 	inflight         atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
 	exitFunc         func(code int) // Exit function (default: os.Exit), injectable for testing
 
-	initStarted atomic.Bool // True once the init process has been started
+	// === VM Exit Watchdog ===
+	// vmExitCh is closed when the QEMU process exits.
+	// This provides a reliable signal for event stream goroutine to exit
+	// even when vsock doesn't return EOF on VM death.
+	vmExitCh   chan struct{}
+	vmExitOnce sync.Once
+
+	// Note: initStarted atomic has been replaced by the state machine.
+	// Use s.stateMachine.IsCreatedNotStarted() to check if Start() hasn't been called yet.
+
 	connManager *ConnectionManager
 
 	// === Containerd Communication ===
@@ -306,8 +384,7 @@ func (s *service) shutdown(ctx context.Context) error {
 	orchestrator := lifecycle.NewCleanupOrchestrator(phases)
 	result := orchestrator.Execute(ctx)
 
-	// Reset init tracking
-	s.initStarted.Store(false)
+	// Note: No need to reset initStarted - state machine already transitioned to ShuttingDown
 
 	// Close network manager (separate from ReleaseNetworkResources)
 	if s.networkManager != nil {
@@ -398,10 +475,13 @@ func (s *service) extractMountCleanup() func(context.Context) error {
 
 // closeEvents safely closes the events channel.
 // This signals the event forwarder goroutine to exit.
+// The eventsDone channel is closed first to signal send() to stop before
+// the events channel is closed, preventing the send-on-closed-channel race.
 func (s *service) closeEvents() error {
-	s.eventsClosed.Store(true)
 	s.eventsCloseOnce.Do(func() {
-		close(s.events)
+		s.eventsClosed.Store(true)
+		close(s.eventsDone) // Signal send() first
+		close(s.events)     // Then close the channel
 	})
 	return nil
 }
@@ -459,61 +539,96 @@ func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), err
 	return vmc, func() {}, nil
 }
 
+// eventRecvResult holds the result of an event stream Recv() call.
+type eventRecvResult struct {
+	event *types.Envelope
+	err   error
+}
+
 func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) error {
 	currentClient := vmc
 	sc, err := vmevents.NewTTRPCEventsClient(currentClient).Stream(ctx, &ptypes.Empty{})
 	if err != nil {
 		return err
 	}
+
+	// Create a channel for receiving events from the blocking Recv() call.
+	// This allows us to use select with vmExitCh for reliable shutdown detection.
+	recvCh := make(chan eventRecvResult, 1)
+
+	// Start a goroutine to read from the stream and send results to recvCh.
+	startRecvGoroutine := func(stream vmevents.TTRPCEvents_StreamClient) {
+		go func() {
+			ev, err := stream.Recv()
+			recvCh <- eventRecvResult{event: ev, err: err}
+		}()
+	}
+
 	go func() {
+		// Start the first receive
+		startRecvGoroutine(sc)
+
 		for {
-			ev, err := sc.Recv()
-			if err != nil {
-				// Check intentional shutdown first to avoid spurious warnings during normal shutdown
-				if s.stateMachine.IsIntentionalShutdown() {
-					log.G(ctx).Debug("vm event stream closed (intentional shutdown)")
+			select {
+			case <-s.vmExitCh:
+				// VM process exited - this is the reliable signal for VM death.
+				// Even if vsock doesn't return EOF, we know the VM is gone.
+				log.G(ctx).Info("vm process exit detected, initiating shim shutdown")
+				s.requestShutdownAndExit(ctx, "vm process exit")
+				return
+
+			case result := <-recvCh:
+				if result.err != nil {
+					// Check intentional shutdown first to avoid spurious warnings during normal shutdown
+					if s.stateMachine.IsIntentionalShutdown() {
+						log.G(ctx).Debug("vm event stream closed (intentional shutdown)")
+						return
+					}
+
+					log.G(ctx).WithError(result.err).WithFields(log.Fields{
+						"error_type":      fmt.Sprintf("%T", result.err),
+						"is_eof":          errors.Is(result.err, io.EOF),
+						"is_shutdown":     errors.Is(result.err, shutdown.ErrShutdown),
+						"is_ttrpc_closed": errors.Is(result.err, ttrpc.ErrClosed),
+					}).Warn("event stream recv error")
+
+					if errors.Is(result.err, io.EOF) || errors.Is(result.err, shutdown.ErrShutdown) || errors.Is(result.err, ttrpc.ErrClosed) {
+						log.G(ctx).WithError(result.err).Info("vm event stream closed unexpectedly, attempting reconnect")
+
+						// Try to reconnect
+						newClient, newStream, reconnected := s.reconnectEventStream(ctx, currentClient)
+						if reconnected {
+							currentClient = newClient
+							sc = newStream
+							log.G(ctx).Info("vm event stream reconnected")
+							startRecvGoroutine(sc) // Start receiving on the new stream
+							continue               // Continue the select loop
+						}
+
+						log.G(ctx).WithError(result.err).Info("vm event stream closed unexpectedly, initiating shim shutdown")
+					} else {
+						log.G(ctx).WithError(result.err).Error("vm event stream error, initiating shim shutdown")
+					}
+					if eventStreamShutdownDelay > 0 {
+						log.G(ctx).WithField("delay", eventStreamShutdownDelay).Info("delaying shim shutdown after event stream close")
+						time.Sleep(eventStreamShutdownDelay)
+					}
+					s.requestShutdownAndExit(ctx, "vm event stream closed")
 					return
 				}
 
-				log.G(ctx).WithError(err).WithFields(log.Fields{
-					"error_type":      fmt.Sprintf("%T", err),
-					"is_eof":          errors.Is(err, io.EOF),
-					"is_shutdown":     errors.Is(err, shutdown.ErrShutdown),
-					"is_ttrpc_closed": errors.Is(err, ttrpc.ErrClosed),
-				}).Warn("event stream recv error")
-
-				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
-					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, attempting reconnect")
-
-					// Try to reconnect
-					newClient, newStream, reconnected := s.reconnectEventStream(ctx, currentClient)
-					if reconnected {
-						currentClient = newClient
-						sc = newStream
-						log.G(ctx).Info("vm event stream reconnected")
-						continue // Restart the receive loop with new stream
-					}
-
-					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, initiating shim shutdown")
-				} else {
-					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
+				// For TaskExit events, wait for I/O forwarder to complete before forwarding.
+				// This ensures all stdout/stderr data is written to FIFOs before containerd
+				// receives the exit event, preventing a race where the exit arrives before output.
+				if result.event.Topic == runtime.TaskExitEventTopic {
+					s.waitForIOBeforeExit(ctx, result.event)
 				}
-				if eventStreamShutdownDelay > 0 {
-					log.G(ctx).WithField("delay", eventStreamShutdownDelay).Info("delaying shim shutdown after event stream close")
-					time.Sleep(eventStreamShutdownDelay)
-				}
-				s.requestShutdownAndExit(ctx, "vm event stream closed")
-				return
-			}
 
-			// For TaskExit events, wait for I/O forwarder to complete before forwarding.
-			// This ensures all stdout/stderr data is written to FIFOs before containerd
-			// receives the exit event, preventing a race where the exit arrives before output.
-			if ev.Topic == runtime.TaskExitEventTopic {
-				s.waitForIOBeforeExit(ctx, ev)
-			}
+				s.send(result.event)
 
-			s.send(ev)
+				// Start the next receive
+				startRecvGoroutine(sc)
+			}
 		}
 	}()
 
@@ -626,8 +741,13 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		"total_duration": time.Since(startTime),
 	}).Info("task start completed")
 	if r.ExecID == "" {
-		log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("start: init marked started")
-		s.initStarted.Store(true)
+		// Transition from Created to Running state.
+		// This replaces the previous initStarted atomic.
+		if err := s.stateMachine.MarkStarted(); err != nil {
+			log.G(ctx).WithError(err).Warn("start: failed to transition to running state")
+		} else {
+			log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("start: state transitioned to running")
+		}
 	}
 	return resp, nil
 }
@@ -915,22 +1035,24 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 
 // State returns runtime state information for a process.
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
+	// Use snapshot pattern to safely access container state outside lock.
+	// This prevents data races when container fields are modified concurrently.
+	snap := s.getContainerSnapshot()
 
-	if r.ExecID == "" && !s.initStarted.Load() {
-		s.containerMu.Lock()
-		c := s.container
-		s.containerMu.Unlock()
-		if c != nil {
+	// If this is an init process state request and we're in Created state (not yet Started),
+	// return CREATED status without calling the guest. This replaces the initStarted check.
+	if r.ExecID == "" && s.stateMachine.IsCreatedNotStarted() {
+		if snap != nil {
 			log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("state: short-circuit created state (init not started)")
 			st := &taskAPI.StateResponse{
 				Status: tasktypes.Status_CREATED,
-				Pid:    c.pid,
+				Pid:    snap.pid,
 			}
-			if c.io != nil {
-				st.Stdin = c.io.init.host.stdin
-				st.Stdout = c.io.init.host.stdout
-				st.Stderr = c.io.init.host.stderr
-				st.Terminal = c.io.init.terminal
+			if snap.initIO != nil {
+				st.Stdin = snap.initIO.stdin
+				st.Stdout = snap.initIO.stdout
+				st.Stderr = snap.initIO.stderr
+				st.Terminal = snap.initIO.terminal
 			}
 			return st, nil
 		}
@@ -950,25 +1072,24 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	}
 	// Replace guest's I/O paths (rpcio:// URIs) with host FIFO paths for attach support.
 	// The guest uses rpcio:// URIs internally, but containerd's attach expects host FIFOs.
-	s.containerMu.Lock()
-	c := s.container
-	s.containerMu.Unlock()
+	// Re-fetch snapshot in case container state changed during RPC.
+	snap = s.getContainerSnapshot()
 
-	if c != nil {
-		if c.io != nil {
-			if r.ExecID == "" {
-				// Container I/O paths
-				st.Stdin = c.io.init.host.stdin
-				st.Stdout = c.io.init.host.stdout
-				st.Stderr = c.io.init.host.stderr
-				st.Terminal = c.io.init.terminal
-			} else {
-				// Exec process I/O paths
-				if pio, ok := c.io.exec[r.ExecID]; ok {
-					st.Stdin = pio.host.stdin
-					st.Stdout = pio.host.stdout
-					st.Stderr = pio.host.stderr
-				}
+	if snap != nil {
+		if r.ExecID == "" {
+			// Container I/O paths
+			if snap.initIO != nil {
+				st.Stdin = snap.initIO.stdin
+				st.Stdout = snap.initIO.stdout
+				st.Stderr = snap.initIO.stderr
+				st.Terminal = snap.initIO.terminal
+			}
+		} else {
+			// Exec process I/O paths
+			if pio, ok := snap.execIO[r.ExecID]; ok {
+				st.Stdin = pio.stdin
+				st.Stdout = pio.stdout
+				st.Stderr = pio.stderr
 			}
 		}
 	}
@@ -1079,13 +1200,13 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 
 // Connect returns shim information such as the shim's pid.
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
-	s.containerMu.Lock()
-	hasContainer := s.container != nil && s.containerID == r.ID
+	// Use snapshot pattern to safely access container state outside lock.
+	snap := s.getContainerSnapshot()
+	hasContainer := snap != nil && snap.id == r.ID
 	pid := uint32(0)
 	if hasContainer {
-		pid = s.container.pid
+		pid = snap.pid
 	}
-	s.containerMu.Unlock()
 	log.G(ctx).WithFields(log.Fields{
 		"id":            r.ID,
 		"has_container": hasContainer,
@@ -1233,17 +1354,16 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 	}
 }
 
-func (s *service) send(evt interface{}) {
-	if s.eventsClosed.Load() {
-		return
+func (s *service) send(evt any) {
+	// Use select with eventsDone to safely handle the race between sending
+	// and channel close. When eventsDone is closed (which happens before
+	// events channel), the send is cancelled without panic.
+	select {
+	case <-s.eventsDone:
+		return // Shutdown in progress, drop event
+	case s.events <- evt:
+		// Sent successfully
 	}
-	// Use defer/recover to handle the race window between eventsClosed check
-	// and channel close. If the channel is closed after our check, the send
-	// would panic - we catch this and silently drop the event.
-	defer func() {
-		_ = recover() // Event dropped during shutdown race - expected and safe
-	}()
-	s.events <- evt
 }
 
 func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
@@ -1258,9 +1378,8 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 	// Ensure network cleanup happens before exit, regardless of shutdown service state.
 	// This is critical for unexpected VM exits (e.g., halt inside VM) where the normal
 	// Delete() path may not run, leaving CNI allocations orphaned.
-	s.containerMu.Lock()
-	containerID := s.containerID
-	s.containerMu.Unlock()
+	// Use getContainerID() to safely access containerID outside the lock.
+	containerID := s.getContainerID()
 	if containerID != "" {
 		env := &network.Environment{ID: containerID}
 		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {

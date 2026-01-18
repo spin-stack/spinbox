@@ -101,6 +101,17 @@ func (q *Instance) compareAndSwapState(old, new vmState) bool {
 	return q.vmState.CompareAndSwap(uint32(old), uint32(new))
 }
 
+// SetProcessExitCallback sets a callback to be invoked when the QEMU process exits.
+// This must be called before Start(). The callback will be invoked from the
+// process monitor goroutine when QEMU terminates (normally or abnormally).
+// This provides a reliable signal for detecting VM death even when vsock
+// connections don't receive EOF cleanly.
+func (q *Instance) SetProcessExitCallback(cb func()) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.onProcessExit = cb
+}
+
 const (
 	defaultBootCPUs     = 1                  // Default number of boot vCPUs
 	defaultMaxCPUs      = 2                  // Default maximum vCPUs (set equal to boot for lean mode)
@@ -178,4 +189,9 @@ type Instance struct {
 	disks      []*DiskConfig
 	nets       []*NetConfig
 	networkCfg *vm.NetworkConfig // CNI network configuration
+
+	// onProcessExit is called when the QEMU process exits.
+	// This callback provides a reliable signal for the shim to detect VM death
+	// even when vsock doesn't return EOF cleanly.
+	onProcessExit func()
 }

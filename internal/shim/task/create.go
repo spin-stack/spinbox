@@ -145,6 +145,17 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	}
 	state.vmInstance = vmi
 
+	// Register VM exit callback to detect when QEMU process exits.
+	// This provides a reliable signal for the event stream to exit even
+	// when vsock doesn't return EOF cleanly on VM death.
+	if err := s.vmLifecycle.SetVMExitCallback(func() {
+		s.vmExitOnce.Do(func() {
+			close(s.vmExitCh)
+		})
+	}); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to set VM exit callback")
+	}
+
 	// Setup mounts
 	setupResult, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs)
 	if err != nil {

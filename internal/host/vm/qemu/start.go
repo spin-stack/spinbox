@@ -229,6 +229,13 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 			// Channel may be closed if Shutdown() already completed
 		}
 
+		// Invoke process exit callback if registered.
+		// This provides a reliable signal for the shim to detect VM death
+		// even when vsock connections don't receive EOF cleanly.
+		if q.onProcessExit != nil {
+			q.onProcessExit()
+		}
+
 		// Cancel background monitors if still running
 		if q.runCancel != nil {
 			q.runCancel()

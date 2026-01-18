@@ -21,8 +21,10 @@ func TestStateMachine_ValidTransitions(t *testing.T) {
 		wantErr bool
 	}{
 		{"idle to creating", StateIdle, StateCreating, false},
-		{"creating to running", StateCreating, StateRunning, false},
+		{"creating to created", StateCreating, StateCreated, false},
 		{"creating to idle (failure)", StateCreating, StateIdle, false},
+		{"created to running", StateCreated, StateRunning, false},
+		{"created to shutting down", StateCreated, StateShuttingDown, false},
 		{"running to deleting", StateRunning, StateDeleting, false},
 		{"running to shutting down", StateRunning, StateShuttingDown, false},
 		{"deleting to shutting down", StateDeleting, StateShuttingDown, false},
@@ -139,28 +141,52 @@ func TestStateMachine_TryStartCreating(t *testing.T) {
 }
 
 func TestStateMachine_TryStartDeleting(t *testing.T) {
-	sm := NewStateMachine()
+	t.Run("from idle", func(t *testing.T) {
+		sm := NewStateMachine()
+		// Should fail when idle
+		if sm.TryStartDeleting() {
+			t.Error("TryStartDeleting should fail when idle")
+		}
+	})
 
-	// Should fail when not running
-	if sm.TryStartDeleting() {
-		t.Error("TryStartDeleting should fail when idle")
-	}
+	t.Run("from created", func(t *testing.T) {
+		sm := NewStateMachine()
+		sm.TryStartCreating()
+		if err := sm.MarkCreated(); err != nil {
+			t.Errorf("MarkCreated failed: %v", err)
+		}
 
-	// Transition to running
-	sm.TryStartCreating()
-	if err := sm.MarkCreated(); err != nil {
-		t.Errorf("MarkCreated failed: %v", err)
-	}
+		// Should succeed from Created state (before Start was called)
+		if !sm.TryStartDeleting() {
+			t.Error("TryStartDeleting should succeed when created")
+		}
 
-	// Now should succeed
-	if !sm.TryStartDeleting() {
-		t.Error("TryStartDeleting should succeed when running")
-	}
+		// Second call should fail
+		if sm.TryStartDeleting() {
+			t.Error("second TryStartDeleting should fail")
+		}
+	})
 
-	// Second call should fail
-	if sm.TryStartDeleting() {
-		t.Error("second TryStartDeleting should fail")
-	}
+	t.Run("from running", func(t *testing.T) {
+		sm := NewStateMachine()
+		sm.TryStartCreating()
+		if err := sm.MarkCreated(); err != nil {
+			t.Errorf("MarkCreated failed: %v", err)
+		}
+		if err := sm.MarkStarted(); err != nil {
+			t.Errorf("MarkStarted failed: %v", err)
+		}
+
+		// Should succeed from Running state
+		if !sm.TryStartDeleting() {
+			t.Error("TryStartDeleting should succeed when running")
+		}
+
+		// Second call should fail
+		if sm.TryStartDeleting() {
+			t.Error("second TryStartDeleting should fail")
+		}
+	})
 }
 
 func TestStateMachine_MarkCreated(t *testing.T) {
@@ -171,8 +197,37 @@ func TestStateMachine_MarkCreated(t *testing.T) {
 		t.Errorf("MarkCreated failed: %v", err)
 	}
 
+	if sm.State() != StateCreated {
+		t.Errorf("expected Created after MarkCreated, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_MarkStarted(t *testing.T) {
+	sm := NewStateMachine()
+	sm.TryStartCreating()
+	if err := sm.MarkCreated(); err != nil {
+		t.Errorf("MarkCreated failed: %v", err)
+	}
+
+	if err := sm.MarkStarted(); err != nil {
+		t.Errorf("MarkStarted failed: %v", err)
+	}
+
 	if sm.State() != StateRunning {
-		t.Errorf("expected Running after MarkCreated, got %s", sm.State())
+		t.Errorf("expected Running after MarkStarted, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_MarkStarted_InvalidState(t *testing.T) {
+	sm := NewStateMachine()
+	// Don't transition to Created first
+
+	err := sm.MarkStarted()
+	if err == nil {
+		t.Error("MarkStarted should fail when not in Created state")
+	}
+	if !errors.Is(err, ErrInvalidStateTransition) {
+		t.Errorf("expected ErrInvalidStateTransition, got %T", err)
 	}
 }
 
@@ -221,6 +276,9 @@ func TestStateMachine_ForceTransition(t *testing.T) {
 	if err := sm.MarkCreated(); err != nil {
 		t.Errorf("MarkCreated failed: %v", err)
 	}
+	if err := sm.MarkStarted(); err != nil {
+		t.Errorf("MarkStarted failed: %v", err)
+	}
 
 	old := sm.ForceTransition(StateShuttingDown)
 
@@ -248,19 +306,21 @@ func TestStateMachine_IntentionalShutdown(t *testing.T) {
 
 func TestStateMachine_StatePredicates(t *testing.T) {
 	tests := []struct {
-		name              string
-		state             ShimState
-		isCreating        bool
-		isRunning         bool
-		isDeleting        bool
-		isShuttingDown    bool
-		canAcceptRequests bool
+		name                string
+		state               ShimState
+		isCreating          bool
+		isCreatedNotStarted bool
+		isRunning           bool
+		isDeleting          bool
+		isShuttingDown      bool
+		canAcceptRequests   bool
 	}{
-		{"idle", StateIdle, false, false, false, false, false},
-		{"creating", StateCreating, true, false, false, false, true},
-		{"running", StateRunning, false, true, false, false, true},
-		{"deleting", StateDeleting, false, false, true, false, false},
-		{"shutting_down", StateShuttingDown, false, false, false, true, false},
+		{"idle", StateIdle, false, false, false, false, false, false},
+		{"creating", StateCreating, true, false, false, false, false, true},
+		{"created", StateCreated, false, true, false, false, false, true},
+		{"running", StateRunning, false, false, true, false, false, true},
+		{"deleting", StateDeleting, false, false, false, true, false, false},
+		{"shutting_down", StateShuttingDown, false, false, false, false, true, false},
 	}
 
 	for _, tt := range tests {
@@ -270,6 +330,9 @@ func TestStateMachine_StatePredicates(t *testing.T) {
 
 			if got := sm.IsCreating(); got != tt.isCreating {
 				t.Errorf("IsCreating() = %v, want %v", got, tt.isCreating)
+			}
+			if got := sm.IsCreatedNotStarted(); got != tt.isCreatedNotStarted {
+				t.Errorf("IsCreatedNotStarted() = %v, want %v", got, tt.isCreatedNotStarted)
 			}
 			if got := sm.IsRunning(); got != tt.isRunning {
 				t.Errorf("IsRunning() = %v, want %v", got, tt.isRunning)
@@ -293,6 +356,9 @@ func TestStateMachine_Snapshot(t *testing.T) {
 	if err := sm.MarkCreated(); err != nil {
 		t.Errorf("MarkCreated failed: %v", err)
 	}
+	if err := sm.MarkStarted(); err != nil {
+		t.Errorf("MarkStarted failed: %v", err)
+	}
 	sm.SetIntentionalShutdown(true)
 
 	snap := sm.Snapshot()
@@ -312,6 +378,7 @@ func TestShimState_String(t *testing.T) {
 	}{
 		{StateIdle, "idle"},
 		{StateCreating, "creating"},
+		{StateCreated, "created"},
 		{StateRunning, "running"},
 		{StateShuttingDown, "shutting_down"},
 		{StateDeleting, "deleting"},

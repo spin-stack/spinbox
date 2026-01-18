@@ -21,6 +21,11 @@ const (
 	// Only one Create() can run at a time.
 	StateCreating
 
+	// StateCreated indicates the container has been created but Start() has not been called.
+	// This is the state between successful Create() and Start() calls.
+	// Previously tracked by the separate initStarted atomic.
+	StateCreated
+
 	// StateRunning indicates a container is running in the VM.
 	// This is the steady-state for a functioning container.
 	StateRunning
@@ -41,6 +46,8 @@ func (s ShimState) String() string {
 		return "idle"
 	case StateCreating:
 		return "creating"
+	case StateCreated:
+		return "created"
 	case StateRunning:
 		return "running"
 	case StateShuttingDown:
@@ -123,19 +130,37 @@ func (sm *StateMachine) TryStartCreating() bool {
 	return sm.state.CompareAndSwap(int32(StateIdle), int32(StateCreating))
 }
 
-// TryStartDeleting attempts to transition from Running to Deleting.
-// Returns true if successful, false if not in Running state.
+// TryStartDeleting attempts to transition to Deleting from either Created or Running state.
+// Returns true if successful, false if not in a deletable state.
+// A container can be deleted before Start() is called (Created state) or after (Running state).
 func (sm *StateMachine) TryStartDeleting() bool {
-	return sm.state.CompareAndSwap(int32(StateRunning), int32(StateDeleting))
+	// Try from Running first (most common case)
+	if sm.state.CompareAndSwap(int32(StateRunning), int32(StateDeleting)) {
+		return true
+	}
+	// Try from Created (delete before Start was called)
+	return sm.state.CompareAndSwap(int32(StateCreated), int32(StateDeleting))
 }
 
-// MarkCreated transitions from Creating to Running.
+// MarkCreated transitions from Creating to Created.
 // Returns an error if not in Creating state.
+// This indicates the task was successfully created but Start() has not been called yet.
 func (sm *StateMachine) MarkCreated() error {
-	if !sm.state.CompareAndSwap(int32(StateCreating), int32(StateRunning)) {
-		return NewStateTransitionError(StateCreating.String(), StateRunning.String(), sm.State().String())
+	if !sm.state.CompareAndSwap(int32(StateCreating), int32(StateCreated)) {
+		return NewStateTransitionError(StateCreating.String(), StateCreated.String(), sm.State().String())
 	}
-	log.L.Debug("state: creating -> running")
+	log.L.Debug("state: creating -> created")
+	return nil
+}
+
+// MarkStarted transitions from Created to Running.
+// Returns an error if not in Created state.
+// This indicates the init process has been started via Start() RPC.
+func (sm *StateMachine) MarkStarted() error {
+	if !sm.state.CompareAndSwap(int32(StateCreated), int32(StateRunning)) {
+		return NewStateTransitionError(StateCreated.String(), StateRunning.String(), sm.State().String())
+	}
+	log.L.Debug("state: created -> running")
 	return nil
 }
 
@@ -164,6 +189,12 @@ func (sm *StateMachine) IsRunning() bool {
 	return sm.State() == StateRunning
 }
 
+// IsCreatedNotStarted returns true if the task has been created but Start() has not been called.
+// This replaces the initStarted atomic that was previously used to track this state.
+func (sm *StateMachine) IsCreatedNotStarted() bool {
+	return sm.State() == StateCreated
+}
+
 // IsShuttingDown returns true if shutdown is in progress.
 func (sm *StateMachine) IsShuttingDown() bool {
 	return sm.State() == StateShuttingDown
@@ -173,7 +204,7 @@ func (sm *StateMachine) IsShuttingDown() bool {
 // Returns false during shutdown or if no container is running.
 func (sm *StateMachine) CanAcceptRequests() bool {
 	state := sm.State()
-	return state == StateRunning || state == StateCreating
+	return state == StateRunning || state == StateCreating || state == StateCreated
 }
 
 // isValidTransition checks if a state transition is valid.
@@ -187,7 +218,9 @@ func (sm *StateMachine) isValidTransition(from, to ShimState) bool {
 	case StateIdle:
 		return to == StateCreating
 	case StateCreating:
-		return to == StateRunning || to == StateIdle
+		return to == StateCreated || to == StateIdle
+	case StateCreated:
+		return to == StateRunning || to == StateShuttingDown
 	case StateRunning:
 		return to == StateDeleting || to == StateShuttingDown
 	case StateDeleting:
