@@ -43,13 +43,7 @@ func getRuntimePath() string {
 			resolvedRuntimePath = path
 			return
 		}
-		// Try common locations
-		for _, p := range []string{"/sbin/crun", "/usr/bin/crun", "/usr/local/bin/crun", "/sbin/runc", "/usr/bin/runc"} {
-			if _, err := os.Stat(p); err == nil {
-				resolvedRuntimePath = p
-				return
-			}
-		}
+
 		// Fallback to default
 		resolvedRuntimePath = defaultRuntimePath
 	})
