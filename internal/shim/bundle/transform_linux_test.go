@@ -1,6 +1,6 @@
 //go:build linux
 
-package transform
+package bundle
 
 import (
 	"context"
@@ -12,13 +12,11 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/spin-stack/spinbox/internal/shim/bundle"
 )
 
 const cgroupPath = "/sys/fs/cgroup"
 
-func createTestBundle(t *testing.T, bundlePath string) {
+func setupTransformTestBundle(t *testing.T, bundlePath string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bundlePath, 0750))
 
@@ -48,13 +46,13 @@ func TestTransformBindMounts(t *testing.T) {
 	t.Run("transforms bind mount from bundle path", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		bundlePath := filepath.Join(tmpDir, "test-container")
-		createTestBundle(t, bundlePath)
+		setupTransformTestBundle(t, bundlePath)
 
 		testFile := filepath.Join(bundlePath, "config.yaml")
 		testContent := []byte("key: value\n")
 		require.NoError(t, os.WriteFile(testFile, testContent, 0600))
 
-		b, err := bundle.Load(ctx, bundlePath)
+		b, err := Load(ctx, bundlePath)
 		require.NoError(t, err)
 
 		b.Spec.Mounts = append(b.Spec.Mounts, specs.Mount{
@@ -75,14 +73,14 @@ func TestTransformBindMounts(t *testing.T) {
 	t.Run("ignores bind mount from different path", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		bundlePath := filepath.Join(tmpDir, "test-container")
-		createTestBundle(t, bundlePath)
+		setupTransformTestBundle(t, bundlePath)
 
 		otherDir := filepath.Join(tmpDir, "other")
 		require.NoError(t, os.MkdirAll(otherDir, 0750))
 		testFile := filepath.Join(otherDir, "secret.txt")
 		require.NoError(t, os.WriteFile(testFile, []byte("secret"), 0600))
 
-		b, err := bundle.Load(ctx, bundlePath)
+		b, err := Load(ctx, bundlePath)
 		require.NoError(t, err)
 
 		b.Spec.Mounts = append(b.Spec.Mounts, specs.Mount{
@@ -104,9 +102,9 @@ func TestAdaptForVM(t *testing.T) {
 	t.Run("removes network and cgroup namespaces", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		bundlePath := filepath.Join(tmpDir, "test-container")
-		createTestBundle(t, bundlePath)
+		setupTransformTestBundle(t, bundlePath)
 
-		b, err := bundle.Load(ctx, bundlePath)
+		b, err := Load(ctx, bundlePath)
 		require.NoError(t, err)
 
 		err = AdaptForVM(ctx, b)
@@ -134,9 +132,9 @@ func TestAdaptForVM(t *testing.T) {
 	t.Run("adds cgroup2 mount if missing", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		bundlePath := filepath.Join(tmpDir, "test-container")
-		createTestBundle(t, bundlePath)
+		setupTransformTestBundle(t, bundlePath)
 
-		b, err := bundle.Load(ctx, bundlePath)
+		b, err := Load(ctx, bundlePath)
 		require.NoError(t, err)
 
 		err = AdaptForVM(ctx, b)
@@ -171,7 +169,7 @@ func TestAdaptForVM(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(bundlePath, "config.json"), specBytes, 0600))
 		require.NoError(t, os.MkdirAll(filepath.Join(bundlePath, "rootfs"), 0750))
 
-		b, err := bundle.Load(ctx, bundlePath)
+		b, err := Load(ctx, bundlePath)
 		require.NoError(t, err)
 
 		err = AdaptForVM(ctx, b)
@@ -185,9 +183,9 @@ func TestAdaptForVM(t *testing.T) {
 	t.Run("grants full capabilities", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		bundlePath := filepath.Join(tmpDir, "test-container")
-		createTestBundle(t, bundlePath)
+		setupTransformTestBundle(t, bundlePath)
 
-		b, err := bundle.Load(ctx, bundlePath)
+		b, err := Load(ctx, bundlePath)
 		require.NoError(t, err)
 
 		err = AdaptForVM(ctx, b)
@@ -212,7 +210,7 @@ func TestAdaptForVM(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(bundlePath, "config.json"), specBytes, 0600))
 		require.NoError(t, os.MkdirAll(filepath.Join(bundlePath, "rootfs"), 0750))
 
-		b, err := bundle.Load(ctx, bundlePath)
+		b, err := Load(ctx, bundlePath)
 		require.NoError(t, err)
 
 		err = AdaptForVM(ctx, b)
@@ -226,7 +224,7 @@ func TestLoadForCreate(t *testing.T) {
 	t.Run("applies all transforms", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		bundlePath := filepath.Join(tmpDir, "test-container")
-		createTestBundle(t, bundlePath)
+		setupTransformTestBundle(t, bundlePath)
 
 		testFile := filepath.Join(bundlePath, "app.conf")
 		require.NoError(t, os.WriteFile(testFile, []byte("config"), 0600))

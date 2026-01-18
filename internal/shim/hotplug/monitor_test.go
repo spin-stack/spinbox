@@ -21,8 +21,8 @@ type mockScaler struct {
 	scaleUpErr     error
 	scaleDownErr   error
 
-	evaluateCalls atomic.Int32
-	scaleUpCalls  atomic.Int32
+	evaluateCalls  atomic.Int32
+	scaleUpCalls   atomic.Int32
 	scaleDownCalls atomic.Int32
 }
 
@@ -50,9 +50,9 @@ func (m *mockScaler) ScaleDown(ctx context.Context) error {
 }
 
 func TestScaleDirection(t *testing.T) {
-	assert.Equal(t, ScaleDirection(0), ScaleNone)
-	assert.Equal(t, ScaleDirection(1), ScaleUp)
-	assert.Equal(t, ScaleDirection(2), ScaleDown)
+	assert.Equal(t, ScaleNone, ScaleDirection(0))
+	assert.Equal(t, ScaleUp, ScaleDirection(1))
+	assert.Equal(t, ScaleDown, ScaleDirection(2))
 }
 
 func TestNewMonitor(t *testing.T) {

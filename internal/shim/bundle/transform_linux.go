@@ -1,7 +1,6 @@
 //go:build linux
 
-// Package transform provides OCI bundle transformations for VM compatibility.
-package transform
+package bundle
 
 import (
 	"context"
@@ -12,12 +11,10 @@ import (
 	"github.com/containerd/log"
 	"github.com/opencontainers/runc/libcontainer/capabilities"
 	"github.com/opencontainers/runtime-spec/specs-go"
-
-	"github.com/spin-stack/spinbox/internal/shim/bundle"
 )
 
 // TransformBindMounts converts bind mounts to extra files for the VM.
-func TransformBindMounts(ctx context.Context, b *bundle.Bundle) error {
+func TransformBindMounts(ctx context.Context, b *Bundle) error {
 	for i, m := range b.Spec.Mounts {
 		if m.Type == "bind" {
 			filename := filepath.Base(m.Source)
@@ -44,7 +41,7 @@ func TransformBindMounts(ctx context.Context, b *bundle.Bundle) error {
 // - Remove network/cgroup namespaces (container uses VM's)
 // - Ensure cgroup2 mount exists
 // - Grant full capabilities (VM is the security boundary)
-func AdaptForVM(ctx context.Context, b *bundle.Bundle) error {
+func AdaptForVM(ctx context.Context, b *Bundle) error {
 	// Remove network and cgroup namespaces
 	if b.Spec.Linux != nil {
 		var namespaces []specs.LinuxNamespace
@@ -117,8 +114,8 @@ func ensureRW(opts []string) []string {
 }
 
 // LoadForCreate loads and transforms an OCI bundle for container creation.
-func LoadForCreate(ctx context.Context, bundlePath string) (*bundle.Bundle, error) {
-	return bundle.Load(ctx, bundlePath,
+func LoadForCreate(ctx context.Context, bundlePath string) (*Bundle, error) {
+	return Load(ctx, bundlePath,
 		TransformBindMounts,
 		AdaptForVM,
 	)

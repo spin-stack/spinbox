@@ -26,7 +26,6 @@ import (
 	"github.com/spin-stack/spinbox/internal/shim/lifecycle"
 	platformNetwork "github.com/spin-stack/spinbox/internal/shim/platform/network"
 	"github.com/spin-stack/spinbox/internal/shim/resources"
-	"github.com/spin-stack/spinbox/internal/shim/transform"
 )
 
 // createCleanup tracks resources that need cleanup on failure.
@@ -121,7 +120,7 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	}
 
 	// Load and transform bundle
-	b, err := transform.LoadForCreate(ctx, r.Bundle)
+	b, err := bundle.LoadForCreate(ctx, r.Bundle)
 	if err != nil {
 		return err
 	}

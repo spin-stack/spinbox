@@ -51,13 +51,13 @@ type Config struct {
 }
 
 const (
-	defaultMonitorInterval   = 5 * time.Second
-	defaultScaleUpCooldown   = 10 * time.Second
-	defaultScaleDownCooldown = 30 * time.Second
-	defaultScaleUpThreshold  = 80.0
+	defaultMonitorInterval    = 5 * time.Second
+	defaultScaleUpCooldown    = 10 * time.Second
+	defaultScaleDownCooldown  = 30 * time.Second
+	defaultScaleUpThreshold   = 80.0
 	defaultScaleDownThreshold = 50.0
-	defaultThrottleLimit     = 5.0
-	defaultScaleUpStability  = 2
+	defaultThrottleLimit      = 5.0
+	defaultScaleUpStability   = 2
 	defaultScaleDownStability = 6
 )
 
@@ -253,7 +253,7 @@ func (c *Controller) ScaleUp(ctx context.Context) error {
 	}
 
 	// Find first available CPU ID
-	for nextID := 0; nextID < c.maxCPUs; nextID++ {
+	for nextID := range c.maxCPUs {
 		if existingCPUs[nextID] {
 			continue
 		}
