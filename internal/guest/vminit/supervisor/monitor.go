@@ -141,29 +141,15 @@ func (m *Monitor) start(ctx context.Context) error {
 		return fmt.Errorf("chmod supervisor binary: %w", err)
 	}
 
-	// Create log directory
-	logDir := "/var/log"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to create log directory")
-	}
-
-	// Open log file
-	logFile, err := os.OpenFile(LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644) //nolint:gosec
-	if err != nil {
-		log.G(ctx).WithError(err).Warn("failed to open supervisor log file, using /dev/null")
-		logFile, _ = os.Open("/dev/null")
-	}
-
 	cmd := exec.Command(m.binaryPath) //nolint:gosec
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true, // Create new session
 	}
 
 	if err := cmd.Start(); err != nil {
-		logFile.Close()
 		return fmt.Errorf("start supervisor: %w", err)
 	}
 
@@ -177,9 +163,6 @@ func (m *Monitor) start(ctx context.Context) error {
 	if err := os.WriteFile(PidFile, fmt.Appendf(nil, "%d\n", cmd.Process.Pid), 0644); err != nil { //nolint:gosec
 		log.G(ctx).WithError(err).Warn("failed to write supervisor PID file")
 	}
-
-	// Close our handle to log file (process keeps its own)
-	logFile.Close()
 
 	return nil
 }
