@@ -34,6 +34,7 @@ const (
 // Monitor manages the supervisor process lifecycle with automatic restart.
 type Monitor struct {
 	binaryPath string
+	extraEnv   []string // Additional environment variables to pass to supervisor
 
 	mu          sync.Mutex
 	cmd         *exec.Cmd
@@ -50,6 +51,12 @@ func NewMonitor(binaryPath string) *Monitor {
 		binaryPath:  binaryPath,
 		windowStart: time.Now(),
 	}
+}
+
+// SetExtraEnv sets additional environment variables to pass to the supervisor process.
+// These are appended to the current process environment on each start.
+func (m *Monitor) SetExtraEnv(env []string) {
+	m.extraEnv = env
 }
 
 // Run starts the supervisor and monitors it for crashes.
@@ -144,7 +151,7 @@ func (m *Monitor) start(ctx context.Context) error {
 	cmd := exec.Command(m.binaryPath) //nolint:gosec
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), m.extraEnv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true, // Create new session
 	}

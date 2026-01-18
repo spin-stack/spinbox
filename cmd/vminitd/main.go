@@ -18,7 +18,6 @@ import (
 
 	"github.com/spin-stack/spinbox/internal/guest/vminit/config"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/service"
-	"github.com/spin-stack/spinbox/internal/guest/vminit/supervisor"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/system"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/systools"
 
@@ -108,18 +107,9 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
-	// Start supervisor agent in background with automatic restart on crash.
-	// The supervisor binary is injected via extras disk and will be available
-	// at /var/lib/spin-stack/bin/spin-supervisor after VM boot.
-	// RunWithMonitoring blocks until context is cancelled, handling all restarts.
-	go func() {
-		// Wait a bit for extras disk to be mounted and files extracted
-		time.Sleep(2 * time.Second)
-
-		if err := supervisor.RunWithMonitoring(ctx); err != nil {
-			log.G(ctx).WithError(err).Error("supervisor monitor exited with error")
-		}
-	}()
+	// Note: The supervisor agent is now started after container creation
+	// (in runc/container.go) with the overlay root path passed via env var.
+	// This ensures the supervisor has access to the container's rootfs.
 
 	// Limit GOMAXPROCS for VM environment to prevent scheduler overhead
 	// Cap at maxGOMAXPROCS to improve cache locality, but respect available CPUs
