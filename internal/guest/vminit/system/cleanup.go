@@ -63,7 +63,8 @@ func cleanupBundles(ctx context.Context) {
 
 		for _, mountPath := range mounts {
 			log.G(ctx).WithField("path", mountPath).Debug("unmounting")
-			if err := mount.UnmountAll(mountPath, 0); err != nil {
+			// Use MNT_DETACH for lazy unmount - succeeds even with open file handles
+			if err := mount.UnmountAll(mountPath, unix.MNT_DETACH); err != nil {
 				log.G(ctx).WithError(err).WithField("path", mountPath).Warn("failed to unmount")
 			}
 		}

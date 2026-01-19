@@ -336,7 +336,10 @@ func (p *Init) delete(ctx context.Context) error {
 		}
 		_ = p.io.Close()
 	}
-	if err2 := mount.UnmountRecursive(p.Rootfs, 0); err2 != nil {
+	// Use MNT_DETACH for lazy unmount - this succeeds even if processes still hold
+	// references to the filesystem. The actual unmount happens when all references
+	// are released. This prevents "device or resource busy" errors during shutdown.
+	if err2 := mount.UnmountRecursive(p.Rootfs, unix.MNT_DETACH); err2 != nil {
 		log.G(ctx).WithError(err2).Warn("failed to cleanup rootfs mount")
 		if err == nil {
 			err = fmt.Errorf("failed rootfs umount: %w", err2)
