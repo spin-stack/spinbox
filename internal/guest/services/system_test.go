@@ -189,6 +189,33 @@ func TestSystemServiceInfo(t *testing.T) {
 	})
 }
 
+func TestSystemServicePrepareShutdown(t *testing.T) {
+	svc := &systemService{}
+
+	called := make(chan struct{}, 1)
+	original := prepareShutdown
+	prepareShutdown = func(context.Context) {
+		called <- struct{}{}
+	}
+	defer func() {
+		prepareShutdown = original
+	}()
+
+	resp, err := svc.PrepareShutdown(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("prepare shutdown hook was not called")
+	}
+}
+
 func TestSystemServiceOfflineCPU(t *testing.T) {
 	t.Run("reject CPU 0", func(t *testing.T) {
 		svc := &systemService{}

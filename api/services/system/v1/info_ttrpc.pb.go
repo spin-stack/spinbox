@@ -10,6 +10,7 @@ import (
 
 type TTRPCSystemService interface {
 	Info(context.Context, *emptypb.Empty) (*InfoResponse, error)
+	PrepareShutdown(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	OfflineCPU(context.Context, *OfflineCPURequest) (*emptypb.Empty, error)
 	OnlineCPU(context.Context, *OnlineCPURequest) (*emptypb.Empty, error)
 	OfflineMemory(context.Context, *OfflineMemoryRequest) (*emptypb.Empty, error)
@@ -25,6 +26,13 @@ func RegisterTTRPCSystemService(srv *ttrpc.Server, svc TTRPCSystemService) {
 					return nil, err
 				}
 				return svc.Info(ctx, &req)
+			},
+			"PrepareShutdown": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req emptypb.Empty
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.PrepareShutdown(ctx, &req)
 			},
 			"OfflineCPU": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req OfflineCPURequest
@@ -71,6 +79,14 @@ func NewTTRPCSystemClient(client *ttrpc.Client) TTRPCSystemService {
 func (c *ttrpcsystemClient) Info(ctx context.Context, req *emptypb.Empty) (*InfoResponse, error) {
 	var resp InfoResponse
 	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "Info", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *ttrpcsystemClient) PrepareShutdown(ctx context.Context, req *emptypb.Empty) (*emptypb.Empty, error) {
+	var resp emptypb.Empty
+	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "PrepareShutdown", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
