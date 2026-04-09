@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/containerd/log"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
+
+	systemAPI "github.com/spin-stack/spinbox/api/services/system/v1"
 )
 
 // Shutdown timing constants.
@@ -18,6 +21,10 @@ import (
 const (
 	// shutdownQMPTimeout is the timeout for QMP commands during shutdown.
 	shutdownQMPTimeout = 2 * time.Second
+
+	// shutdownPrepareGuestTimeout bounds the time we wait for the guest to flush
+	// filesystem state before starting poweroff.
+	shutdownPrepareGuestTimeout = 5 * time.Second
 
 	// shutdownACPIWait is how long to wait for guest to receive ACPI signal
 	// before sending the quit command.
@@ -59,6 +66,24 @@ func (q *Instance) cleanupAfterFailedKill() {
 		q.qmpClient = nil
 	}
 	q.closeTAPFiles()
+}
+
+func (q *Instance) prepareGuestShutdown(ctx context.Context, logger *log.Entry) {
+	if q.client == nil {
+		return
+	}
+
+	logger.Info("qemu: requesting guest shutdown preparation")
+	prepareCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownPrepareGuestTimeout)
+	defer cancel()
+
+	client := systemAPI.NewTTRPCSystemClient(q.client)
+	if _, err := client.PrepareShutdown(prepareCtx, &emptypb.Empty{}); err != nil {
+		logger.WithError(err).Warn("qemu: guest shutdown preparation failed")
+		return
+	}
+
+	logger.Info("qemu: guest shutdown preparation completed")
 }
 
 func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error {
@@ -239,6 +264,7 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	q.prepareGuestShutdown(ctx, logger)
 	q.closeClientConnections(logger)
 	q.shutdownGuest(ctx, logger)
 
