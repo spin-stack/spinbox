@@ -167,6 +167,7 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 		stateMachine:             lifecycle.NewStateMachine(),
 		events:                   make(chan any, eventChannelBuffer),
 		eventsDone:               make(chan struct{}),
+		forwardDone:              make(chan struct{}),
 		vmExitCh:                 make(chan struct{}),
 		cpuHotplugControllers:    make(map[string]cpuhotplug.CPUHotplugController),
 		memoryHotplugControllers: make(map[string]memhotplug.MemoryHotplugController),
@@ -337,13 +338,16 @@ type service struct {
 	events chan any
 
 	// === Shutdown Coordination ===
-	initiateShutdown func()        // Callback to trigger shutdown service
-	eventsClosed     atomic.Bool   // True when events channel is closed
-	eventsDone       chan struct{} // Closed before events channel to signal send() to stop
-	eventsCloseOnce  sync.Once     // Ensures events channel closed exactly once
-	shutdownSvc      shutdown.Service
-	inflight         atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
-	exitFunc         func(code int) // Exit function (default: os.Exit), injectable for testing
+	initiateShutdown  func()        // Callback to trigger shutdown service
+	eventsClosed      atomic.Bool   // True when events channel is closed
+	eventsDone        chan struct{} // Closed before events channel to signal send() to stop
+	eventsCloseOnce   sync.Once     // Ensures events channel closed exactly once
+	forwardDone       chan struct{} // Closed when the event forwarder goroutine exits
+	shutdownOnce      sync.Once     // Ensures shutdown/exit sequencing runs once
+	shutdownRequested atomic.Bool
+	shutdownSvc       shutdown.Service
+	inflight          atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
+	exitFunc          func(code int) // Exit function (default: os.Exit), injectable for testing
 
 	// === VM Exit Watchdog ===
 	// vmExitCh is closed when the QEMU process exits.
@@ -369,7 +373,29 @@ func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 	return nil
 }
 
+func (s *service) isShuttingDown() bool {
+	return s.shutdownRequested.Load() || s.stateMachine.IsShuttingDown()
+}
+
+func (s *service) beginRPC(allowDuringShutdown bool) (func(), error) {
+	if !allowDuringShutdown && s.isShuttingDown() {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "shim is shutting down")
+	}
+
+	s.inflight.Add(1)
+	if !allowDuringShutdown && s.isShuttingDown() {
+		s.inflight.Add(-1)
+		return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "shim is shutting down")
+	}
+
+	return func() {
+		s.inflight.Add(-1)
+	}, nil
+}
+
 func (s *service) shutdown(ctx context.Context) error {
+	s.shutdownRequested.Store(true)
+
 	// Transition to ShuttingDown state
 	s.stateMachine.ForceTransition(lifecycle.StateShuttingDown)
 
@@ -694,6 +720,12 @@ func sleepWithJitter(base time.Duration, jitterFraction float64) {
 
 // Start a process.
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	startTime := time.Now()
 	log.G(ctx).WithFields(log.Fields{
 		"id":                   r.ID,
@@ -763,15 +795,7 @@ type deleteCleanup struct {
 
 func (s *service) cleanupOnDeleteFailure(ctx context.Context, id string) {
 	s.stateMachine.SetIntentionalShutdown(true)
-
-	// Use partial cleanup starting from IO shutdown (skip hotplug which may not be running)
-	phases := s.buildCleanupPhases(id)
-	orchestrator := lifecycle.NewCleanupOrchestrator(phases)
-	result := orchestrator.ExecutePartial(ctx, lifecycle.PhaseIOShutdown)
-
-	if result.HasErrors() {
-		log.G(ctx).WithField("failed_phases", result.FailedPhases()).Warn("cleanup after delete failure had errors")
-	}
+	go s.requestShutdownAndExit(ctx, fmt.Sprintf("delete failed for %s", id))
 }
 
 func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanup {
@@ -872,8 +896,11 @@ func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest
 
 // Delete the initial process and container.
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
-	s.inflight.Add(1)
-	defer s.inflight.Add(-1)
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task request")
 
 	// Mark deletion in progress (only for container, not exec)
@@ -931,6 +958,12 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 
 // Exec an additional process inside the container.
 func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec request")
 
 	vmc, cleanup, err := s.getTaskClient(ctx)
@@ -1024,6 +1057,12 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 // ResizePty of a process.
 func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
@@ -1035,6 +1074,12 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 
 // State returns runtime state information for a process.
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	// Use snapshot pattern to safely access container state outside lock.
 	// This prevents data races when container fields are modified concurrently.
 	snap := s.getContainerSnapshot()
@@ -1099,6 +1144,12 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 
 // Pause the container.
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause request")
 	// Pause is not supported in VM-based runtime.
 	// True pause would require checkpointing CPU and memory state (e.g., QEMU snapshot or CRIU),
@@ -1108,6 +1159,12 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 
 // Resume the container.
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume request")
 	// Resume is not supported in VM-based runtime.
 	// Without checkpoint support, there is no paused state to resume from.
@@ -1116,6 +1173,12 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 
 // Kill a process with the provided signal.
 func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
@@ -1127,6 +1190,12 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 
 // Pids returns all pids inside the container.
 func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pids request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
@@ -1138,6 +1207,12 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 
 // CloseIO of a process.
 func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io request")
 
 	// If stdin is being closed and we have an RPC forwarder, signal it to close stdin.
@@ -1170,6 +1245,12 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 
 // Checkpoint the container.
 func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("checkpoint request")
 	// Checkpoint is not supported in VM-based runtime.
 	// Would require CRIU or QEMU snapshot to save/restore process state.
@@ -1178,6 +1259,12 @@ func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskReque
 
 // Update a running container.
 func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("update request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
@@ -1189,6 +1276,12 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 
 // Wait for a process to exit.
 func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
@@ -1200,6 +1293,12 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 
 // Connect returns shim information such as the shim's pid.
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	// Use snapshot pattern to safely access container state outside lock.
 	snap := s.getContainerSnapshot()
 	hasContainer := snap != nil && snap.id == r.ID
@@ -1237,8 +1336,11 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 }
 
 func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*ptypes.Empty, error) {
-	s.inflight.Add(1)
-	defer s.inflight.Add(-1)
+	done, err := s.beginRPC(true)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("shutdown request")
 
 	s.stateMachine.SetIntentionalShutdown(true)
@@ -1254,6 +1356,12 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 }
 
 func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("stats request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
@@ -1367,67 +1475,88 @@ func (s *service) send(evt any) {
 }
 
 func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
-	log.G(ctx).WithField("reason", reason).Info("shim shutdown requested")
+	started := false
+	s.shutdownOnce.Do(func() {
+		started = true
+		s.shutdownRequested.Store(true)
+		s.stateMachine.ForceTransition(lifecycle.StateShuttingDown)
 
-	// Use injectable exit function, defaulting to os.Exit
-	exit := s.exitFunc
-	if exit == nil {
-		exit = os.Exit
-	}
+		log.G(ctx).WithField("reason", reason).Info("shim shutdown requested")
 
-	// Ensure network cleanup happens before exit, regardless of shutdown service state.
-	// This is critical for unexpected VM exits (e.g., halt inside VM) where the normal
-	// Delete() path may not run, leaving CNI allocations orphaned.
-	// Use getContainerID() to safely access containerID outside the lock.
-	containerID := s.getContainerID()
-	if containerID != "" {
-		env := &network.Environment{ID: containerID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", containerID).Warn("failed to release network resources during unexpected shutdown")
-		} else {
-			log.G(ctx).WithField("id", containerID).Info("released network resources during unexpected shutdown")
+		// Use injectable exit function, defaulting to os.Exit
+		exit := s.exitFunc
+		if exit == nil {
+			exit = os.Exit
 		}
-	}
 
-	if s.shutdownSvc == nil {
-		log.G(ctx).WithField("reason", reason).Warn("shutdown service missing; exiting immediately")
+		// Wait for in-flight requests to complete before triggering shutdown callbacks.
+		inflightTimeout := time.NewTimer(5 * time.Second)
+		inflightTicker := time.NewTicker(10 * time.Millisecond)
+		defer inflightTimeout.Stop()
+		defer inflightTicker.Stop()
+
+	inflightWait:
+		for s.inflight.Load() > 0 {
+			select {
+			case <-inflightTimeout.C:
+				log.G(ctx).WithFields(log.Fields{
+					"reason":   reason,
+					"inflight": s.inflight.Load(),
+				}).Warn("shutdown waiting for in-flight requests timed out")
+				break inflightWait
+			case <-inflightTicker.C:
+				// Check again.
+			}
+		}
+
+		if s.shutdownSvc == nil {
+			log.G(ctx).WithField("reason", reason).Warn("shutdown service missing; running cleanup inline")
+			if err := s.shutdown(context.WithoutCancel(ctx)); err != nil {
+				log.G(ctx).WithError(err).WithField("reason", reason).Warn("inline shutdown completed with errors")
+			}
+			s.waitForForwarder(reason)
+			log.G(ctx).WithField("reason", reason).Info("exiting shim after inline shutdown")
+			exit(0)
+			return
+		}
+
+		s.shutdownSvc.Shutdown()
+
+		select {
+		case <-s.shutdownSvc.Done():
+		case <-time.After(5 * time.Second):
+			log.G(ctx).WithField("reason", reason).Warn("shutdown timeout; exiting anyway")
+		}
+
+		s.waitForForwarder(reason)
+		log.G(ctx).WithField("reason", reason).Info("exiting shim after shutdown")
 		exit(0)
+	})
+
+	if !started {
+		log.G(ctx).WithField("reason", reason).Debug("shim shutdown already in progress")
+	}
+}
+
+func (s *service) waitForForwarder(reason string) {
+	if s.forwardDone == nil {
 		return
 	}
 
-	s.shutdownSvc.Shutdown()
-
-	// Wait for in-flight requests to complete using a ticker (avoids Sleep anti-pattern)
-	inflightTimeout := time.NewTimer(5 * time.Second)
-	inflightTicker := time.NewTicker(10 * time.Millisecond)
-	defer inflightTimeout.Stop()
-	defer inflightTicker.Stop()
-
-inflightWait:
-	for s.inflight.Load() > 0 {
-		select {
-		case <-inflightTimeout.C:
-			log.G(ctx).WithFields(log.Fields{
-				"reason":   reason,
-				"inflight": s.inflight.Load(),
-			}).Warn("shutdown waiting for in-flight requests timed out")
-			break inflightWait
-		case <-inflightTicker.C:
-			// Check again
-		}
-	}
-
 	select {
-	case <-s.shutdownSvc.Done():
+	case <-s.forwardDone:
 	case <-time.After(5 * time.Second):
-		log.G(ctx).WithField("reason", reason).Warn("shutdown timeout; exiting anyway")
+		log.L.WithField("reason", reason).Warn("timed out waiting for event forwarder to exit")
 	}
-
-	log.G(ctx).WithField("reason", reason).Info("exiting shim after shutdown")
-	exit(0)
 }
 
 func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready chan<- struct{}) {
+	defer func() {
+		if s.forwardDone != nil {
+			close(s.forwardDone)
+		}
+	}()
+
 	ns, ok := namespaces.Namespace(ctx)
 	if !ok || ns == "" {
 		ns = defaultNamespace
