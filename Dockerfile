@@ -5,7 +5,7 @@
 # - containerd shim for spinbox runtime
 
 # Base image versions
-ARG GO_VERSION=1.25.5
+ARG GO_VERSION=1.26.2
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
 
