@@ -402,6 +402,12 @@ func (s *service) finalizeCreate(ctx context.Context, state *createState, resp *
 //
 // On failure, cleanup.rollback() releases resources in reverse order (LIFO).
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
+	done, err := s.beginRPC(false)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	log.G(ctx).WithFields(log.Fields{
 		"id":     r.ID,
 		"bundle": r.Bundle,
