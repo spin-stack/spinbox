@@ -23,6 +23,7 @@ import (
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
 	api "github.com/spin-stack/spinbox/api/services/system/v1"
+	guestsystem "github.com/spin-stack/spinbox/internal/guest/vminit/system"
 	"github.com/spin-stack/spinbox/internal/version"
 )
 
@@ -41,6 +42,8 @@ const (
 )
 
 type systemService struct{}
+
+var prepareShutdown = guestsystem.Cleanup
 
 var _ api.TTRPCSystemService = &systemService{}
 
@@ -214,6 +217,11 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 		Version:       version.Short(),
 		KernelVersion: string(v),
 	}, nil
+}
+
+func (s *systemService) PrepareShutdown(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	prepareShutdown(ctx)
+	return &emptypb.Empty{}, nil
 }
 
 func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPURequest) (*emptypb.Empty, error) {

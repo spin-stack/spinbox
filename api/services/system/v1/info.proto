@@ -16,6 +16,11 @@ service System {
 	// This is called during VM initialization to verify the guest is ready.
 	rpc Info(google.protobuf.Empty) returns (InfoResponse);
 
+	// PrepareShutdown performs pre-shutdown filesystem cleanup and sync.
+	// The host shim calls this before initiating VM poweroff so external snapshot
+	// and commit flows can rely on a quiesced writable layer.
+	rpc PrepareShutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+
 	// OfflineCPU takes a CPU offline via sysfs before hot-unplug.
 	// The CPU must have been previously onlined and cannot be CPU 0 (boot CPU).
 	//
