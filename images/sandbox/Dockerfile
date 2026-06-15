@@ -3,7 +3,7 @@
 # Designed to run inside spinbox VM-isolated containers
 #
 # Build: task build
-FROM ubuntu:25.10
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
