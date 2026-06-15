@@ -793,12 +793,21 @@ func TestVerifyVMDKManifest(t *testing.T) {
 		require.NoError(t, verifyVMDKManifest(vmdk, []string{dev(d1)}))
 	})
 
-	t.Run("fallback layer omitted from manifest still matches", func(t *testing.T) {
-		// device set has a fallback (non-digest) blob between digest layers;
-		// the manifest only lists the digest-based ones.
-		vmdk := writeManifest(t, d1, d2)
+	t.Run("fallback layer recorded as blob: token (1:1)", func(t *testing.T) {
+		// A fallback (non-digest) blob sits between digest layers; the manifest
+		// records it as "blob:<basename>" so it stays 1:1 with device=.
+		vmdk := writeManifest(t, d1, "blob:snapshot-7.erofs", d2)
 		opts := []string{dev(d1), "device=/var/lib/snap/snapshot-7.erofs", dev(d2)}
 		require.NoError(t, verifyVMDKManifest(vmdk, opts))
+	})
+
+	t.Run("missing fallback line desyncs and is rejected", func(t *testing.T) {
+		// Manifest dropped the fallback placeholder: now 2 lines vs 3 devices.
+		vmdk := writeManifest(t, d1, d2)
+		opts := []string{dev(d1), "device=/var/lib/snap/snapshot-7.erofs", dev(d2)}
+		err := verifyVMDKManifest(vmdk, opts)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errdefs.ErrFailedPrecondition)
 	})
 
 	t.Run("wrong order is rejected", func(t *testing.T) {
