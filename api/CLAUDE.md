@@ -117,22 +117,32 @@ service Events {
 
 **Used for**: Forwarding containerd events (TaskCreate, TaskStart, TaskExit) from guest to host.
 
-#### system/v1 - System Information
+#### system/v1 - System Operations
 
 ```protobuf
-service SystemInfo {
-    // SystemInfo returns guest system capabilities
-    rpc SystemInfo(google.protobuf.Empty) returns (SystemInfoResponse);
-}
+service System {
+    // Guest readiness / info.
+    rpc Info(google.protobuf.Empty) returns (InfoResponse);
 
-message SystemInfoResponse {
-    string kernel_version = 1;
-    int64 memory_bytes = 2;
-    int32 cpu_count = 3;
+    // Pre-poweroff filesystem cleanup and sync (cold-commit consistency).
+    rpc PrepareShutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // CPU/memory hotplug helpers (sysfs online/offline after QMP hotplug).
+    rpc OfflineCPU(OfflineCPURequest) returns (google.protobuf.Empty);
+    rpc OnlineCPU(OnlineCPURequest) returns (google.protobuf.Empty);
+    rpc OfflineMemory(OfflineMemoryRequest) returns (google.protobuf.Empty);
+    rpc OnlineMemory(OnlineMemoryRequest) returns (google.protobuf.Empty);
+
+    // Freeze/thaw the writable filesystem (FIFREEZE/FITHAW) for a consistent
+    // rwlayer while paused; called from the shim's Pause/Resume.
+    rpc FreezeFilesystems(google.protobuf.Empty) returns (FreezeFilesystemsResponse);
+    rpc ThawFilesystems(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
 ```
 
-**Used for**: Querying guest VM capabilities during initialization.
+**Used for**: guest readiness checks, CPU/memory hotplug, and filesystem
+quiesce. See the [hot-commit runbook](../docs/hot-commit.md) for how Freeze/Thaw
+fold into Pause/Resume.
 
 ---
 

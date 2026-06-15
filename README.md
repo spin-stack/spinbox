@@ -25,7 +25,8 @@
 - ✅ **Fast boot** — ~300ms with optimized kernel and systemd
 - ✅ **Standard networking** — CNI plugin compatible (Calico, Cilium, etc.)
 - ✅ **Efficient storage** — EROFS snapshots with inline compression
-- ✅ **Snapshot & commit** — Persist VM state like Docker images
+- ✅ **Snapshot & commit** — Persist VM state like Docker images ([hot-commit runbook](docs/hot-commit.md))
+- ✅ **Pause / Resume** — Suspend a container (QMP stop) with a filesystem freeze so the writable layer stays consistent for commit
 - ✅ **containerd native** — Works with existing tooling (ctr, nerdctl, crictl)
 
 ## Table of Contents

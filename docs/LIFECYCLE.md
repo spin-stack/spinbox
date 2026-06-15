@@ -44,6 +44,23 @@ The shim maintains a single state machine that tracks the overall lifecycle:
 | Deleting | ShuttingDown | Deletion completed |
 | Any | ShuttingDown | Forced shutdown (crash, timeout) |
 
+### Pause and Resume
+
+Pause/Resume are runtime operations, not state-machine states: the shim stays
+in **Running** and tracks suspension with a separate `paused` flag. `State()`
+reports `PAUSED` from cached process state while the flag is set (the frozen
+guest cannot answer RPCs).
+
+| Operation | Steps | Why this order |
+|-----------|-------|----------------|
+| **Pause** | `FreezeFilesystems` (guest `FIFREEZE`) → QMP `stop` | FIFREEZE runs in the live guest; it flushes the page cache and quiesces the writable ext4 so `rwlayer.img` is consistent on disk, then vCPUs stop. A failed freeze fails the Pause (and rolls back). |
+| **Resume** | QMP `cont` → `ThawFilesystems` (guest `FITHAW`) | FITHAW also needs the live guest, so vCPUs restart first. |
+
+Because one container maps to one VM, suspending the VM's vCPUs is equivalent to
+pausing the container. A successful Pause guarantees a consistent on-disk
+writable layer — see the [hot-commit runbook](hot-commit.md) for how this enables
+committing a paused or stopped container's changes.
+
 ## Component Lifecycles
 
 ### VM Instance Lifecycle
