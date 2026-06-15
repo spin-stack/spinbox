@@ -1,10 +1,10 @@
 # Dockerfile for building a static qemu-system-x86_64 binary (libc-compatible)
 # Target: microvm development environments
 
-FROM ubuntu:25.10 AS builder
+FROM ubuntu:26.04 AS builder
 
 # Build arguments
-ARG QEMU_VERSION=10.2.2
+ARG QEMU_VERSION=11.0.1
 ARG JOBS=8
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -146,7 +146,7 @@ RUN file /opt/qemu/bin/qemu-system-x86_64 && \
 # ============================================
 # Final minimal image with binary and dependencies
 # ============================================
-FROM ubuntu:25.10 AS runtime
+FROM ubuntu:26.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 

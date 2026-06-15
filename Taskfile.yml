@@ -173,7 +173,7 @@ tasks:
           --platform linux/amd64 \
           --cache-from type=local,src={{.BUILDKIT_CACHE_QEMU}} \
           --cache-to type=local,dest={{.BUILDKIT_CACHE_QEMU}},mode=max,compression=zstd \
-          --build-arg QEMU_VERSION=10.2.0 \
+          --build-arg QEMU_VERSION=11.0.1 \
           --build-arg QEMU_JOBS=8 \
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
