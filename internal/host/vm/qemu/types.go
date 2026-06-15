@@ -7,6 +7,9 @@ type DiskConfig struct {
 	ID       string
 	Path     string
 	Readonly bool
+	// Serial is the virtio-blk serial exposed to the guest (max 20 chars),
+	// used by the guest to resolve the device independent of PCI order.
+	Serial string
 }
 
 // NetConfig represents a virtio-net device configuration.

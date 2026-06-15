@@ -242,7 +242,7 @@ func TestHandleExt4(t *testing.T) {
 		require.Len(t, diskOpts, 1)
 
 		assert.Equal(t, "ext4", mounts[0].Type)
-		assert.Equal(t, "/dev/vda", mounts[0].Source)
+		assert.Equal(t, "serial:sbxblk0", mounts[0].Source)
 		assert.Equal(t, "/data", mounts[0].Target)
 
 		assert.False(t, diskOpts[0].readOnly)
@@ -320,7 +320,7 @@ func TestTransformMount(t *testing.T) {
 		require.Len(t, diskOpts, 1)
 		// Output should be erofs (not format/erofs) for the guest
 		assert.Equal(t, "erofs", mounts[0].Type)
-		assert.Equal(t, "/dev/vda", mounts[0].Source)
+		assert.Equal(t, "serial:sbxblk0", mounts[0].Source)
 		// device= options should be filtered out (not needed when using VMDK)
 		for _, opt := range mounts[0].Options {
 			assert.False(t, strings.HasPrefix(opt, "device="), "device= options should be filtered")
@@ -358,7 +358,7 @@ func TestTransformMount(t *testing.T) {
 		require.Len(t, mounts, 1)
 		require.Len(t, diskOpts, 1)
 		assert.Equal(t, "ext4", mounts[0].Type)
-		assert.Equal(t, "/dev/vda", mounts[0].Source)
+		assert.Equal(t, "serial:sbxblk0", mounts[0].Source)
 	})
 
 	t.Run("handles overlay with templates", func(t *testing.T) {
@@ -401,13 +401,17 @@ func TestHandleEROFS(t *testing.T) {
 		require.Len(t, diskOpts, 1)
 
 		assert.Equal(t, "erofs", mounts[0].Type)
-		assert.Equal(t, "/dev/vda", mounts[0].Source)
+		assert.Equal(t, "serial:sbxblk0", mounts[0].Source)
 		assert.Equal(t, "/rootfs", mounts[0].Target)
 
 		assert.Equal(t, "/path/to/image.erofs", diskOpts[0].source)
 		assert.True(t, diskOpts[0].readOnly)
 		assert.False(t, diskOpts[0].vmdk)
 		assert.Equal(t, byte('b'), disks)
+		// The disk serial must match the serial encoded in the guest mount Source
+		// so the guest can resolve the device via /sys/block/<dev>/serial.
+		assert.Equal(t, "sbxblk0", diskOpts[0].serial)
+		assert.Equal(t, "serial:sbxblk0", mounts[0].Source)
 	})
 
 	t.Run("vmdk extension detected", func(t *testing.T) {
@@ -460,7 +464,7 @@ func TestHandleEROFS(t *testing.T) {
 		mounts, _, err := m.handleEROFS(ctx, "container-id", &disks, mnt)
 
 		require.NoError(t, err)
-		assert.Equal(t, "/dev/vdc", mounts[0].Source)
+		assert.Equal(t, "serial:sbxblk2", mounts[0].Source)
 		assert.Equal(t, byte('d'), disks)
 	})
 

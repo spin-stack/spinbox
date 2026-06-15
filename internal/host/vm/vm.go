@@ -81,6 +81,10 @@ func WithExtrasDisk(idx int) StartOpt {
 type MountConfig struct {
 	Readonly bool
 	Vmdk     bool
+	// Serial is the virtio-blk serial exposed to the guest (max 20 chars).
+	// The guest resolves the device by matching this serial, so the
+	// layer→device mapping does not depend on PCI enumeration order.
+	Serial string
 }
 
 // MountOpt configures mount options.
@@ -97,6 +101,13 @@ func WithReadOnly() MountOpt {
 func WithVmdk() MountOpt {
 	return func(o *MountConfig) {
 		o.Vmdk = true
+	}
+}
+
+// WithSerial sets the virtio-blk serial used by the guest to identify the device.
+func WithSerial(serial string) MountOpt {
+	return func(o *MountConfig) {
+		o.Serial = serial
 	}
 }
 

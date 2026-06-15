@@ -418,6 +418,19 @@ func TestAddDisk(t *testing.T) {
 				"-device", "virtio-blk-pci,drive=blk0",
 			},
 		},
+		{
+			name: "disk with serial",
+			id:   "blk2",
+			disk: &DiskConfig{
+				Path:     "/var/lib/vm/layer.erofs",
+				Readonly: true,
+				Serial:   "sbxblk2",
+			},
+			want: []string{
+				"-drive", "file=/var/lib/vm/layer.erofs,if=none,id=blk2,format=raw,readonly=on",
+				"-device", "virtio-blk-pci,drive=blk2,serial=sbxblk2",
+			},
+		},
 	}
 
 	for _, tt := range tests {
