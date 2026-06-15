@@ -4,13 +4,34 @@ package mounts
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/containerd/containerd/api/types"
+	"github.com/containerd/errdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTransformMounts_ExceedsDiskCap(t *testing.T) {
+	m := &linuxManager{}
+
+	// More individual EROFS layer devices than maxVirtioDisks: the cap check
+	// runs before any disk is attached, so a nil vm.Instance is never used.
+	var ms []*types.Mount
+	for i := 0; i <= maxVirtioDisks; i++ {
+		ms = append(ms, &types.Mount{
+			Type:   "erofs",
+			Source: fmt.Sprintf("/path/to/layer%d.erofs", i),
+		})
+	}
+
+	_, err := m.transformMounts(context.Background(), nil, "container-id", ms)
+	require.Error(t, err)
+	// Transient precondition (VMDK/fsmeta not ready), not Unimplemented.
+	assert.ErrorIs(t, err, errdefs.ErrFailedPrecondition)
+}
 
 func TestTruncateID(t *testing.T) {
 	tests := []struct {

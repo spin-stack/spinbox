@@ -20,6 +20,12 @@ import (
 
 const mountTypeOverlay = "overlay"
 
+// maxVirtioDisks bounds how many individual layer block devices we attach.
+// In the normal path the snapshotter collapses all EROFS layers into a single
+// merged VMDK, so a container needs only a couple of devices. Hitting this
+// limit almost always means the merged VMDK (fsmeta) is not ready yet.
+const maxVirtioDisks = 10
+
 type linuxManager struct{}
 
 func newManager() Manager {
@@ -80,8 +86,19 @@ func (m *linuxManager) transformMounts(ctx context.Context, vmi vm.Instance, id 
 		addDisks = append(addDisks, disksToAdd...)
 	}
 
-	if len(addDisks) > 10 {
-		return nil, fmt.Errorf("exceeded maximum virtio disk count: %d > 10: %w", len(addDisks), errdefs.ErrNotImplemented)
+	if len(addDisks) > maxVirtioDisks {
+		// Getting this many individual layer devices means the snapshotter handed
+		// us the per-layer EROFS mounts instead of a single merged VMDK. That
+		// normally happens because the merged VMDK (fsmeta) is generated
+		// asynchronously and is not ready yet (the first View/Prepare can race
+		// it), or because the layer set is incompatible and never produced an
+		// fsmeta. Surface that explicitly so the caller waits/retries instead of
+		// seeing an opaque device-count error.
+		return nil, fmt.Errorf(
+			"got %d individual EROFS layer devices (max %d): the merged VMDK/fsmeta is not ready yet "+
+				"(generated asynchronously) or the layers are incompatible; wait for fsmeta generation or "+
+				"check layer compatibility: %w",
+			len(addDisks), maxVirtioDisks, errdefs.ErrFailedPrecondition)
 	}
 
 	if err := m.addDisksToVM(ctx, vmi, addDisks); err != nil {
