@@ -13,6 +13,9 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+// fsTypeCgroup2 is the cgroup v2 filesystem type and source name.
+const fsTypeCgroup2 = "cgroup2"
+
 // TransformBindMounts converts bind mounts to extra files for the VM.
 func TransformBindMounts(ctx context.Context, b *Bundle) error {
 	for i, m := range b.Spec.Mounts {
@@ -57,8 +60,8 @@ func AdaptForVM(ctx context.Context, b *Bundle) error {
 	hasCgroup := false
 	for i, m := range b.Spec.Mounts {
 		if m.Destination == "/sys/fs/cgroup" {
-			b.Spec.Mounts[i].Type = "cgroup2"
-			b.Spec.Mounts[i].Source = "cgroup2"
+			b.Spec.Mounts[i].Type = fsTypeCgroup2
+			b.Spec.Mounts[i].Source = fsTypeCgroup2
 			b.Spec.Mounts[i].Options = ensureRW(m.Options)
 			hasCgroup = true
 			break
@@ -67,8 +70,8 @@ func AdaptForVM(ctx context.Context, b *Bundle) error {
 	if !hasCgroup {
 		b.Spec.Mounts = append(b.Spec.Mounts, specs.Mount{
 			Destination: "/sys/fs/cgroup",
-			Type:        "cgroup2",
-			Source:      "cgroup2",
+			Type:        fsTypeCgroup2,
+			Source:      fsTypeCgroup2,
 			Options:     []string{"nosuid", "noexec", "nodev", "rw"},
 		})
 	}

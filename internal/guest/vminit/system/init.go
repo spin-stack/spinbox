@@ -17,6 +17,14 @@ import (
 	"github.com/spin-stack/spinbox/internal/guest/vminit/extras"
 )
 
+// Filesystem types and mount options used across guest mount setup.
+const (
+	fsTypeTmpfs    = "tmpfs"
+	mountOptNosuid = "nosuid"
+	mountOptNoexec = "noexec"
+	mountOptNodev  = "nodev"
+)
+
 // Initialize performs all system initialization tasks for the VM guest.
 // This includes mounting filesystems, configuring cgroups, and setting up DNS.
 func Initialize(ctx context.Context) error {
@@ -84,13 +92,13 @@ func mountFilesystems() error {
 			Type:    "proc",
 			Source:  "proc",
 			Target:  "/proc",
-			Options: []string{"nosuid", "noexec", "nodev"},
+			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev},
 		},
 		{
 			Type:    "sysfs",
 			Source:  "sysfs",
 			Target:  "/sys",
-			Options: []string{"nosuid", "noexec", "nodev"},
+			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev},
 		},
 		{
 			Type:   "cgroup2",
@@ -98,22 +106,22 @@ func mountFilesystems() error {
 			Target: "/sys/fs/cgroup",
 		},
 		{
-			Type:    "tmpfs",
-			Source:  "tmpfs",
+			Type:    fsTypeTmpfs,
+			Source:  fsTypeTmpfs,
 			Target:  "/run",
-			Options: []string{"nosuid", "noexec", "nodev"},
+			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev},
 		},
 		{
-			Type:    "tmpfs",
-			Source:  "tmpfs",
+			Type:    fsTypeTmpfs,
+			Source:  fsTypeTmpfs,
 			Target:  "/tmp",
-			Options: []string{"nosuid", "noexec", "nodev"},
+			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev},
 		},
 		{
 			Type:    "devtmpfs",
 			Source:  "devtmpfs",
 			Target:  "/dev",
-			Options: []string{"nosuid", "noexec"},
+			Options: []string{mountOptNosuid, mountOptNoexec},
 		},
 	}, "/"); err != nil {
 		return err
@@ -133,10 +141,10 @@ func mountFilesystems() error {
 	}
 	if err := mount.All([]mount.Mount{
 		{
-			Type:    "tmpfs",
-			Source:  "tmpfs",
+			Type:    fsTypeTmpfs,
+			Source:  fsTypeTmpfs,
 			Target:  "/var/lib/spin-stack",
-			Options: []string{"nosuid", "nodev", "size=32m"},
+			Options: []string{mountOptNosuid, mountOptNodev, "size=32m"},
 		},
 	}, "/"); err != nil {
 		return fmt.Errorf("failed to mount /var/lib/spin-stack: %w", err)
@@ -156,13 +164,13 @@ func mountFilesystems() error {
 			Type:    "devpts",
 			Source:  "devpts",
 			Target:  "/dev/pts",
-			Options: []string{"nosuid", "noexec", "gid=5", "mode=0620", "ptmxmode=0666"},
+			Options: []string{mountOptNosuid, mountOptNoexec, "gid=5", "mode=0620", "ptmxmode=0666"},
 		},
 		{
-			Type:    "tmpfs",
+			Type:    fsTypeTmpfs,
 			Source:  "shm",
 			Target:  "/dev/shm",
-			Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=64m"},
+			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev, "mode=1777", "size=64m"},
 		},
 	}, "/")
 }

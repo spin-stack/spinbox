@@ -293,14 +293,6 @@ func (s *service) getContainerSnapshot() *containerSnapshot {
 	return s.snapshotContainerLocked()
 }
 
-// getContainerID returns the current container ID.
-// This is a convenience method for cases where only the ID is needed.
-func (s *service) getContainerID() string {
-	s.containerMu.Lock()
-	defer s.containerMu.Unlock()
-	return s.containerID
-}
-
 // service is the shim implementation of a remote shim over TTRPC.
 type service struct {
 	// === State Machine ===
@@ -729,7 +721,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	startTime := time.Now()
 	log.G(ctx).WithFields(log.Fields{
 		"id":                   r.ID,
-		"exec":                 r.ExecID,
+		fieldExec:              r.ExecID,
 		"has_cached_client":    s.connManager.HasClient(),
 		"intentional_shutdown": s.stateMachine.IsIntentionalShutdown(),
 	}).Info("start: request received")
@@ -748,7 +740,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 	log.G(ctx).WithFields(log.Fields{
 		"id":              r.ID,
-		"exec":            r.ExecID,
+		fieldExec:         r.ExecID,
 		"client_duration": clientDuration,
 	}).Info("start: got client, calling guest")
 
@@ -759,7 +751,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{
 			"id":             r.ID,
-			"exec":           r.ExecID,
+			fieldExec:        r.ExecID,
 			"rpc_duration":   rpcDuration,
 			"total_duration": time.Since(startTime),
 		}).Error("start: guest start failed")
@@ -767,7 +759,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	}
 	log.G(ctx).WithFields(log.Fields{
 		"id":             r.ID,
-		"exec":           r.ExecID,
+		fieldExec:        r.ExecID,
 		"pid":            resp.Pid,
 		"rpc_duration":   rpcDuration,
 		"total_duration": time.Since(startTime),
@@ -845,7 +837,7 @@ func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest
 			if i == 0 && r.ExecID == "" {
 				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
 			} else {
-				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
+				log.G(ctx).WithError(err).WithField(fieldExec, r.ExecID).Error("failed to shutdown exec io after delete")
 			}
 		}
 	}
@@ -901,7 +893,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		return nil, err
 	}
 	defer done()
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task request")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Debug("delete task request")
 
 	// Mark deletion in progress (only for container, not exec)
 	if r.ExecID == "" {
@@ -929,7 +921,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
 	if err != nil {
-		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
+		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Warn("delete task failed")
 		if r.ExecID == "" {
 			s.cleanupOnDeleteFailure(ctx, r.ID)
 		}
@@ -952,7 +944,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	delCleanup := s.collectDeleteCleanup(r)
 	s.runDeleteCleanup(ctx, r, delCleanup)
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task completed")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Debug("delete task completed")
 	return resp, nil
 }
 
@@ -964,7 +956,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 	}
 	defer done()
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec request")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Debug("exec request")
 
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
@@ -1063,7 +1055,7 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 	}
 	defer done()
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty request")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Debug("resize pty request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1112,7 +1104,7 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 
 	st, err := taskAPI.NewTTRPCTaskClient(vmc).State(ctx, r)
 	if err != nil {
-		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("state: guest state failed")
+		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Error("state: guest state failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
 	// Replace guest's I/O paths (rpcio:// URIs) with host FIFO paths for attach support.
@@ -1179,7 +1171,7 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	}
 	defer done()
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill request")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Debug("kill request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1213,7 +1205,7 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 	}
 	defer done()
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io request")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID, "stdin": r.Stdin}).Debug("close io request")
 
 	// If stdin is being closed and we have an RPC forwarder, signal it to close stdin.
 	// This allows the forwarder to stop waiting for FIFO writers and propagate the
@@ -1282,7 +1274,7 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 	}
 	defer done()
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait request")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, fieldExec: r.ExecID}).Debug("wait request")
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1425,15 +1417,15 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 	forwarder := s.getIOForwarder(taskExit.ContainerID, execID)
 	if forwarder == nil {
 		log.G(ctx).WithFields(log.Fields{
-			"container": taskExit.ContainerID,
-			"exec":      execID,
+			fieldContainer: taskExit.ContainerID,
+			fieldExec:      execID,
 		}).Debug("no I/O forwarder found for TaskExit, proceeding")
 		return
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"container": taskExit.ContainerID,
-		"exec":      execID,
+		fieldContainer: taskExit.ContainerID,
+		fieldExec:      execID,
 	}).Debug("waiting for I/O forwarder to complete before forwarding TaskExit")
 
 	// Wait for I/O to complete. With direct stream I/O, the guest closes the stream
@@ -1450,14 +1442,14 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 	select {
 	case <-done:
 		log.G(ctx).WithFields(log.Fields{
-			"container": taskExit.ContainerID,
-			"exec":      execID,
+			fieldContainer: taskExit.ContainerID,
+			fieldExec:      execID,
 		}).Debug("I/O forwarder complete, forwarding TaskExit")
 	case <-time.After(ioWaitTimeout):
 		log.G(ctx).WithFields(log.Fields{
-			"container": taskExit.ContainerID,
-			"exec":      execID,
-			"timeout":   ioWaitTimeout,
+			fieldContainer: taskExit.ContainerID,
+			fieldExec:      execID,
+			"timeout":      ioWaitTimeout,
 		}).Warn("timeout waiting for I/O forwarder, proceeding with TaskExit")
 	}
 }

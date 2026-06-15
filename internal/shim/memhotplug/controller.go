@@ -19,6 +19,9 @@ const (
 	defaultMemorySlots = 8
 )
 
+// fieldContainerID is the structured-logging field key for the container ID.
+const fieldContainerID = "container_id"
+
 // qmpMemoryClient defines the interface for QMP memory operations.
 // This interface exists to enable testing with mocks.
 type qmpMemoryClient interface {
@@ -177,7 +180,7 @@ func NewController(
 // Start begins monitoring memory usage and managing hotplug
 func (c *Controller) Start(ctx context.Context) {
 	log.G(ctx).WithFields(log.Fields{
-		"container_id":       c.containerID,
+		fieldContainerID:     c.containerID,
 		"boot_memory_mb":     c.bootMemory / (1024 * 1024),
 		"max_memory_mb":      c.maxMemory / (1024 * 1024),
 		"scale_up_threshold": c.config.ScaleUpThreshold,
@@ -219,7 +222,7 @@ func (c *Controller) EvaluateScaling(ctx context.Context) (hotplug.ScaleDirectio
 	// Sample memory usage
 	usagePct, ok, err := c.sampleMemory(ctx)
 	if err != nil {
-		log.G(ctx).WithError(err).WithField("container_id", c.containerID).
+		log.G(ctx).WithError(err).WithField(fieldContainerID, c.containerID).
 			Warn("memory-hotplug: failed to sample memory usage")
 		return hotplug.ScaleNone, nil
 	}
@@ -233,7 +236,7 @@ func (c *Controller) EvaluateScaling(ctx context.Context) (hotplug.ScaleDirectio
 	safetyMargin := c.config.OOMSafetyMarginMB * 1024 * 1024
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id":      c.containerID,
+		fieldContainerID:    c.containerID,
 		"usage_pct":         fmt.Sprintf("%.2f", usagePct),
 		"current_memory_mb": c.currentMemory / (1024 * 1024),
 		"free_mb":           freeMemory / (1024 * 1024),
@@ -269,7 +272,7 @@ func (c *Controller) ScaleUp(ctx context.Context) error {
 	// Find available slot
 	slotID := c.findFreeSlot()
 	if slotID < 0 {
-		log.G(ctx).WithField("container_id", c.containerID).
+		log.G(ctx).WithField(fieldContainerID, c.containerID).
 			Warn("memory-hotplug: no free memory slots available")
 		return fmt.Errorf("no free memory slots available")
 	}
@@ -284,7 +287,7 @@ func (c *Controller) ScaleUp(ctx context.Context) error {
 	freeMemory := c.currentMemory - c.lastMemoryUsage
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id":      c.containerID,
+		fieldContainerID:    c.containerID,
 		"current_memory_mb": c.currentMemory / (1024 * 1024),
 		"target_memory_mb":  targetMemory / (1024 * 1024),
 		"add_mb":            amountToAdd / (1024 * 1024),
@@ -340,7 +343,7 @@ func (c *Controller) ScaleDown(ctx context.Context) error {
 	projectedFree := targetMemory - c.lastMemoryUsage
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id":      c.containerID,
+		fieldContainerID:    c.containerID,
 		"current_memory_mb": c.currentMemory / (1024 * 1024),
 		"target_memory_mb":  targetMemory / (1024 * 1024),
 		"remove_mb":         amountToRemove / (1024 * 1024),

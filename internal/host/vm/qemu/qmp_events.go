@@ -68,8 +68,8 @@ func qmpStringField(data map[string]any, key string) string {
 // handleEvent processes QMP asynchronous events with structured logging.
 func (q *qmpClient) handleEvent(ctx context.Context, resp *qmpResponse) {
 	logger := log.G(ctx).WithFields(log.Fields{
-		"event": resp.Event,
-		"data":  resp.Data,
+		"event":   resp.Event,
+		fieldData: resp.Data,
 	})
 
 	handler, ok := qmpEventHandlers[resp.Event]

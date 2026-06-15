@@ -64,7 +64,7 @@ linters:
     - godot
     - godox
     - gomoddirectives
-    - gomodguard
+    - gomodguard_v2
     - gosec
     - inamedparam
     - interfacebloat
@@ -132,6 +132,13 @@ linters:
       max-complexity: 20
     dupl:
       threshold: 250
+    goconst:
+      # Test files legitimately repeat literals (fixtures, expected values);
+      # extracting constants there adds noise without value.
+      ignore-tests: true
+      # Generic short strings (name, data, count, ...) appear in unrelated
+      # contexts; only flag literals repeated 4+ times to avoid false churn.
+      min-occurrences: 4
     gocognit:
       min-complexity: 120
     revive:
@@ -209,6 +216,13 @@ linters:
       - linters:
           - gosec
         text: G304  # File inclusion via variable is intentional for CLI
+      - linters:
+          - gosec
+        text: G703  # Path traversal via taint analysis; paths are intentional (same as G304)
+      - linters:
+          - gosec
+        path: _test\.go$
+        text: G602  # Slice index in tests is guarded by preceding length checks
       # Service structs legitimately store context for service lifetime
       - linters:
           - containedctx

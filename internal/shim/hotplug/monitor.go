@@ -23,6 +23,13 @@ const (
 	ScaleDown
 )
 
+// Structured-logging field keys used across hotplug monitoring.
+const (
+	fieldResource    = "resource"
+	fieldContainerID = "container_id"
+	fieldRequired    = "required"
+)
+
 // MonitorConfig holds common configuration for hotplug monitoring.
 type MonitorConfig struct {
 	// MonitorInterval is how often to check resource usage.
@@ -109,8 +116,8 @@ func (m *Monitor) Start(ctx context.Context) {
 	m.mu.Unlock()
 
 	log.G(ctx).WithFields(log.Fields{
-		"resource":         m.scaler.Name(),
-		"container_id":     m.scaler.ContainerID(),
+		fieldResource:      m.scaler.Name(),
+		fieldContainerID:   m.scaler.ContainerID(),
 		"monitor_interval": m.config.MonitorInterval,
 	}).Info("hotplug: monitor started")
 
@@ -152,8 +159,8 @@ func (m *Monitor) monitorLoop(ctx context.Context) {
 		select {
 		case <-m.stopCh:
 			log.G(ctx).WithFields(log.Fields{
-				"resource":     m.scaler.Name(),
-				"container_id": m.scaler.ContainerID(),
+				fieldResource:    m.scaler.Name(),
+				fieldContainerID: m.scaler.ContainerID(),
 			}).Info("hotplug: monitor stopped")
 			return
 		case <-ctx.Done():
@@ -161,8 +168,8 @@ func (m *Monitor) monitorLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := m.checkAndAdjust(ctx); err != nil {
 				log.G(ctx).WithError(err).WithFields(log.Fields{
-					"resource":     m.scaler.Name(),
-					"container_id": m.scaler.ContainerID(),
+					fieldResource:    m.scaler.Name(),
+					fieldContainerID: m.scaler.ContainerID(),
 				}).Warn("hotplug: failed to check/adjust resource")
 			}
 		}
@@ -199,10 +206,10 @@ func (m *Monitor) handleScaleUp(ctx context.Context) error {
 	// Check cooldown
 	if !m.canScaleUp() {
 		log.G(ctx).WithFields(log.Fields{
-			"resource":     m.scaler.Name(),
-			"container_id": m.scaler.ContainerID(),
-			"cooldown":     time.Since(m.lastScaleUp),
-			"required":     m.config.ScaleUpCooldown,
+			fieldResource:    m.scaler.Name(),
+			fieldContainerID: m.scaler.ContainerID(),
+			"cooldown":       time.Since(m.lastScaleUp),
+			fieldRequired:    m.config.ScaleUpCooldown,
 		}).Debug("hotplug: scale-up cooldown active")
 		return nil
 	}
@@ -212,10 +219,10 @@ func (m *Monitor) handleScaleUp(ctx context.Context) error {
 
 	if m.consecutiveHighUsage < m.config.ScaleUpStability {
 		log.G(ctx).WithFields(log.Fields{
-			"resource":     m.scaler.Name(),
-			"container_id": m.scaler.ContainerID(),
-			"consecutive":  m.consecutiveHighUsage,
-			"required":     m.config.ScaleUpStability,
+			fieldResource:    m.scaler.Name(),
+			fieldContainerID: m.scaler.ContainerID(),
+			"consecutive":    m.consecutiveHighUsage,
+			fieldRequired:    m.config.ScaleUpStability,
 		}).Debug("hotplug: waiting for stable high usage")
 		return nil
 	}
@@ -235,10 +242,10 @@ func (m *Monitor) handleScaleDown(ctx context.Context) error {
 	// Check cooldown
 	if !m.canScaleDown() {
 		log.G(ctx).WithFields(log.Fields{
-			"resource":     m.scaler.Name(),
-			"container_id": m.scaler.ContainerID(),
-			"cooldown":     time.Since(m.lastScaleDown),
-			"required":     m.config.ScaleDownCooldown,
+			fieldResource:    m.scaler.Name(),
+			fieldContainerID: m.scaler.ContainerID(),
+			"cooldown":       time.Since(m.lastScaleDown),
+			fieldRequired:    m.config.ScaleDownCooldown,
 		}).Debug("hotplug: scale-down cooldown active")
 		return nil
 	}
@@ -248,10 +255,10 @@ func (m *Monitor) handleScaleDown(ctx context.Context) error {
 
 	if m.consecutiveLowUsage < m.config.ScaleDownStability {
 		log.G(ctx).WithFields(log.Fields{
-			"resource":     m.scaler.Name(),
-			"container_id": m.scaler.ContainerID(),
-			"consecutive":  m.consecutiveLowUsage,
-			"required":     m.config.ScaleDownStability,
+			fieldResource:    m.scaler.Name(),
+			fieldContainerID: m.scaler.ContainerID(),
+			"consecutive":    m.consecutiveLowUsage,
+			fieldRequired:    m.config.ScaleDownStability,
 		}).Debug("hotplug: waiting for stable low usage")
 		return nil
 	}
