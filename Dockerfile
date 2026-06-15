@@ -36,7 +36,7 @@ RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=kernel-aptcache,target=/var/cache/apt \
         apt-get update && apt-get install -y build-essential libncurses-dev flex bison libssl-dev libelf-dev bc cpio git wget xz-utils curl lz4
 
-ARG KERNEL_VERSION="6.18"
+ARG KERNEL_VERSION="7.1"
 ARG KERNEL_ARCH="x86_64"
 ARG KERNEL_NPROC="16"
 
@@ -51,14 +51,15 @@ WORKDIR /usr/src
 
 # Download kernel source (cached across builds)
 RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/var/cache/kernel \
+    KERNEL_MAJOR="$(echo "${KERNEL_VERSION}" | cut -d. -f1)" && \
     if [ ! -f "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" ]; then \
-        wget -O "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz; \
+        wget -O "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"; \
     fi && \
     tar -xf "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" -C /usr/src && \
     mv linux-${KERNEL_VERSION} linux
 
-# Copy kernel config from repository
-COPY build/kernel/config-6.18-x86_64 /usr/src/linux/.config
+# Copy kernel config from repository (per kernel version + arch)
+COPY build/kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH} /usr/src/linux/.config
 
 RUN <<EOT
     set -e
@@ -72,7 +73,13 @@ RUN <<EOT
     grep -q "CONFIG_VIRTIO_NET=y" .config || (echo "ERROR: CONFIG_VIRTIO_NET not enabled after olddefconfig!" ; echo "Current VIRTIO_NET setting:" ; grep VIRTIO_NET .config ; exit 1)
     grep -q "CONFIG_VIRTIO_PCI=y" .config || (echo "ERROR: CONFIG_VIRTIO_PCI not enabled!" ; exit 1)
     grep -q "CONFIG_NET_CLS_ACT=y" .config || (echo "ERROR: CONFIG_NET_CLS_ACT not enabled!" ; exit 1)
-    
+
+    # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at
+    # boot to pick the fastest, adding noticeable latency. It must stay disabled.
+    # (RAID6_PQ itself is not selected today, so the symbol is normally absent.)
+    ! grep -q "CONFIG_RAID6_PQ_BENCHMARK=y" .config || (echo "ERROR: CONFIG_RAID6_PQ_BENCHMARK must not be enabled (boot perf)!" ; exit 1)
+
+
     # Show what virtio and network options are actually set
     echo "Virtio configuration:"
     grep "CONFIG_VIRTIO" .config | grep -v "^#" || echo "No VIRTIO options enabled!"
@@ -84,7 +91,7 @@ RUN <<EOT
     echo "Verifying kernel config for Docker support..."
     /usr/local/bin/check-docker-config.sh /usr/src/linux/.config || (echo "Kernel config verification failed!" ; exit 1)
 
-    echo "Using kernel config from build/kernel/config-6.18-x86_64"
+    echo "Using kernel config from build/kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
 EOT
 
 # Compile the kernel (separate from base to allow config construction from fragments in the future)
