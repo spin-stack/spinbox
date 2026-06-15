@@ -6,12 +6,49 @@ package cni
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/containerd/log"
 	"github.com/containernetworking/cni/libcni"
 	current "github.com/containernetworking/cni/pkg/types/100"
+	"golang.org/x/sys/unix"
 )
+
+// cniLockPath is a host-wide lock file that serializes CNI plugin execution
+// across all spinbox shim processes.
+const cniLockPath = "/run/spinbox/cni.lock"
+
+// withCNIHostLock runs fn while holding an exclusive, host-wide file lock.
+//
+// Each container runs in its own shim process, but CNI plugins (bridge,
+// firewall) mutate shared host state (iptables chains, bridges). Concurrent
+// ADD/DEL from different shim processes race on the kernel xtables lock and
+// fail intermittently — e.g. the firewall plugin aborting an ADD with an empty
+// error. Serializing the plugin chain across processes removes that race.
+//
+// The lock is advisory (flock) and released when fn returns. It must NOT be
+// acquired recursively: a single shim goroutine that re-entered it would block
+// forever waiting on its own lock, so internal cleanup paths call the
+// *Locked helpers directly.
+func withCNIHostLock(_ context.Context, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(cniLockPath), 0o755); err != nil {
+		return fmt.Errorf("create CNI lock dir: %w", err)
+	}
+	f, err := os.OpenFile(cniLockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open CNI lock: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("acquire CNI lock: %w", err)
+	}
+	defer func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }()
+
+	return fn()
+}
 
 // CNIManager manages CNI plugin execution for VM networking.
 type CNIManager struct {
@@ -90,6 +127,17 @@ func (m *CNIManager) loadAndCacheConfig() error {
 //   - cni.ErrIPAMExhausted: no IPs available in pool
 //   - cni.ErrTAPNotCreated: tc-redirect-tap plugin didn't create TAP device
 func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNIResult, error) {
+	var result *CNIResult
+	err := withCNIHostLock(ctx, func() error {
+		var setupErr error
+		result, setupErr = m.setupLocked(ctx, vmID, netns)
+		return setupErr
+	})
+	return result, err
+}
+
+// setupLocked performs the CNI ADD. The caller must hold the host CNI lock.
+func (m *CNIManager) setupLocked(ctx context.Context, vmID string, netns string) (*CNIResult, error) {
 	// Get cached network configuration
 	netConfList, err := m.getNetworkConfig()
 	if err != nil {
@@ -111,8 +159,9 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 	// Parse the result
 	cniResult, err := ParseCNIResultWithNetNS(result, netns)
 	if err != nil {
-		// Clean up on parse failure - log teardown errors but return parse error
-		if teardownErr := m.Teardown(ctx, vmID, netns); teardownErr != nil {
+		// Clean up on parse failure - log teardown errors but return parse error.
+		// Use teardownLocked: the host CNI lock is already held by Setup.
+		if teardownErr := m.teardownLocked(ctx, vmID, netns); teardownErr != nil {
 			log.G(ctx).WithError(teardownErr).WithField("vmID", vmID).
 				Warn("failed to teardown CNI after parse failure")
 		}
@@ -125,6 +174,13 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 // Teardown executes the CNI plugin chain to clean up networking for a VM.
 // Errors are classified - use errors.Is() to check error categories.
 func (m *CNIManager) Teardown(ctx context.Context, vmID string, netns string) error {
+	return withCNIHostLock(ctx, func() error {
+		return m.teardownLocked(ctx, vmID, netns)
+	})
+}
+
+// teardownLocked performs the CNI DEL. The caller must hold the host CNI lock.
+func (m *CNIManager) teardownLocked(ctx context.Context, vmID string, netns string) error {
 	// Get cached network configuration
 	netConfList, err := m.getNetworkConfig()
 	if err != nil {
