@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -41,7 +42,12 @@ const (
 	featuresFilePerms = 0600
 )
 
-type systemService struct{}
+type systemService struct {
+	// frozenMu guards frozen, the mount points frozen by FreezeFilesystems and
+	// awaiting ThawFilesystems.
+	frozenMu sync.Mutex
+	frozen   []string
+}
 
 var prepareShutdown = guestsystem.Cleanup
 
@@ -221,6 +227,35 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 
 func (s *systemService) PrepareShutdown(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	prepareShutdown(ctx)
+	return &emptypb.Empty{}, nil
+}
+
+// FreezeFilesystems freezes the container's writable filesystem(s) (FIFREEZE)
+// so the backing rwlayer image can be read consistently while the VM runs.
+func (s *systemService) FreezeFilesystems(ctx context.Context, _ *emptypb.Empty) (*api.FreezeFilesystemsResponse, error) {
+	frozen, err := guestsystem.FreezeWritableFilesystems(ctx)
+	if err != nil {
+		return nil, errgrpc.ToGRPC(err)
+	}
+
+	s.frozenMu.Lock()
+	s.frozen = frozen
+	s.frozenMu.Unlock()
+
+	return &api.FreezeFilesystemsResponse{Frozen: frozen}, nil
+}
+
+// ThawFilesystems thaws filesystems previously frozen by FreezeFilesystems.
+// It is idempotent: thawing when nothing is frozen is a no-op.
+func (s *systemService) ThawFilesystems(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	s.frozenMu.Lock()
+	paths := s.frozen
+	s.frozen = nil
+	s.frozenMu.Unlock()
+
+	if err := guestsystem.ThawFilesystems(ctx, paths); err != nil {
+		return nil, errgrpc.ToGRPC(err)
+	}
 	return &emptypb.Empty{}, nil
 }
 

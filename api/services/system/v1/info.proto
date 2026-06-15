@@ -21,6 +21,21 @@ service System {
 	// and commit flows can rely on a quiesced writable layer.
 	rpc PrepareShutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
 
+	// FreezeFilesystems freezes the container's writable filesystem(s) via the
+	// FIFREEZE ioctl. This flushes dirty page cache to the block device and
+	// quiesces the on-disk filesystem so the backing rwlayer image can be read
+	// consistently while the VM keeps running. The host calls this from Pause
+	// (before suspending vCPUs); each frozen mount must later be thawed.
+	//
+	// Returns:
+	//   - INTERNAL: an FIFREEZE ioctl failed (already-frozen mounts are skipped)
+	rpc FreezeFilesystems(google.protobuf.Empty) returns (FreezeFilesystemsResponse);
+
+	// ThawFilesystems thaws filesystems previously frozen by FreezeFilesystems.
+	// It is best-effort and idempotent: thawing a filesystem that is not frozen
+	// is not an error. The host calls this from Resume (after restarting vCPUs).
+	rpc ThawFilesystems(google.protobuf.Empty) returns (google.protobuf.Empty);
+
 	// OfflineCPU takes a CPU offline via sysfs before hot-unplug.
 	// The CPU must have been previously onlined and cannot be CPU 0 (boot CPU).
 	//
@@ -64,6 +79,11 @@ message InfoResponse {
 
 	// kernel_version is the Linux kernel version running in the VM (e.g., "6.1.0").
 	string kernel_version = 2;
+}
+
+message FreezeFilesystemsResponse {
+	// frozen lists the mount points that were frozen by this call.
+	repeated string frozen = 1;
 }
 
 message OfflineCPURequest {
