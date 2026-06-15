@@ -15,6 +15,20 @@ import (
 )
 
 func TestNewCNIManager(t *testing.T) {
+	// Provide a hermetic conf dir with a valid CNI config so the test does
+	// not depend on the host's /etc/cni/net.d (absent on CI runners).
+	validConfDir := t.TempDir()
+	config := map[string]interface{}{
+		"cniVersion": "1.0.0",
+		"name":       "test-network",
+		"plugins": []map[string]interface{}{
+			{"type": "bridge"},
+		},
+	}
+	data, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(validConfDir, "10-test.conflist"), data, 0600))
+
 	tests := []struct {
 		name        string
 		confDir     string
@@ -23,7 +37,7 @@ func TestNewCNIManager(t *testing.T) {
 	}{
 		{
 			name:        "valid configuration",
-			confDir:     "/etc/cni/net.d",
+			confDir:     validConfDir,
 			binDir:      "/opt/cni/bin",
 			expectError: false,
 		},
@@ -35,7 +49,7 @@ func TestNewCNIManager(t *testing.T) {
 		},
 		{
 			name:        "empty bin dir",
-			confDir:     "/etc/cni/net.d",
+			confDir:     validConfDir,
 			binDir:      "",
 			expectError: true,
 		},
