@@ -97,6 +97,25 @@ func (q *Instance) QMPClient() *qmpClient {
 	return q.qmpClient
 }
 
+// Pause suspends VM execution (all vCPUs) via the QMP "stop" command.
+// The VM must be running.
+func (q *Instance) Pause(ctx context.Context) error {
+	c := q.QMPClient()
+	if c == nil {
+		return fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
+	}
+	return c.Stop(ctx)
+}
+
+// Resume restarts a paused VM (all vCPUs) via the QMP "cont" command.
+func (q *Instance) Resume(ctx context.Context) error {
+	c := q.QMPClient()
+	if c == nil {
+		return fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
+	}
+	return c.Cont(ctx)
+}
+
 // CPUHotplugger returns an interface for CPU hotplug operations
 func (q *Instance) CPUHotplugger() (vm.CPUHotplugger, error) {
 	if q.getState() != vmStateRunning {
