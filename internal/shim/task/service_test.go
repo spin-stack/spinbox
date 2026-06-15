@@ -9,11 +9,32 @@ import (
 	"testing"
 	"time"
 
+	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/spin-stack/spinbox/internal/host/network"
 	"github.com/spin-stack/spinbox/internal/shim/lifecycle"
 )
+
+// Pause/Resume are now wired to the VM (QMP stop/cont) rather than stubbed.
+// Without a running VM, Instance() reports a precondition failure — assert the
+// methods reach the VM layer (FailedPrecondition) instead of the old stub
+// behavior (Unimplemented).
+func TestPauseResume_RequireVM(t *testing.T) {
+	s := newTestService()
+
+	_, perr := s.Pause(t.Context(), &taskAPI.PauseRequest{ID: "ctr"})
+	require.Error(t, perr)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(perr))
+
+	_, rerr := s.Resume(t.Context(), &taskAPI.ResumeRequest{ID: "ctr"})
+	require.Error(t, rerr)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(rerr))
+}
 
 type mockShutdownService struct {
 	callbacks []func(context.Context) error

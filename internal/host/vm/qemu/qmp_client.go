@@ -244,6 +244,19 @@ func (q *qmpClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
 	return qmpQuery[*qmpStatus](q, ctx, "query-status")
 }
 
+// Stop pauses VM execution (suspends all vCPUs) via the QMP "stop" command.
+// Device and memory state are retained; use Cont to resume.
+func (q *qmpClient) Stop(ctx context.Context) error {
+	_, err := q.execute(ctx, "stop", nil)
+	return err
+}
+
+// Cont resumes a stopped VM (restarts all vCPUs) via the QMP "cont" command.
+func (q *qmpClient) Cont(ctx context.Context) error {
+	_, err := q.execute(ctx, "cont", nil)
+	return err
+}
+
 // DeviceAdd hotplugs a device.
 func (q *qmpClient) DeviceAdd(ctx context.Context, driver string, args map[string]any) error {
 	if args == nil {

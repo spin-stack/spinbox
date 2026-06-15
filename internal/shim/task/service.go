@@ -341,6 +341,11 @@ type service struct {
 	inflight          atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
 	exitFunc          func(code int) // Exit function (default: os.Exit), injectable for testing
 
+	// paused is set while the VM is suspended via QMP stop (Pause). While paused
+	// the whole VM is frozen, including vminitd, so the guest cannot answer State
+	// queries; State short-circuits to PAUSED using cached process state.
+	paused atomic.Bool
+
 	// === VM Exit Watchdog ===
 	// vmExitCh is closed when the QEMU process exits.
 	// This provides a reliable signal for event stream goroutine to exit
@@ -1095,6 +1100,26 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		}
 	}
 
+	// While paused, the entire VM (including vminitd) is frozen by QMP stop, so
+	// the guest cannot answer a State query. Report PAUSED from cached state
+	// instead of blocking on the frozen guest.
+	if r.ExecID == "" && s.paused.Load() {
+		if snap != nil {
+			log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("state: short-circuit paused state")
+			st := &taskAPI.StateResponse{
+				Status: tasktypes.Status_PAUSED,
+				Pid:    snap.pid,
+			}
+			if snap.initIO != nil {
+				st.Stdin = snap.initIO.stdin
+				st.Stdout = snap.initIO.stdout
+				st.Stderr = snap.initIO.stderr
+				st.Terminal = snap.initIO.terminal
+			}
+			return st, nil
+		}
+	}
+
 	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("state: failed to get client")
@@ -1143,10 +1168,21 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 	defer done()
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause request")
-	// Pause is not supported in VM-based runtime.
-	// True pause would require checkpointing CPU and memory state (e.g., QEMU snapshot or CRIU),
-	// which is not implemented. The cgroups freezer only suspends processes without preserving state.
-	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "pause is not supported: VM-based runtime cannot checkpoint CPU/memory state")
+
+	// spinbox runs one container per VM, so suspending the VM's vCPUs (QMP
+	// "stop") is equivalent to pausing the container. Execution halts while
+	// memory and device state are retained; Resume restarts it.
+	vmi, err := s.vmLifecycle.Instance()
+	if err != nil {
+		return nil, errgrpc.ToGRPC(fmt.Errorf("pause: %w", err))
+	}
+	if err := vmi.Pause(ctx); err != nil {
+		return nil, errgrpc.ToGRPC(fmt.Errorf("pause vm: %w", err))
+	}
+	s.paused.Store(true)
+
+	s.send(&eventstypes.TaskPaused{ContainerID: r.ID})
+	return &ptypes.Empty{}, nil
 }
 
 // Resume the container.
@@ -1158,9 +1194,18 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 	defer done()
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume request")
-	// Resume is not supported in VM-based runtime.
-	// Without checkpoint support, there is no paused state to resume from.
-	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "resume is not supported: VM-based runtime cannot restore CPU/memory state")
+
+	vmi, err := s.vmLifecycle.Instance()
+	if err != nil {
+		return nil, errgrpc.ToGRPC(fmt.Errorf("resume: %w", err))
+	}
+	if err := vmi.Resume(ctx); err != nil {
+		return nil, errgrpc.ToGRPC(fmt.Errorf("resume vm: %w", err))
+	}
+	s.paused.Store(false)
+
+	s.send(&eventstypes.TaskResumed{ContainerID: r.ID})
+	return &ptypes.Empty{}, nil
 }
 
 // Kill a process with the provided signal.

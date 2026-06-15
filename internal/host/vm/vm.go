@@ -190,6 +190,11 @@ type Instance interface {
 	Start(ctx context.Context, opts ...StartOpt) error
 	Shutdown(ctx context.Context) error
 
+	// Pause suspends VM execution (all vCPUs); the VM must be running.
+	Pause(ctx context.Context) error
+	// Resume restarts a paused VM (all vCPUs).
+	Resume(ctx context.Context) error
+
 	// Metadata
 	VMInfo() VMInfo
 }

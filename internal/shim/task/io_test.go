@@ -52,6 +52,14 @@ func (m *mockVMInstance) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockVMInstance) Pause(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockVMInstance) Resume(ctx context.Context) error {
+	return nil
+}
+
 func (m *mockVMInstance) Client() (*ttrpc.Client, error) {
 	return nil, errNotImplemented
 }
