@@ -18,6 +18,7 @@ require (
 	github.com/containerd/ttrpc v1.2.7
 	github.com/containerd/typeurl/v2 v2.2.3
 	github.com/containernetworking/cni v1.3.0
+	github.com/creack/pty v1.1.24
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/mdlayher/vsock v1.2.1
