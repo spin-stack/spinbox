@@ -11,6 +11,8 @@ import (
 type TTRPCSystemService interface {
 	Info(context.Context, *emptypb.Empty) (*InfoResponse, error)
 	PrepareShutdown(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
+	FreezeFilesystems(context.Context, *emptypb.Empty) (*FreezeFilesystemsResponse, error)
+	ThawFilesystems(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	OfflineCPU(context.Context, *OfflineCPURequest) (*emptypb.Empty, error)
 	OnlineCPU(context.Context, *OnlineCPURequest) (*emptypb.Empty, error)
 	OfflineMemory(context.Context, *OfflineMemoryRequest) (*emptypb.Empty, error)
@@ -33,6 +35,20 @@ func RegisterTTRPCSystemService(srv *ttrpc.Server, svc TTRPCSystemService) {
 					return nil, err
 				}
 				return svc.PrepareShutdown(ctx, &req)
+			},
+			"FreezeFilesystems": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req emptypb.Empty
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.FreezeFilesystems(ctx, &req)
+			},
+			"ThawFilesystems": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req emptypb.Empty
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.ThawFilesystems(ctx, &req)
 			},
 			"OfflineCPU": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req OfflineCPURequest
@@ -87,6 +103,22 @@ func (c *ttrpcsystemClient) Info(ctx context.Context, req *emptypb.Empty) (*Info
 func (c *ttrpcsystemClient) PrepareShutdown(ctx context.Context, req *emptypb.Empty) (*emptypb.Empty, error) {
 	var resp emptypb.Empty
 	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "PrepareShutdown", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *ttrpcsystemClient) FreezeFilesystems(ctx context.Context, req *emptypb.Empty) (*FreezeFilesystemsResponse, error) {
+	var resp FreezeFilesystemsResponse
+	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "FreezeFilesystems", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *ttrpcsystemClient) ThawFilesystems(ctx context.Context, req *emptypb.Empty) (*emptypb.Empty, error) {
+	var resp emptypb.Empty
+	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "ThawFilesystems", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

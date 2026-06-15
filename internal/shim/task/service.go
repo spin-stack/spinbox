@@ -95,6 +95,7 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
 
+	systemapi "github.com/spin-stack/spinbox/api/services/system/v1"
 	"github.com/spin-stack/spinbox/api/services/vmevents/v1"
 	"github.com/spin-stack/spinbox/internal/host/network"
 	"github.com/spin-stack/spinbox/internal/shim/cpuhotplug"
@@ -1176,7 +1177,20 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 	if err != nil {
 		return nil, errgrpc.ToGRPC(fmt.Errorf("pause: %w", err))
 	}
+
+	// Freeze the writable filesystem before suspending vCPUs (FIFREEZE must run
+	// in the live guest). This flushes the page cache and quiesces the on-disk
+	// rwlayer, so a paused container has a consistent backing image that a
+	// commit can read. FIFREEZE alone keeps the VM running; the QMP stop below
+	// then halts execution.
+	if err := s.freezeGuestFilesystems(ctx); err != nil {
+		return nil, errgrpc.ToGRPC(fmt.Errorf("pause: freeze guest filesystems: %w", err))
+	}
 	if err := vmi.Pause(ctx); err != nil {
+		// Roll back the freeze so the container is not left with a frozen fs.
+		if thawErr := s.thawGuestFilesystems(ctx); thawErr != nil {
+			log.G(ctx).WithError(thawErr).Warn("pause: thaw rollback failed after vm pause error")
+		}
 		return nil, errgrpc.ToGRPC(fmt.Errorf("pause vm: %w", err))
 	}
 	s.paused.Store(true)
@@ -1204,8 +1218,43 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 	}
 	s.paused.Store(false)
 
+	// Thaw after vCPUs are running again (FITHAW must run in the live guest).
+	if err := s.thawGuestFilesystems(ctx); err != nil {
+		return nil, errgrpc.ToGRPC(fmt.Errorf("resume: thaw guest filesystems: %w", err))
+	}
+
 	s.send(&eventstypes.TaskResumed{ContainerID: r.ID})
 	return &ptypes.Empty{}, nil
+}
+
+// freezeGuestFilesystems asks vminitd to FIFREEZE the container's writable
+// filesystem(s) so the backing rwlayer image is consistent on disk.
+func (s *service) freezeGuestFilesystems(ctx context.Context) error {
+	vmc, cleanup, err := s.getTaskClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	resp, err := systemapi.NewTTRPCSystemClient(vmc).FreezeFilesystems(ctx, &ptypes.Empty{})
+	if err != nil {
+		return err
+	}
+	log.G(ctx).WithField("frozen", resp.GetFrozen()).Debug("froze guest filesystems")
+	return nil
+}
+
+// thawGuestFilesystems asks vminitd to FITHAW filesystems frozen by a prior
+// freeze. It is idempotent on the guest side.
+func (s *service) thawGuestFilesystems(ctx context.Context) error {
+	vmc, cleanup, err := s.getTaskClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	_, err = systemapi.NewTTRPCSystemClient(vmc).ThawFilesystems(ctx, &ptypes.Empty{})
+	return err
 }
 
 // Kill a process with the provided signal.
