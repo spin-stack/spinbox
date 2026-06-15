@@ -66,6 +66,7 @@ func (q *Instance) AddDisk(ctx context.Context, blockID, mountPath string, opts 
 		Path:     mountPath,
 		Readonly: mc.Readonly,
 		ID:       blockID,
+		Serial:   mc.Serial,
 	})
 
 	log.G(ctx).WithFields(log.Fields{

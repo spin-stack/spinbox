@@ -215,6 +215,17 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 			m.Options = remaining
 		}
 
+		// Resolve serial-identified block sources ("serial:<id>") to their real
+		// /dev/<dev> path. No-op for ordinary sources (host fallback path).
+		if resolved, ok, err := resolveBlockSerialSource(ctx, m.Source); err != nil {
+			if cleanupErr := cleanupMounts(ctx, active); cleanupErr != nil {
+				log.G(ctx).WithError(cleanupErr).Warn("cleanup failed after serial resolution error")
+			}
+			return nil, err
+		} else if ok {
+			m.Source = resolved
+		}
+
 		// Perform the mount
 		now := time.Now()
 		am := mount.ActiveMount{

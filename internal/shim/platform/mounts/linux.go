@@ -14,6 +14,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
+	"github.com/spin-stack/spinbox/internal/host/mountutil"
 	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
@@ -48,8 +49,17 @@ func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, ro
 type diskOptions struct {
 	name     string
 	source   string
+	serial   string
 	readOnly bool
 	vmdk     bool
+}
+
+// blockSerial returns the virtio-blk serial for the disk at the given slot
+// letter ('a', 'b', ...). The guest resolves the device by this serial via
+// /sys/block/<dev>/serial, so the layer→device mapping does not depend on PCI
+// enumeration order. Kept short to fit virtio-blk's 20-char serial limit.
+func blockSerial(disk byte) string {
+	return fmt.Sprintf("sbxblk%d", int(disk-'a'))
 }
 
 // transformMounts does not perform any local mounts but transforms
@@ -127,9 +137,11 @@ func (m *linuxManager) handleEROFS(_ context.Context, id string, disks *byte, mn
 		isVMDK = true
 	}
 
+	serial := blockSerial(*disks)
 	addDisks := []diskOptions{{
 		name:     disk,
 		source:   source,
+		serial:   serial,
 		readOnly: true,
 		vmdk:     isVMDK,
 	}}
@@ -145,7 +157,7 @@ func (m *linuxManager) handleEROFS(_ context.Context, id string, disks *byte, mn
 
 	out := &types.Mount{
 		Type:    "erofs",
-		Source:  fmt.Sprintf("/dev/vd%c", *disks),
+		Source:  mountutil.BlockSerialScheme + serial,
 		Target:  mnt.Target,
 		Options: filterOptions(guestOptions),
 	}
@@ -164,9 +176,10 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 		}
 	}
 	mnt.Options = filterOptions(mnt.Options)
+	serial := blockSerial(*disks)
 	out := &types.Mount{
 		Type:    "ext4",
-		Source:  fmt.Sprintf("/dev/vd%c", *disks),
+		Source:  mountutil.BlockSerialScheme + serial,
 		Target:  mnt.Target,
 		Options: mnt.Options,
 	}
@@ -175,6 +188,7 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 	addDisks := []diskOptions{{
 		name:     disk,
 		source:   mnt.Source,
+		serial:   serial,
 		readOnly: readOnly,
 		vmdk:     false,
 	}}
@@ -315,6 +329,9 @@ func (m *linuxManager) addDisksToVM(ctx context.Context, vmi vm.Instance, disks 
 		}
 		if do.vmdk {
 			opts = append(opts, vm.WithVmdk())
+		}
+		if do.serial != "" {
+			opts = append(opts, vm.WithSerial(do.serial))
 		}
 		if err := vmi.AddDisk(ctx, do.name, do.source, opts...); err != nil {
 			return err

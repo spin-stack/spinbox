@@ -190,7 +190,14 @@ func (b *qemuCommandBuilder) addDisk(id string, disk *DiskConfig) *qemuCommandBu
 		driveArgs += ",readonly=on"
 	}
 	b.args = append(b.args, "-drive", driveArgs)
-	b.args = append(b.args, "-device", fmt.Sprintf("virtio-blk-pci,drive=%s", id))
+
+	deviceArgs := fmt.Sprintf("virtio-blk-pci,drive=%s", id)
+	// Expose a stable serial so the guest can resolve this device via
+	// /sys/block/<dev>/serial instead of relying on PCI enumeration order.
+	if disk.Serial != "" {
+		deviceArgs += fmt.Sprintf(",serial=%s", disk.Serial)
+	}
+	b.args = append(b.args, "-device", deviceArgs)
 	return b
 }
 
