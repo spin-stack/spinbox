@@ -74,19 +74,19 @@ func updateContainerLabels(ctx context.Context, containerID string, cid uint32, 
 	// Load container and update labels
 	container, err := client.LoadContainer(ctx, containerID)
 	if err != nil {
-		log.G(ctx).WithError(err).WithField("container", containerID).Warn("skipping label update: failed to load container")
+		log.G(ctx).WithError(err).WithField(fieldContainer, containerID).Warn("skipping label update: failed to load container")
 		return
 	}
 
 	if _, err := container.SetLabels(ctx, labels); err != nil {
-		log.G(ctx).WithError(err).WithField("container", containerID).Warn("failed to update container labels")
+		log.G(ctx).WithError(err).WithField(fieldContainer, containerID).Warn("failed to update container labels")
 		return
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"container": containerID,
-		"cid":       cid,
-		"ip":        netResult.Config.IP,
-		"gateway":   netResult.Config.Gateway,
+		fieldContainer: containerID,
+		"cid":          cid,
+		"ip":           netResult.Config.IP,
+		"gateway":      netResult.Config.Gateway,
 	}).Info("updated container labels with VM runtime metadata")
 }

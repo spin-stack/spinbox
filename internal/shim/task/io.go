@@ -28,6 +28,10 @@ import (
 
 const (
 	defaultScheme = "fifo"
+
+	// Structured-logging field keys used across the task service.
+	fieldContainer = "container"
+	fieldExec      = "exec"
 )
 
 // fifoKeepalive manages closers that need to be released after I/O completes.
@@ -236,9 +240,9 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 
 	if containerID != "" {
 		log.G(ctx).WithFields(log.Fields{
-			"container": containerID,
-			"exec":      execID,
-			"terminal":  sio.Terminal,
+			fieldContainer: containerID,
+			fieldExec:      execID,
+			"terminal":     sio.Terminal,
 		}).Debug("using direct stream I/O")
 	}
 

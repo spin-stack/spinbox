@@ -61,6 +61,9 @@ const (
 	defaultScaleDownStability = 6
 )
 
+// fieldContainerID is the structured-logging field key for the container ID.
+const fieldContainerID = "container_id"
+
 // DefaultConfig returns sensible defaults for CPU hotplug
 func DefaultConfig() Config {
 	return Config{
@@ -145,7 +148,7 @@ func NewController(containerID string, cpuHotplugger vm.CPUHotplugger, stats Sta
 // Start begins the monitoring loop
 func (c *Controller) Start(ctx context.Context) {
 	log.G(ctx).WithFields(log.Fields{
-		"container_id":       c.containerID,
+		fieldContainerID:     c.containerID,
 		"boot_cpus":          c.bootCPUs,
 		"max_cpus":           c.maxCPUs,
 		"scale_up_threshold": c.config.ScaleUpThreshold,
@@ -184,9 +187,9 @@ func (c *Controller) EvaluateScaling(ctx context.Context) (hotplug.ScaleDirectio
 	actualCPUs := len(cpus)
 	if actualCPUs != c.currentCPUs {
 		log.G(ctx).WithFields(log.Fields{
-			"container_id": c.containerID,
-			"expected":     c.currentCPUs,
-			"actual":       actualCPUs,
+			fieldContainerID: c.containerID,
+			"expected":       c.currentCPUs,
+			"actual":         actualCPUs,
 		}).Info("cpu-hotplug: CPU count mismatch, updating")
 		c.currentCPUs = actualCPUs
 	}
@@ -194,7 +197,7 @@ func (c *Controller) EvaluateScaling(ctx context.Context) (hotplug.ScaleDirectio
 	// Sample CPU usage
 	usagePct, throttledPct, ok, err := c.sampleCPU(ctx)
 	if err != nil {
-		log.G(ctx).WithError(err).WithField("container_id", c.containerID).
+		log.G(ctx).WithError(err).WithField(fieldContainerID, c.containerID).
 			Warn("cpu-hotplug: failed to sample CPU usage")
 		return hotplug.ScaleNone, nil
 	}
@@ -203,10 +206,10 @@ func (c *Controller) EvaluateScaling(ctx context.Context) (hotplug.ScaleDirectio
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id":  c.containerID,
-		"usage_pct":     fmt.Sprintf("%.2f", usagePct),
-		"throttled_pct": fmt.Sprintf("%.2f", throttledPct),
-		"current_cpus":  c.currentCPUs,
+		fieldContainerID: c.containerID,
+		"usage_pct":      fmt.Sprintf("%.2f", usagePct),
+		"throttled_pct":  fmt.Sprintf("%.2f", throttledPct),
+		"current_cpus":   c.currentCPUs,
 	}).Debug("cpu-hotplug: CPU usage sample")
 
 	// Don't scale if throttled (quota-limited, not CPU-limited)
@@ -236,9 +239,9 @@ func (c *Controller) ScaleUp(ctx context.Context) error {
 	defer c.mu.Unlock()
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id": c.containerID,
-		"current":      c.currentCPUs,
-		"target":       c.currentCPUs + 1,
+		fieldContainerID: c.containerID,
+		"current":        c.currentCPUs,
+		"target":         c.currentCPUs + 1,
 	}).Info("cpu-hotplug: scaling up vCPUs")
 
 	// Query current CPUs to find available ID
@@ -263,8 +266,8 @@ func (c *Controller) ScaleUp(ctx context.Context) error {
 		}
 
 		log.G(ctx).WithFields(log.Fields{
-			"container_id": c.containerID,
-			"cpu_id":       nextID,
+			fieldContainerID: c.containerID,
+			"cpu_id":         nextID,
 		}).Info("cpu-hotplug: added vCPU")
 
 		// Online the CPU in the guest
@@ -288,9 +291,9 @@ func (c *Controller) ScaleDown(ctx context.Context) error {
 	defer c.mu.Unlock()
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id": c.containerID,
-		"current":      c.currentCPUs,
-		"target":       c.currentCPUs - 1,
+		fieldContainerID: c.containerID,
+		"current":        c.currentCPUs,
+		"target":         c.currentCPUs - 1,
 	}).Info("cpu-hotplug: scaling down vCPUs")
 
 	// Query current CPUs
@@ -327,8 +330,8 @@ func (c *Controller) ScaleDown(ctx context.Context) error {
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id": c.containerID,
-		"cpu_id":       removeCPU,
+		fieldContainerID: c.containerID,
+		"cpu_id":         removeCPU,
 	}).Info("cpu-hotplug: removed vCPU")
 
 	c.currentCPUs--

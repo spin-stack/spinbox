@@ -51,7 +51,7 @@ func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"slot_id":    slotID,
+		fieldSlotID:  slotID,
 		"size_bytes": sizeBytes,
 		"size_mb":    sizeBytes / (1024 * 1024),
 		"backend_id": backendID,
@@ -68,8 +68,8 @@ func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"slot_id": slotID,
-		"dimm_id": dimmID,
+		fieldSlotID: slotID,
+		"dimm_id":   dimmID,
 	}).Debug("qemu: hotplugging memory device")
 
 	if err := q.DeviceAdd(ctx, "pc-dimm", dimmArgs); err != nil {
@@ -86,7 +86,7 @@ func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 		if err == nil {
 			if afterSummary.BaseMemory+afterSummary.PluggedMemory <= beforeSummary.BaseMemory+beforeSummary.PluggedMemory {
 				log.G(ctx).WithFields(log.Fields{
-					"slot_id":       slotID,
+					fieldSlotID:     slotID,
 					"before_total":  beforeSummary.BaseMemory + beforeSummary.PluggedMemory,
 					"after_total":   afterSummary.BaseMemory + afterSummary.PluggedMemory,
 					"expected_size": sizeBytes,
@@ -94,7 +94,7 @@ func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 				return fmt.Errorf("device_add did not increase memory size")
 			}
 			log.G(ctx).WithFields(log.Fields{
-				"slot_id":    slotID,
+				fieldSlotID:  slotID,
 				"added_mb":   sizeBytes / (1024 * 1024),
 				"total_mb":   (afterSummary.BaseMemory + afterSummary.PluggedMemory) / (1024 * 1024),
 				"plugged_mb": afterSummary.PluggedMemory / (1024 * 1024),
@@ -114,8 +114,8 @@ func (q *qmpClient) UnplugMemory(ctx context.Context, slotID int) error {
 	backendID := fmt.Sprintf("mem%d", slotID)
 
 	log.G(ctx).WithFields(log.Fields{
-		"slot_id": slotID,
-		"dimm_id": dimmID,
+		fieldSlotID: slotID,
+		"dimm_id":   dimmID,
 	}).Debug("qemu: unplugging memory device")
 
 	// Step 1: Remove device

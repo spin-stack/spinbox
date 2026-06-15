@@ -20,6 +20,9 @@ import (
 	"github.com/spin-stack/spinbox/internal/guest/vminit/systools"
 )
 
+// fieldExec is the structured-logging field key for the exec ID.
+const fieldExec = "exec"
+
 // Create a new initial process and container with the underlying OCI runtime.
 // The lock is held only briefly to check for duplicates and store the container,
 // not during the slow runc.NewContainer() call.
@@ -90,8 +93,8 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 // Start a process
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	log.G(ctx).WithFields(log.Fields{
-		"id":   r.ID,
-		"exec": r.ExecID,
+		"id":      r.ID,
+		fieldExec: r.ExecID,
 	}).Info("Start: request received")
 
 	container, err := s.getContainer(r.ID)
@@ -195,16 +198,16 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	p, err := container.Process(r.ExecID)
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{
-			"id":   r.ID,
-			"exec": r.ExecID,
+			"id":      r.ID,
+			fieldExec: r.ExecID,
 		}).Error("State: process not found")
 		return nil, errgrpc.ToGRPC(err)
 	}
 	st, err := p.Status(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{
-			"id":   r.ID,
-			"exec": r.ExecID,
+			"id":      r.ID,
+			fieldExec: r.ExecID,
 		}).Error("State: failed to get process status")
 		return nil, err
 	}
@@ -222,9 +225,9 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		status = task.Status_PAUSING
 	default:
 		log.G(ctx).WithFields(log.Fields{
-			"id":     r.ID,
-			"exec":   r.ExecID,
-			"status": st,
+			"id":      r.ID,
+			fieldExec: r.ExecID,
+			"status":  st,
 		}).Warn("State: unknown status string from process")
 	}
 	sio := p.Stdio()

@@ -60,26 +60,26 @@ func (q *qmpClient) HotplugCPU(ctx context.Context, cpuID int) error {
 			}
 			maps.Copy(args, match.Props)
 			log.G(ctx).WithFields(log.Fields{
-				"cpu_id":   cpuID,
+				fieldCPUID: cpuID,
 				"driver":   driver,
 				"props":    match.Props,
 				"qom_path": match.QOMPath,
 			}).Debug("qemu: using hotpluggable CPU slot")
 		} else {
 			log.G(ctx).WithFields(log.Fields{
-				"cpu_id": cpuID,
-				"count":  len(cpus),
+				fieldCPUID: cpuID,
+				"count":    len(cpus),
 			}).Debug("qemu: no matching hotpluggable CPU slot; using default props")
 		}
 	} else {
 		log.G(ctx).WithFields(log.Fields{
-			"cpu_id": cpuID,
-			"error":  err,
+			fieldCPUID: cpuID,
+			"error":    err,
 		}).Debug("qemu: failed to query hotpluggable CPUs; using default props")
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"cpu_id":    cpuID,
+		fieldCPUID:  cpuID,
 		"driver":    driver,
 		"socket_id": args["socket-id"],
 		"core_id":   args["core-id"],
@@ -94,7 +94,7 @@ func (q *qmpClient) HotplugCPU(ctx context.Context, cpuID int) error {
 		if cpus, err := q.QueryCPUs(ctx); err == nil {
 			if len(cpus) <= beforeCount {
 				log.G(ctx).WithFields(log.Fields{
-					"cpu_id":       cpuID,
+					fieldCPUID:     cpuID,
 					"before_count": beforeCount,
 					"after_count":  len(cpus),
 				}).Warn("qemu: device_add did not increase CPU count")
@@ -155,7 +155,7 @@ func (q *qmpClient) UnplugCPU(ctx context.Context, cpuID int) error {
 	deviceID := fmt.Sprintf("cpu%d", cpuID)
 
 	log.G(ctx).WithFields(log.Fields{
-		"cpu_id":    cpuID,
+		fieldCPUID:  cpuID,
 		"device_id": deviceID,
 	}).Debug("qemu: unplugging vCPU")
 

@@ -16,6 +16,13 @@ import (
 	qmpapi "github.com/digitalocean/go-qemu/qmp"
 )
 
+// QMP message and log field keys shared across the qemu package.
+const (
+	fieldCPUID  = "cpu_id"
+	fieldSlotID = "slot_id"
+	fieldData   = "data"
+)
+
 // qmpClient implements QEMU Machine Protocol (QMP) client.
 // QMP is a JSON-RPC protocol for controlling QEMU via a Unix socket.
 //
@@ -210,9 +217,9 @@ func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[st
 // This is more reliable than ACPI powerdown for some Linux distributions.
 func (q *qmpClient) SendCtrlAltDelete(ctx context.Context) error {
 	keys := []any{
-		map[string]any{"type": "qcode", "data": "ctrl"},
-		map[string]any{"type": "qcode", "data": "alt"},
-		map[string]any{"type": "qcode", "data": "delete"},
+		map[string]any{"type": "qcode", fieldData: "ctrl"},
+		map[string]any{"type": "qcode", fieldData: "alt"},
+		map[string]any{"type": "qcode", fieldData: "delete"},
 	}
 	_, err := q.execute(ctx, "send-key", map[string]any{
 		"keys": keys,
