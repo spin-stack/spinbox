@@ -84,6 +84,7 @@ func newTestService() *service {
 		eventsDone:       make(chan struct{}),
 		forwardDone:      forwardDone,
 		vmExitCh:         make(chan struct{}),
+		vmLifecycle:      lifecycle.NewManager(),
 		connManager:      NewConnectionManager(nil, nil),
 		networkManager:   &mockNetworkManager{},
 		exitFunc:         func(int) {},
