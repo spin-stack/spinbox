@@ -32,9 +32,14 @@ const maxVirtioDisks = 10
 const (
 	// layerBlobExt is the extension of EROFS layer blob files.
 	layerBlobExt = ".erofs"
-	// manifestFilename is the snapshotter's per-snapshot layer manifest,
-	// listing the digest-based layer digests in VMDK order (oldest first).
+	// manifestFilename is the snapshotter's per-snapshot layer manifest. It has
+	// one line per layer in VMDK order (oldest first), positionally 1:1 with the
+	// device= options: "sha256:<hex>" for content-addressed blobs and
+	// "blob:<basename>" for fallback blobs. Written atomically by the snapshotter.
 	manifestFilename = "layers.manifest"
+	// fallbackTokenPrefix labels manifest entries for blobs without a content
+	// digest (e.g. snapshot-<id>.erofs), keeping the file 1:1 with device=.
+	fallbackTokenPrefix = "blob:"
 )
 
 // layerDigestFromDevicePath mirrors the snapshotter's DigestFromLayerBlobPath:
@@ -55,10 +60,14 @@ func layerDigestFromDevicePath(p string) string {
 }
 
 // verifyVMDKManifest checks that the merged VMDK's layers.manifest (sibling of
-// vmdkPath) matches the digest-based layer devices, in order. The manifest is
-// best-effort on the snapshotter side, so a missing or empty manifest is
-// tolerated; a present manifest that disagrees with the device set indicates a
-// stale or incomplete VMDK and is rejected.
+// vmdkPath) matches the layer devices exactly, line-for-line in order. The
+// manifest is 1:1 with the device= options: each line is the content digest of
+// the layer blob, or "blob:<basename>" for fallback blobs without a digest.
+//
+// The snapshotter writes the manifest atomically, so a present manifest is
+// always complete; a missing manifest (older snapshot or a logged write
+// failure) is tolerated. A present manifest that disagrees with the device set
+// indicates a stale or incomplete VMDK and is rejected.
 func verifyVMDKManifest(vmdkPath string, options []string) error {
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(vmdkPath), manifestFilename))
 	if os.IsNotExist(err) {
@@ -70,19 +79,16 @@ func verifyVMDKManifest(vmdkPath string, options []string) error {
 
 	var manifest []string
 	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+		if line = strings.TrimSpace(line); line != "" {
+			manifest = append(manifest, line)
 		}
-		if _, perr := digest.Parse(line); perr != nil {
-			continue
-		}
-		manifest = append(manifest, line)
 	}
 	if len(manifest) == 0 {
-		return nil // unreadable/empty manifest: do not gate on it
+		return nil // empty manifest: do not gate on it
 	}
 
+	// Expected token per device= option, in order: the content digest, or a
+	// "blob:<basename>" placeholder for fallback blobs (mirrors the snapshotter).
 	var expected []string
 	for _, opt := range options {
 		blob, ok := strings.CutPrefix(opt, "device=")
@@ -91,6 +97,8 @@ func verifyVMDKManifest(vmdkPath string, options []string) error {
 		}
 		if d := layerDigestFromDevicePath(blob); d != "" {
 			expected = append(expected, d)
+		} else {
+			expected = append(expected, fallbackTokenPrefix+filepath.Base(blob))
 		}
 	}
 
