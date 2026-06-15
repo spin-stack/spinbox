@@ -93,7 +93,7 @@ chmod +x "${RELEASE_DIR}/uninstall.sh"
 echo "  ok: install/uninstall scripts"
 
 echo "Downloading nerdctl-full (includes containerd, runc, nerdctl, ctr)..."
-NERDCTL_VERSION="${NERDCTL_VERSION:-2.2.1}"
+NERDCTL_VERSION="${NERDCTL_VERSION:-2.3.2}"
 NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
 NERDCTL_TARBALL="${OUTPUT_DIR}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
 
