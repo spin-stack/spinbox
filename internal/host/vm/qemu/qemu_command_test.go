@@ -366,7 +366,7 @@ func TestAddDisk(t *testing.T) {
 				Readonly: false,
 			},
 			want: []string{
-				"-drive", "file=/var/lib/vm/disk.raw,if=none,id=blk0,format=raw",
+				"-drive", "file=/var/lib/vm/disk.raw,if=none,id=blk0,format=raw,file.locking=on",
 				"-device", "virtio-blk-pci,drive=blk0",
 			},
 		},
@@ -402,7 +402,7 @@ func TestAddDisk(t *testing.T) {
 				Readonly: false,
 			},
 			want: []string{
-				"-drive", "file=/var/lib/vm/data.qcow2,if=none,id=data,format=qcow2",
+				"-drive", "file=/var/lib/vm/data.qcow2,if=none,id=data,format=qcow2,file.locking=on",
 				"-device", "virtio-blk-pci,drive=data",
 			},
 		},
@@ -414,7 +414,7 @@ func TestAddDisk(t *testing.T) {
 				Readonly: false,
 			},
 			want: []string{
-				"-drive", "file=/dev/sda,if=none,id=blk0,format=raw",
+				"-drive", "file=/dev/sda,if=none,id=blk0,format=raw,file.locking=on",
 				"-device", "virtio-blk-pci,drive=blk0",
 			},
 		},
@@ -429,6 +429,20 @@ func TestAddDisk(t *testing.T) {
 			want: []string{
 				"-drive", "file=/var/lib/vm/layer.erofs,if=none,id=blk2,format=raw,readonly=on",
 				"-device", "virtio-blk-pci,drive=blk2,serial=sbxblk2",
+			},
+		},
+		{
+			// The writable rwlayer must pin file.locking=on so the snapshotter's
+			// OFD lock on rwlayer.img reliably gates commit of a running container.
+			name: "writable rwlayer pins file.locking",
+			id:   "blk3",
+			disk: &DiskConfig{
+				Path:     "/var/lib/spinbox/rwlayer.img",
+				Readonly: false,
+			},
+			want: []string{
+				"-drive", "file=/var/lib/spinbox/rwlayer.img,if=none,id=blk3,format=raw,file.locking=on",
+				"-device", "virtio-blk-pci,drive=blk3",
 			},
 		},
 	}

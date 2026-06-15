@@ -169,13 +169,19 @@ func (b *qemuCommandBuilder) setQMPUnixSocket(socketPath string) *qemuCommandBui
 //
 // This generates both -drive and -device options:
 //
-//	-drive file=<path>,if=none,id=<id>,format=<format>[,readonly=on]
+//	-drive file=<path>,if=none,id=<id>,format=<format>[,readonly=on|,file.locking=on]
 //	-device virtio-blk-pci,drive=<id>
 //
 // Format is auto-detected from file extension:
 //   - .vmdk → vmdk
 //   - .qcow2 → qcow2
 //   - default → raw
+//
+// Writable drives (the rwlayer) pin file.locking=on so QEMU holds an image
+// lock on the backing file. The snapshotter's commit gate takes an OFD F_WRLCK
+// on rwlayer.img to detect a running container; that only works if QEMU locks
+// the same inode. Setting it explicitly avoids depending on QEMU's
+// locking=auto default, which a shared-storage setup might globally disable.
 func (b *qemuCommandBuilder) addDisk(id string, disk *DiskConfig) *qemuCommandBuilder {
 	// Detect format based on file extension
 	format := "raw"
@@ -188,6 +194,8 @@ func (b *qemuCommandBuilder) addDisk(id string, disk *DiskConfig) *qemuCommandBu
 	driveArgs := fmt.Sprintf("file=%s,if=none,id=%s,format=%s", disk.Path, id, format)
 	if disk.Readonly {
 		driveArgs += ",readonly=on"
+	} else {
+		driveArgs += ",file.locking=on"
 	}
 	b.args = append(b.args, "-drive", driveArgs)
 
