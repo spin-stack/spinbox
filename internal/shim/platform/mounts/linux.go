@@ -6,13 +6,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
+	digest "github.com/opencontainers/go-digest"
 
 	"github.com/spin-stack/spinbox/internal/host/mountutil"
 	"github.com/spin-stack/spinbox/internal/host/vm"
@@ -25,6 +28,80 @@ const mountTypeOverlay = "overlay"
 // merged VMDK, so a container needs only a couple of devices. Hitting this
 // limit almost always means the merged VMDK (fsmeta) is not ready yet.
 const maxVirtioDisks = 10
+
+const (
+	// layerBlobExt is the extension of EROFS layer blob files.
+	layerBlobExt = ".erofs"
+	// manifestFilename is the snapshotter's per-snapshot layer manifest,
+	// listing the digest-based layer digests in VMDK order (oldest first).
+	manifestFilename = "layers.manifest"
+)
+
+// layerDigestFromDevicePath mirrors the snapshotter's DigestFromLayerBlobPath:
+// a blob named "sha256-<hex>.erofs" maps to the digest "sha256:<hex>". Returns
+// "" for fallback-named blobs (e.g. snapshot-xxx.erofs), which are intentionally
+// omitted from layers.manifest.
+func layerDigestFromDevicePath(p string) string {
+	name := filepath.Base(p)
+	if !strings.HasSuffix(name, layerBlobExt) {
+		return ""
+	}
+	name = strings.TrimSuffix(name, layerBlobExt)
+	ds := strings.Replace(name, "-", ":", 1)
+	if _, err := digest.Parse(ds); err != nil {
+		return ""
+	}
+	return ds
+}
+
+// verifyVMDKManifest checks that the merged VMDK's layers.manifest (sibling of
+// vmdkPath) matches the digest-based layer devices, in order. The manifest is
+// best-effort on the snapshotter side, so a missing or empty manifest is
+// tolerated; a present manifest that disagrees with the device set indicates a
+// stale or incomplete VMDK and is rejected.
+func verifyVMDKManifest(vmdkPath string, options []string) error {
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(vmdkPath), manifestFilename))
+	if os.IsNotExist(err) {
+		return nil // nothing to verify (best-effort manifest)
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", manifestFilename, err)
+	}
+
+	var manifest []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if _, perr := digest.Parse(line); perr != nil {
+			continue
+		}
+		manifest = append(manifest, line)
+	}
+	if len(manifest) == 0 {
+		return nil // unreadable/empty manifest: do not gate on it
+	}
+
+	var expected []string
+	for _, opt := range options {
+		blob, ok := strings.CutPrefix(opt, "device=")
+		if !ok {
+			continue
+		}
+		if d := layerDigestFromDevicePath(blob); d != "" {
+			expected = append(expected, d)
+		}
+	}
+
+	if !slices.Equal(manifest, expected) {
+		return fmt.Errorf(
+			"merged VMDK %s manifest does not match layer devices (manifest=%d, devices=%d): "+
+				"stale or incomplete VMDK generation: %w",
+			filepath.Base(vmdkPath), len(manifest), len(expected), errdefs.ErrFailedPrecondition)
+	}
+	return nil
+}
 
 type linuxManager struct{}
 
@@ -147,6 +224,12 @@ func (m *linuxManager) handleEROFS(_ context.Context, id string, disks *byte, mn
 		// Check for merged.vmdk in same directory
 		vmdkPath := strings.TrimSuffix(source, "fsmeta.erofs") + "merged.vmdk"
 		if fi, err := os.Stat(vmdkPath); err == nil && fi.Size() > 0 {
+			// Before trusting the VMDK, verify its layers.manifest matches the
+			// layer devices we were handed. A size>0 VMDK from a stale or
+			// half-finished generation would otherwise be used blindly.
+			if err := verifyVMDKManifest(vmdkPath, mnt.Options); err != nil {
+				return nil, nil, err
+			}
 			source = vmdkPath
 			isVMDK = true
 		}

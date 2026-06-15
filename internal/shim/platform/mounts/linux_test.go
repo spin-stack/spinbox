@@ -5,6 +5,8 @@ package mounts
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -753,4 +755,65 @@ func BenchmarkFilterOptions(b *testing.B) {
 	for range b.N {
 		filterOptions(options)
 	}
+}
+
+func TestLayerDigestFromDevicePath(t *testing.T) {
+	hex := strings.Repeat("a", 64)
+	assert.Equal(t, "sha256:"+hex, layerDigestFromDevicePath("/var/lib/snap/sha256-"+hex+".erofs"))
+	// Fallback-named blobs have no extractable digest.
+	assert.Empty(t, layerDigestFromDevicePath("/var/lib/snap/snapshot-42.erofs"))
+	// Non-erofs paths are ignored.
+	assert.Empty(t, layerDigestFromDevicePath("/var/lib/snap/fsmeta.bin"))
+}
+
+func TestVerifyVMDKManifest(t *testing.T) {
+	d1 := "sha256:" + strings.Repeat("1", 64)
+	d2 := "sha256:" + strings.Repeat("2", 64)
+	dev := func(d string) string {
+		return "device=/var/lib/snap/" + strings.Replace(d, ":", "-", 1) + ".erofs"
+	}
+
+	writeManifest := func(t *testing.T, lines ...string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if lines != nil {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, manifestFilename), []byte(strings.Join(lines, "\n")+"\n"), 0o600))
+		}
+		return filepath.Join(dir, "merged.vmdk")
+	}
+
+	t.Run("matches device order", func(t *testing.T) {
+		vmdk := writeManifest(t, d1, d2)
+		opts := []string{"ro", "loop", dev(d1), dev(d2)}
+		require.NoError(t, verifyVMDKManifest(vmdk, opts))
+	})
+
+	t.Run("missing manifest is tolerated", func(t *testing.T) {
+		vmdk := writeManifest(t) // no manifest file written
+		require.NoError(t, verifyVMDKManifest(vmdk, []string{dev(d1)}))
+	})
+
+	t.Run("fallback layer omitted from manifest still matches", func(t *testing.T) {
+		// device set has a fallback (non-digest) blob between digest layers;
+		// the manifest only lists the digest-based ones.
+		vmdk := writeManifest(t, d1, d2)
+		opts := []string{dev(d1), "device=/var/lib/snap/snapshot-7.erofs", dev(d2)}
+		require.NoError(t, verifyVMDKManifest(vmdk, opts))
+	})
+
+	t.Run("wrong order is rejected", func(t *testing.T) {
+		vmdk := writeManifest(t, d2, d1)
+		opts := []string{dev(d1), dev(d2)}
+		err := verifyVMDKManifest(vmdk, opts)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errdefs.ErrFailedPrecondition)
+	})
+
+	t.Run("count mismatch is rejected", func(t *testing.T) {
+		vmdk := writeManifest(t, d1, d2)
+		opts := []string{dev(d1)}
+		err := verifyVMDKManifest(vmdk, opts)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errdefs.ErrFailedPrecondition)
+	})
 }
