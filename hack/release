@@ -10,6 +10,26 @@ OUTPUT_DIR="${ROOT_DIR}/_output"
 
 cd "${ROOT_DIR}"
 
+# download fetches a URL to a destination path robustly.
+# - Forces HTTP/1.1: GitHub's CDN intermittently aborts HTTP/2 streams with
+#   "stream not closed cleanly: PROTOCOL_ERROR" (curl exit 92).
+# - Retries transient failures.
+# - Writes to a temp file and renames on success, so a failed attempt never
+#   leaves a truncated file behind that a later run would reuse.
+download() {
+  local url="$1" dest="$2" tmp
+  tmp="$(mktemp "${dest}.XXXXXX")"
+  if ! curl -fsSL --http1.1 \
+      --retry 5 --retry-delay 2 --retry-all-errors \
+      --connect-timeout 30 \
+      -o "${tmp}" "${url}"; then
+    rm -f "${tmp}"
+    echo "error: failed to download ${url}" >&2
+    return 1
+  fi
+  mv -f "${tmp}" "${dest}"
+}
+
 echo "Creating release tarball..."
 
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
@@ -98,7 +118,7 @@ NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_
 NERDCTL_TARBALL="${OUTPUT_DIR}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
 
 if [ ! -f "${NERDCTL_TARBALL}" ]; then
-  curl -sSL -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
+  download "${NERDCTL_URL}" "${NERDCTL_TARBALL}"
 fi
 
 echo "Extracting nerdctl-full components (containerd, containerd-shim-runc-v2, nerdctl, ctr, runc)..."
@@ -157,7 +177,7 @@ for entry in "${EROFS_SNAPSHOTTER_BINARIES[@]}"; do
   bin_path="${OUTPUT_DIR}/${src}"
 
   if [ ! -f "${bin_path}" ]; then
-    curl -sSL -o "${bin_path}" "${EROFS_SNAPSHOTTER_BASE_URL}/${src}"
+    download "${EROFS_SNAPSHOTTER_BASE_URL}/${src}" "${bin_path}"
   fi
 
   cp "${bin_path}" "${RELEASE_DIR}/usr/share/spin-stack/bin/${dest}"
