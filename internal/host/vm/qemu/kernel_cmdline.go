@@ -57,9 +57,23 @@ func DefaultKernelCmdlineConfig() KernelCmdlineConfig {
 func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	var parts []string
 
-	// Console
-	if cfg.Console != "" {
-		parts = append(parts, fmt.Sprintf("console=%s", cfg.Console))
+	// Console. Debug/profiling mode routes the kernel console through
+	// virtio-console (hvc0) instead of the emulated 8250 UART (ttyS0): every
+	// byte written to ttyS0 is a PIO VMEXIT, so the verbose initcall_debug
+	// stream backpressures the guest and inflates the very per-initcall timings
+	// we are measuring (the chattiest initcalls - ACPI, PCI - are penalized
+	// most). virtio-console batches output over a virtqueue, so it does not skew
+	// the profile. ACPI/PCI run as subsys_initcalls, before virtio-console
+	// registers (a device_initcall), so their early messages buffer in the
+	// printk ring and flush once hvc0 comes up - timing stays accurate.
+	// Note: a hang before the device-initcall phase would leave the console log
+	// empty, an acceptable trade-off for a profiling-only mode.
+	console := cfg.Console
+	if cfg.Debug && console != "" {
+		console = "hvc0"
+	}
+	if console != "" {
+		parts = append(parts, fmt.Sprintf("console=%s", console))
 	}
 
 	// Boot verbosity. Debug mode forces verbose output so initcall timings

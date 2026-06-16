@@ -51,8 +51,12 @@ func TestBuildKernelCmdline(t *testing.T) {
 				"printk.time=1",
 				"loglevel=8",
 				"no_timer_check",
+				// Debug routes the console through virtio-console (hvc0) so the
+				// verbose output does not backpressure on the emulated UART and
+				// skew the per-initcall timings.
+				"console=hvc0",
 			},
-			excludes: []string{"quiet", "loglevel=3"},
+			excludes: []string{"quiet", "loglevel=3", "console=ttyS0"},
 		},
 		{
 			name: "with network config",
