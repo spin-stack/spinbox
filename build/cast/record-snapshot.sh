@@ -10,7 +10,8 @@ CTR="ctr --address /var/run/spin-stack/containerd.sock"
 IMAGE="ghcr.io/spin-stack/spinbox/sandbox:latest"
 SNAPSHOT_IMAGE="docker.io/spin-stack/sandbox:with-changes"
 COMMITTED_SNAPSHOT="snapshot-demo-committed"
-HELPER_BIN="/tmp/spinbox-snapshot-commit-image"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+HELPER_BIN="/tmp/spinbox-commit-demo"
 SESSION="spinbox-snapshot-record-$$"
 COLS=240
 ROWS=40
@@ -33,7 +34,8 @@ cleanup_vm() {
 cleanup() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     cleanup_vm
-    rm -f "$HELPER_BIN" 2>/dev/null || true
+    # Only remove the temp build; never the installed/system binary.
+    rm -f /tmp/spinbox-commit-demo 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -44,7 +46,16 @@ for cmd in asciinema tmux ctr go; do
     fi
 done
 
-go build -o "$HELPER_BIN" "$SCRIPT_DIR/snapshot-commit-image.go"
+# Prefer the installed spinbox-commit; otherwise build the shipped tool from
+# source. (The old build/cast/snapshot-commit-image.go prototype is gone -
+# spinbox-commit supersedes it.)
+if command -v spinbox-commit >/dev/null 2>&1; then
+    HELPER_BIN="$(command -v spinbox-commit)"
+elif [ -x /usr/share/spin-stack/bin/spinbox-commit ]; then
+    HELPER_BIN="/usr/share/spin-stack/bin/spinbox-commit"
+else
+    (cd "$REPO_ROOT" && go build -o "$HELPER_BIN" ./cmd/spinbox-commit)
+fi
 
 pane_text() {
     tmux capture-pane -t "$SESSION:0.0" -p -S -3000 2>/dev/null || true
