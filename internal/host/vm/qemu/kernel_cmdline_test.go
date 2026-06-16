@@ -55,6 +55,9 @@ func TestBuildKernelCmdline(t *testing.T) {
 				// verbose output does not backpressure on the emulated UART and
 				// skew the per-initcall timings.
 				"console=hvc0",
+				// Enlarged printk ring so early (pre-hvc0) initcalls are not
+				// dropped from the profile by ring-buffer overflow.
+				"log_buf_len=4M",
 			},
 			excludes: []string{"quiet", "loglevel=3", "console=ttyS0"},
 		},
