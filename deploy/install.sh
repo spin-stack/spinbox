@@ -393,12 +393,33 @@ run_basic_checks() {
 # =============================================================================
 # Installation helpers
 # =============================================================================
+# atomic_install copies src into dstdir via a temp file and an atomic rename,
+# so it never fails with ETXTBSY when the target binary is currently running
+# (a leftover shim/qemu from a prior run): rename replaces the directory entry
+# without touching the busy inode, unlike cp which truncates it in place.
+atomic_install() {
+    local src="$1" dstdir="$2" executable="${3:-false}"
+    local name tmp
+    name="$(basename "$src")"
+    tmp="${dstdir}/.${name}.tmp.$$"
+    cp "$src" "$tmp"
+    [ "$executable" = true ] && chmod +x "$tmp"
+    mv -f "$tmp" "${dstdir}/${name}"
+}
+
 install_dir() {
     local src="$1" dst="$2" desc="$3" executable="${4:-false}"
     echo "  → Installing ${desc}..."
     mkdir -p "$dst"
-    cp -r "${src}"/* "$dst"
-    [ "$executable" = true ] && chmod +x "$dst"/*
+    local f
+    for f in "${src}"/*; do
+        [ -e "$f" ] || continue
+        if [ -d "$f" ]; then
+            cp -r "$f" "$dst"/   # subdirs (firmware/config; never executed in place)
+        else
+            atomic_install "$f" "$dst" "$executable"
+        fi
+    done
     log_ok "${desc} installed"
 }
 
@@ -423,7 +444,7 @@ if [ "$SHIM_ONLY" = true ]; then
     mkdir -p /usr/share/spin-stack/bin
     for bin in containerd-shim-spinbox-v1 spinbox-commit qemu-system-x86_64; do
         src="${SCRIPT_DIR}/usr/share/spin-stack/bin/${bin}"
-        [ -f "$src" ] && cp "$src" /usr/share/spin-stack/bin/ && chmod +x "/usr/share/spin-stack/bin/${bin}"
+        [ -f "$src" ] && atomic_install "$src" /usr/share/spin-stack/bin true
     done
     log_ok "Shim binaries installed"
 else
