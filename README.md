@@ -48,7 +48,7 @@
 Launch a full Ubuntu VM with Docker pre-installed. Shows ~300ms boot time with systemd, running containers inside the isolated VM - nested virtualization without the overhead.
 
 ### Snapshot & Commit
-[![asciicast](https://asciinema.org/a/aIk4RocQFPk7I0QizhRwULKLz.svg)](https://asciinema.org/a/aIk4RocQFPk7I0QizhRwULKLz)
+[![asciicast](https://asciinema.org/a/1257525.svg)](https://asciinema.org/a/1257525)
 
 Persist disk state between VM runs: install packages, create files, then commit to a new image with `nerdctl commit`. The next VM boots with all changes preserved - like Docker commits, but for entire VMs.
 
