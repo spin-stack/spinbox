@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/containerd/log"
 	"github.com/containernetworking/cni/libcni"
+	"github.com/containernetworking/cni/pkg/types"
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"golang.org/x/sys/unix"
 )
@@ -236,6 +238,14 @@ func (m *CNIManager) loadNetworkConfigFromDisk() (*libcni.NetworkConfigList, err
 	return netConfList, nil
 }
 
+// cniAddRetries bounds retries of the CNI ADD operation. Bridge/veth/IPAM
+// setup can fail transiently under rapid container churn (a previous
+// container's async teardown racing the next ADD); a short retry resolves it.
+const (
+	cniAddRetries = 3
+	cniAddBackoff = 250 * time.Millisecond
+)
+
 // execPluginChain executes the CNI plugin chain and returns the result.
 func (m *CNIManager) execPluginChain(ctx context.Context, vmID string, netns string, netConfList *libcni.NetworkConfigList) (*current.Result, error) {
 	// Create runtime configuration
@@ -245,10 +255,34 @@ func (m *CNIManager) execPluginChain(ctx context.Context, vmID string, netns str
 		IfName:      "eth0",
 	}
 
-	// Execute ADD operation
-	result, err := m.cniConfig.AddNetworkList(ctx, netConfList, rt)
+	// Execute ADD operation, retrying transient setup failures.
+	var result types.Result
+	var err error
+	for attempt := 1; attempt <= cniAddRetries; attempt++ {
+		if attempt > 1 {
+			// A failed ADD may leave partial bridge/veth/IPAM state; DEL
+			// before retrying so the next ADD starts clean (CNI ADD/DEL is
+			// idempotent).
+			if delErr := m.cniConfig.DelNetworkList(ctx, netConfList, rt); delErr != nil {
+				log.G(ctx).WithError(delErr).WithField("vmID", vmID).Debug("CNI DEL before ADD retry failed")
+			}
+			select {
+			case <-time.After(cniAddBackoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		result, err = m.cniConfig.AddNetworkList(ctx, netConfList, rt)
+		if err == nil {
+			break
+		}
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"vmID":    vmID,
+			"attempt": attempt,
+		}).Warn("CNI ADD failed; retrying")
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to add CNI network: %w", err)
+		return nil, fmt.Errorf("failed to add CNI network after %d attempts: %w", cniAddRetries, err)
 	}
 
 	// Convert to current version
