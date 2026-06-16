@@ -26,14 +26,19 @@ const (
 
 // Initialize performs all system initialization tasks for the VM guest.
 // This includes mounting filesystems, configuring cgroups, and setting up DNS.
-func Initialize(ctx context.Context) error {
+//
+// prof attributes each phase's wall-clock time to a VMINITD_PROFILE line; it is
+// a no-op unless boot profiling is enabled, and may be nil.
+func Initialize(ctx context.Context, prof *BootProfiler) error {
 	if err := mountFilesystems(); err != nil {
 		return err
 	}
+	prof.Mark(ctx, "mount-filesystems")
 
 	if err := setupDevNodes(ctx); err != nil {
 		return err
 	}
+	prof.Mark(ctx, "dev-nodes")
 
 	// Configure CTRL+ALT+DELETE to send SIGINT to init instead of immediately rebooting
 	// This allows vminitd to catch the signal and perform a clean shutdown
@@ -48,16 +53,19 @@ func Initialize(ctx context.Context) error {
 	// This is necessary because the kernel may not have probed all virtio devices yet
 	// Not fatal if devices don't appear - they might appear later or not be needed
 	devices.WaitForBlockDevices(ctx)
+	prof.Mark(ctx, "wait-block-devices")
 
 	// Extract files from extras disk if configured (spin.extras_disk kernel parameter)
 	// Not fatal if extraction fails - extras may not be configured for this container
 	if err := extras.Extract(ctx); err != nil {
 		log.G(ctx).WithError(err).Warn("failed to extract extras disk, continuing anyway")
 	}
+	prof.Mark(ctx, "extras-extract")
 
 	if err := setupCgroupControl(); err != nil {
 		return err
 	}
+	prof.Mark(ctx, "cgroup-control")
 
 	// #nosec G301 -- /etc must be world-readable inside the VM.
 	if err := os.Mkdir("/etc", 0755); err != nil && !os.IsExist(err) {
@@ -72,6 +80,7 @@ func Initialize(ctx context.Context) error {
 	if err := configureNetworking(ctx); err != nil {
 		log.G(ctx).WithError(err).Warn("failed to read /proc/cmdline, skipping network configuration")
 	}
+	prof.Mark(ctx, "network")
 
 	return nil
 }

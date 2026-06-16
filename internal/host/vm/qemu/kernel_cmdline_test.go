@@ -58,6 +58,8 @@ func TestBuildKernelCmdline(t *testing.T) {
 				// Enlarged printk ring so early (pre-hvc0) initcalls are not
 				// dropped from the profile by ring-buffer overflow.
 				"log_buf_len=4M",
+				// Userspace profiling marker consumed by vminitd.
+				"spin.profile",
 			},
 			excludes: []string{"quiet", "loglevel=3", "console=ttyS0"},
 		},

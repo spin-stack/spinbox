@@ -130,6 +130,11 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	// initcalls vanish from the profile. 4 MiB holds the whole pre-hvc0 burst.
 	if cfg.Debug {
 		parts = append(parts, "initcall_debug", "printk.time=1", "log_buf_len=4M")
+		// Userspace companion to initcall_debug: vminitd emits VMINITD_PROFILE
+		// lines for its boot phases when this marker is present (see
+		// system.BootProfiler). Kept as a separate token so the kernel ignores
+		// it and it reaches /proc/cmdline for vminitd to read.
+		parts = append(parts, "spin.profile")
 	}
 
 	// Network configuration
