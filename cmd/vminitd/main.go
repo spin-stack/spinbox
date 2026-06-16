@@ -90,9 +90,14 @@ func main() {
 func run(ctx context.Context, cfg *config.ServiceConfig) error {
 	t1 := time.Now()
 
+	// Boot profiling: attribute userspace boot phases to VMINITD_PROFILE lines
+	// (the companion to the kernel's initcall_debug). No-op unless the
+	// spin.profile cmdline marker is present (debug-boot mode).
+	prof := system.NewBootProfiler(t1)
+
 	ctx, cfg.Shutdown = shutdown.WithShutdown(ctx)
 
-	if err := system.Initialize(ctx); err != nil {
+	if err := system.Initialize(ctx, prof); err != nil {
 		return err
 	}
 
@@ -104,6 +109,7 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 	if err != nil {
 		return err
 	}
+	prof.Mark(ctx, "service-new")
 
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
