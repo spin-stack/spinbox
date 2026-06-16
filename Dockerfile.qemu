@@ -88,6 +88,9 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
     cd qemu-build && \
     if [ ! -f Makefile ]; then \
+        echo "Disabling CXL device support (debloat)..."; \
+        DEVMAK="/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/default.mak"; \
+        grep -q '^CONFIG_CXL=n' "$DEVMAK" || echo 'CONFIG_CXL=n' >> "$DEVMAK"; \
         echo "Running QEMU configure (first build)..."; \
         /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
         --prefix=/opt/qemu \
