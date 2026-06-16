@@ -119,8 +119,17 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	)
 
 	// Boot profiling: print per-initcall timings to the console log.
+	//
+	// log_buf_len enlarges the printk ring buffer for the profiling boot. The
+	// console is routed through virtio-console (hvc0, see above), which only
+	// registers at the device_initcall phase; every message emitted before that
+	// - the verbose ACPI/PCI dumps plus initcall_debug lines for every early
+	// (core/subsys) initcall - accumulates in the ring and is replayed once hvc0
+	// comes up. The default 256 KiB ring (CONFIG_LOG_BUF_SHIFT=18) overflows
+	// under that load and silently drops the earliest entries, so the early
+	// initcalls vanish from the profile. 4 MiB holds the whole pre-hvc0 burst.
 	if cfg.Debug {
-		parts = append(parts, "initcall_debug", "printk.time=1")
+		parts = append(parts, "initcall_debug", "printk.time=1", "log_buf_len=4M")
 	}
 
 	// Network configuration
