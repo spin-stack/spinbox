@@ -391,8 +391,13 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Build kernel command line
 	cmdlineArgs := q.buildKernelCommandLine(startOpts)
 
+	// Boot profiling routes the console through virtio-console (see
+	// buildKernelCommandLine / buildQemuCommandLine); compute the flag once so
+	// the cmdline and the QEMU device list stay in agreement.
+	debugBoot := startOpts.DebugBoot || bootDebugEnabled()
+
 	// Build QEMU command line (now uses the renamed TAP names)
-	qemuArgs, err := q.buildQemuCommandLine(cmdlineArgs)
+	qemuArgs, err := q.buildQemuCommandLine(cmdlineArgs, debugBoot)
 	if err != nil {
 		return err
 	}
@@ -464,8 +469,11 @@ func bootDebugEnabled() bool {
 	}
 }
 
-// buildQemuCommandLine constructs the QEMU command line arguments
-func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
+// buildQemuCommandLine constructs the QEMU command line arguments.
+// When debug is set, a virtio-console is added and the kernel console is routed
+// through it (the cmdline already selects console=hvc0) so verbose boot
+// profiling output does not backpressure on the emulated UART.
+func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]string, error) {
 	cfg, err := config.Get()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config: %w", err)
@@ -508,6 +516,20 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 		setQMPUnixSocket(q.qmpSocketPath).
 		// RNG device for entropy
 		addVirtioRNG()
+
+	// Boot profiling: add a virtio-console and route the kernel console through
+	// it (cmdline selects console=hvc0). virtio-console batches output over a
+	// virtqueue instead of per-byte UART PIO exits, so the verbose
+	// initcall_debug stream does not backpressure the guest and skew the
+	// per-initcall timings. The chardev reuses the same console FIFO, so the
+	// existing FIFO→console.log reader (setupConsoleFIFO) picks it up unchanged;
+	// the still-present -serial carries nothing once the kernel targets hvc0.
+	if debug {
+		builder.
+			addDevice("virtio-serial-pci,id=virtio-serial0").
+			addChardevFile("hvc0", q.consoleFifoPath).
+			addDevice("virtconsole,chardev=hvc0,id=hvc0port")
+	}
 
 	// Add disks
 	for i, disk := range q.disks {

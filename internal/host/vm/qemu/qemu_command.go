@@ -139,6 +139,15 @@ func (b *qemuCommandBuilder) addDevice(device string) *qemuCommandBuilder {
 	return b
 }
 
+// addChardevFile adds a file-backed character device (-chardev file).
+// The path may be a regular file or a FIFO; QEMU opens it for writing. This is
+// the same backend "-serial file:<path>" uses, so a FIFO with a reader already
+// attached works identically.
+func (b *qemuCommandBuilder) addChardevFile(id, path string) *qemuCommandBuilder {
+	b.args = append(b.args, "-chardev", fmt.Sprintf("file,id=%s,path=%s", id, path))
+	return b
+}
+
 // addVsockDevice adds a vhost-vsock device for guest communication.
 func (b *qemuCommandBuilder) addVsockDevice(guestCID int) *qemuCommandBuilder {
 	return b.addDevice(fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", guestCID))
