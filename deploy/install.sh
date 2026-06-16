@@ -421,7 +421,7 @@ echo "Installing files..."
 if [ "$SHIM_ONLY" = true ]; then
     echo "  → Installing shim binaries to /usr/share/spin-stack/bin..."
     mkdir -p /usr/share/spin-stack/bin
-    for bin in containerd-shim-spinbox-v1 qemu-system-x86_64; do
+    for bin in containerd-shim-spinbox-v1 spinbox-commit qemu-system-x86_64; do
         src="${SCRIPT_DIR}/usr/share/spin-stack/bin/${bin}"
         [ -f "$src" ] && cp "$src" /usr/share/spin-stack/bin/ && chmod +x "/usr/share/spin-stack/bin/${bin}"
     done
@@ -512,6 +512,7 @@ check_file() {
 # Core files (both modes)
 CORE_FILES=(
     "/usr/share/spin-stack/bin/containerd-shim-spinbox-v1"
+    "/usr/share/spin-stack/bin/spinbox-commit"
     "/usr/share/spin-stack/bin/qemu-system-x86_64"
     "/usr/share/spin-stack/qemu/bios-256k.bin"
     "/usr/share/spin-stack/qemu/kvmvapic.bin"

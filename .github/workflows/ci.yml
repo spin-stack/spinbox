@@ -94,6 +94,9 @@ jobs:
       - name: Build shim
         run: task build:shim
 
+      - name: Build spinbox-commit
+        run: task build:commit
+
       - name: Build vminitd
         run: task build:vminitd
 

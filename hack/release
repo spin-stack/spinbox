@@ -47,6 +47,7 @@ artifacts=(
   "${OUTPUT_DIR}/spinbox-kernel-x86_64:kernel:spinbox-kernel-x86_64"
   "${OUTPUT_DIR}/spinbox-initrd:kernel:spinbox-initrd"
   "${OUTPUT_DIR}/containerd-shim-spinbox-v1:bin:containerd-shim-spinbox-v1"
+  "${OUTPUT_DIR}/spinbox-commit:bin:spinbox-commit"
   "${OUTPUT_DIR}/vminitd:bin:vminitd"
 )
 
