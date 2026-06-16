@@ -447,7 +447,19 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	cfg.Network = startOpts.NetworkConfig
 	cfg.InitArgs = startOpts.InitArgs
 	cfg.ExtrasDiskIndex = startOpts.ExtrasDiskIndex
+	cfg.Debug = bootDebugEnabled()
 	return BuildKernelCmdline(cfg)
+}
+
+// bootDebugEnabled reports whether boot profiling was requested via
+// SPINBOX_DEBUG_BOOT (initcall_debug + verbose kernel output).
+func bootDebugEnabled() bool {
+	switch os.Getenv("SPINBOX_DEBUG_BOOT") {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // buildQemuCommandLine constructs the QEMU command line arguments

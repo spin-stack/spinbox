@@ -35,6 +35,11 @@ type KernelCmdlineConfig struct {
 	// ExtrasDiskIndex is the 0-based index of the extras disk (nil if none).
 	// The guest parses spin.extras_disk=N to locate the block device.
 	ExtrasDiskIndex *int
+
+	// Debug enables boot profiling: it turns on initcall_debug and forces
+	// verbose kernel output (overriding Quiet/LogLevel) so per-initcall
+	// timings land in the console log. Off by default; opt in for profiling.
+	Debug bool
 }
 
 // DefaultKernelCmdlineConfig returns a default configuration.
@@ -57,11 +62,16 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 		parts = append(parts, fmt.Sprintf("console=%s", cfg.Console))
 	}
 
-	// Boot verbosity
-	if cfg.Quiet {
+	// Boot verbosity. Debug mode forces verbose output so initcall timings
+	// are visible; otherwise honor the configured quiet/loglevel.
+	quiet, loglevel := cfg.Quiet, cfg.LogLevel
+	if cfg.Debug {
+		quiet, loglevel = false, 8
+	}
+	if quiet {
 		parts = append(parts, "quiet")
 	}
-	parts = append(parts, fmt.Sprintf("loglevel=%d", cfg.LogLevel))
+	parts = append(parts, fmt.Sprintf("loglevel=%d", loglevel))
 
 	// Systemd options
 	parts = append(parts,
@@ -83,6 +93,21 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 
 	// Disable tickless kernel (reduces overhead for short-lived VMs)
 	parts = append(parts, "nohz=off")
+
+	// Boot-speed tuning for a KVM guest:
+	//   no_timer_check            - skip the boot-time timer IRQ delivery probe
+	//   tsc=reliable              - trust the TSC and skip the clocksource watchdog
+	//   rcupdate.rcu_expedited=1  - expedite RCU grace periods during boot
+	parts = append(parts,
+		"no_timer_check",
+		"tsc=reliable",
+		"rcupdate.rcu_expedited=1",
+	)
+
+	// Boot profiling: print per-initcall timings to the console log.
+	if cfg.Debug {
+		parts = append(parts, "initcall_debug", "printk.time=1")
+	}
 
 	// Network configuration
 	if netParam := buildNetworkParam(cfg.Network); netParam != "" {
