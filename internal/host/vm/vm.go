@@ -43,6 +43,7 @@ type StartOpts struct {
 	NetworkConfig    *NetworkConfig
 	NetworkNamespace string // Path to network namespace (e.g., "/var/run/netns/cni-xxx")
 	ExtrasDiskIndex  *int   // Index of extras disk (0-based), nil if none
+	DebugBoot        bool   // Enable kernel boot profiling (initcall_debug + verbose)
 }
 
 // StartOpt configures VM start options.
@@ -52,6 +53,14 @@ type StartOpt func(*StartOpts)
 func WithInitArgs(args ...string) StartOpt {
 	return func(o *StartOpts) {
 		o.InitArgs = append(o.InitArgs, args...)
+	}
+}
+
+// WithDebugBoot enables kernel boot profiling for this VM (initcall_debug and
+// verbose kernel output to the console log).
+func WithDebugBoot(enabled bool) StartOpt {
+	return func(o *StartOpts) {
+		o.DebugBoot = enabled
 	}
 }
 

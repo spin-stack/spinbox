@@ -447,11 +447,13 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	cfg.Network = startOpts.NetworkConfig
 	cfg.InitArgs = startOpts.InitArgs
 	cfg.ExtrasDiskIndex = startOpts.ExtrasDiskIndex
-	cfg.Debug = bootDebugEnabled()
+	// Boot profiling is enabled per-VM (via the debug-boot annotation) or
+	// host-wide (SPINBOX_DEBUG_BOOT).
+	cfg.Debug = startOpts.DebugBoot || bootDebugEnabled()
 	return BuildKernelCmdline(cfg)
 }
 
-// bootDebugEnabled reports whether boot profiling was requested via
+// bootDebugEnabled reports whether boot profiling was requested host-wide via
 // SPINBOX_DEBUG_BOOT (initcall_debug + verbose kernel output).
 func bootDebugEnabled() bool {
 	switch os.Getenv("SPINBOX_DEBUG_BOOT") {

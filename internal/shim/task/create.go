@@ -69,6 +69,21 @@ type createState struct {
 	guestIO       stdio.Stdio
 	cleanup       createCleanup
 	extrasDiskIdx *int // Index of extras disk (0-based) for kernel cmdline
+	debugBoot     bool // Kernel boot profiling requested via annotation
+}
+
+// annotationDebugBoot, when "true"/"1"/"yes" on the OCI spec, boots this VM
+// with kernel boot profiling (initcall_debug + verbose console output).
+const annotationDebugBoot = "io.spin.debug.boot"
+
+// annotationEnabled reports whether a boolean annotation is truthy.
+func annotationEnabled(annotations map[string]string, key string) bool {
+	switch annotations[key] {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // validateCreateRequest performs all pre-creation validation.
@@ -185,6 +200,9 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 		return s.networkManager.ReleaseNetworkResources(ctx, env)
 	})
 
+	// Boot profiling is opt-in per container via the debug-boot annotation.
+	state.debugBoot = annotationEnabled(b.Spec.Annotations, annotationDebugBoot)
+
 	// Build extras disk with files from annotations (k/v: destPath -> sourcePath)
 	// All files including supervisor binary must be specified via io.spin.extras.files
 	extrasBuilder := extras.NewBuilder()
@@ -247,6 +265,11 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 	if state.extrasDiskIdx != nil {
 		startOpts = append(startOpts, vm.WithExtrasDisk(*state.extrasDiskIdx))
 		log.G(ctx).WithField("extras_disk_idx", *state.extrasDiskIdx).Debug("adding extras disk index to kernel cmdline")
+	}
+
+	if state.debugBoot {
+		startOpts = append(startOpts, vm.WithDebugBoot(true))
+		log.G(ctx).Debug("kernel boot profiling enabled (initcall_debug)")
 	}
 
 	prestart := time.Now()
