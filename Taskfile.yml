@@ -75,9 +75,10 @@ tasks:
         echo "✓ {{.NAME}} built: {{.OUTPUT_DIR}}/{{.OUT}} (static)"
 
   build:
-    desc: Build all components (shim, kernel, initrd, QEMU)
+    desc: Build all components (shim, commit tool, kernel, initrd, QEMU)
     deps:
       - build:shim
+      - build:commit
       - build:kernel
       - build:initrd
       - build:qemu
@@ -100,6 +101,22 @@ tasks:
           NAME: containerd-shim-spinbox-v1
           OUT: containerd-shim-spinbox-v1
           PKG: ./cmd/containerd-shim-spinbox-v1
+          GO_STATIC_TAGS: '-tags "osusergo netgo static_build"'
+
+  build:commit:
+    desc: Build spinbox-commit binary (static, Linux x86_64)
+    sources:
+      - cmd/spinbox-commit/**
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.OUTPUT_DIR}}/spinbox-commit"
+    cmds:
+      - task: build:go
+        vars:
+          NAME: spinbox-commit
+          OUT: spinbox-commit
+          PKG: ./cmd/spinbox-commit
           GO_STATIC_TAGS: '-tags "osusergo netgo static_build"'
 
   build:vminitd:

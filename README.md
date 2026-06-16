@@ -43,7 +43,7 @@
 ## Demos
 
 ### Boot & Docker-in-VM
-[![asciicast](https://asciinema.org/a/5GJ0fPswxolRL4kiUQTpry6au.svg)](https://asciinema.org/a/5GJ0fPswxolRL4kiUQTpry6au)
+[![asciicast](https://asciinema.org/a/1257018.svg)](https://asciinema.org/a/1257018)
 
 Launch a full Ubuntu VM with Docker pre-installed. Shows ~300ms boot time with systemd, running containers inside the isolated VM - nested virtualization without the overhead.
 
@@ -123,13 +123,13 @@ export PATH=/usr/share/spin-stack/bin:$PATH
 
 # Pull an image
 ctr --address /var/run/spin-stack/containerd.sock image pull \
-  --snapshotter spin-erofs ghcr.io/spin-stack/spinbox/sandbox:v0.0.11
+  --snapshotter spin-erofs ghcr.io/spin-stack/spinbox/sandbox:latest
 
 # Run with spinbox runtime
 ctr --address /var/run/spin-stack/containerd.sock run -t --rm \
   --snapshotter spin-erofs \
   --runtime io.containerd.spinbox.v1 \
-  ghcr.io/spin-stack/spinbox/sandbox:v0.0.11 test-qemu-shim
+  ghcr.io/spin-stack/spinbox/sandbox:latest test-qemu-shim
 ```
 (use root:spinbox to log in)
 
