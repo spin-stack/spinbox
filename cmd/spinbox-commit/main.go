@@ -1,16 +1,23 @@
-// Command spinbox-commit commits a container's current root filesystem into a
-// new image, without nerdctl. It performs a HOT commit when the container is
-// running: it pauses the task (spinbox freezes the guest filesystems and stops
-// the vCPUs, so the on-disk rwlayer is consistent), diffs the frozen snapshot
-// with the quiesced label so the snapshotter reads it without the exclusive
-// image lock a paused VM still holds, builds a new OCI image, and resumes.
+// Command spinbox-commit commits a container's root filesystem into a new OCI
+// image using containerd primitives directly, without nerdctl. It has two
+// modes:
 //
-// A stopped container is committed cold (no pause, no quiesced label - the VM
-// is gone and the lock is free).
+// Container mode (--container ID): commits a (running or stopped) container.
+// When the container is running it performs a HOT commit - it pauses the task
+// (spinbox freezes the guest filesystems and stops the vCPUs, so the on-disk
+// rwlayer is consistent), diffs the frozen snapshot with the quiesced label so
+// the snapshotter reads it without the exclusive image lock a paused VM still
+// holds, builds the image, and resumes. A stopped container is committed cold.
+// The snapshot key, parent image and snapshotter are read from the container
+// record (the snapshot key is the container id for `ctr run <image> <id>`, but
+// this works regardless of how it was chosen).
 //
-// The active snapshot key for a container started by `ctr run <image> <id>` is
-// the container id; this tool reads it from the container record so it works
-// regardless of how the snapshot key was chosen.
+// Snapshot mode (--snapshot KEY --source-image REF): a lower-level cold path
+// that builds an image directly from an already-committed snapshot, with no
+// container involved (e.g. after `ctr snapshots commit`).
+//
+// Both modes run under a lease and produce a new config (parent diff_ids + the
+// new layer) and manifest with GC labels.
 package main
 
 import (
@@ -44,34 +51,67 @@ const quiescedLabel = "containerd.io/snapshot/erofs.quiesced"
 // the differ records on the layer blob.
 const uncompressedLabel = "containerd.io/uncompressed"
 
+// options holds the parsed CLI configuration for one of the two modes.
+type options struct {
+	address     string
+	namespace   string
+	imageRef    string
+	container   string // mode A: derive snapshot/image/snapshotter from a container, quiesce if running
+	snapshot    string // mode B: build directly from a committed snapshot key (cold)
+	sourceImage string // mode B: parent image ref
+	snapshotter string // mode B: snapshotter name
+}
+
 func main() {
-	var (
-		address   = flag.String("address", "/var/run/spin-stack/containerd.sock", "containerd socket")
-		namespace = flag.String("namespace", namespaces.Default, "containerd namespace")
-		container = flag.String("container", "", "container id to commit")
-		imageRef  = flag.String("image", "", "new image reference to create")
-	)
+	var opts options
+	flag.StringVar(&opts.address, "address", "/var/run/spin-stack/containerd.sock", "containerd socket")
+	flag.StringVar(&opts.namespace, "namespace", namespaces.Default, "containerd namespace")
+	flag.StringVar(&opts.imageRef, "image", "", "new image reference to create")
+	flag.StringVar(&opts.container, "container", "", "mode A: container id to commit (hot if running, derives source image and snapshotter)")
+	flag.StringVar(&opts.snapshot, "snapshot", "", "mode B: committed snapshot key to build an image from (cold)")
+	flag.StringVar(&opts.sourceImage, "source-image", "", "mode B: parent image ref (required with --snapshot)")
+	flag.StringVar(&opts.snapshotter, "snapshotter", "spin-erofs", "mode B: snapshotter name")
 	flag.Parse()
 
-	if *container == "" || *imageRef == "" {
-		fmt.Fprintln(os.Stderr, "usage: spinbox-commit --container ID --image REF [--address SOCK] [--namespace NS]")
+	if err := validateOptions(opts); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "usage:")
+		fmt.Fprintln(os.Stderr, "  spinbox-commit --container ID --image REF                        # commit a (running or stopped) container")
+		fmt.Fprintln(os.Stderr, "  spinbox-commit --snapshot KEY --source-image REF --image REF     # build an image from a committed snapshot")
 		os.Exit(2)
 	}
 
-	if err := run(*address, *namespace, *container, *imageRef); err != nil {
+	if err := run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "spinbox-commit failed: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(address, namespace, containerID, imageRef string) (retErr error) {
-	client, err := containerd.New(address)
+// validateOptions enforces that exactly one mode is selected and its required
+// flags are present.
+func validateOptions(o options) error {
+	if o.imageRef == "" {
+		return fmt.Errorf("--image is required")
+	}
+	switch {
+	case o.container != "" && o.snapshot != "":
+		return fmt.Errorf("--container and --snapshot are mutually exclusive")
+	case o.container == "" && o.snapshot == "":
+		return fmt.Errorf("one of --container or --snapshot is required")
+	case o.snapshot != "" && o.sourceImage == "":
+		return fmt.Errorf("--source-image is required with --snapshot")
+	}
+	return nil
+}
+
+func run(o options) (retErr error) {
+	client, err := containerd.New(o.address)
 	if err != nil {
 		return fmt.Errorf("connect containerd: %w", err)
 	}
 	defer client.Close()
 
-	ctx := namespaces.WithNamespace(context.Background(), namespace)
+	ctx := namespaces.WithNamespace(context.Background(), o.namespace)
 
 	// A lease keeps the new config/manifest blobs and the diff content alive
 	// until images.Create references them; otherwise a concurrent GC sweep
@@ -86,42 +126,49 @@ func run(address, namespace, containerID, imageRef string) (retErr error) {
 		}
 	}()
 
-	cont, err := client.LoadContainer(ctx, containerID)
-	if err != nil {
-		return fmt.Errorf("load container %s: %w", containerID, err)
-	}
-	info, err := cont.Info(ctx)
-	if err != nil {
-		return fmt.Errorf("container info: %w", err)
-	}
-	if info.SnapshotKey == "" {
-		return fmt.Errorf("container %s has no rootfs snapshot", containerID)
-	}
-	if info.Image == "" {
-		return fmt.Errorf("container %s has no source image recorded", containerID)
-	}
-	snapshotterName := info.Snapshotter
+	// Resolve the commit source (snapshot key, parent image, snapshotter) and,
+	// in container mode, quiesce a running container so its frozen rwlayer can
+	// be read.
+	snapshotKey, sourceImage, snapshotterName := o.snapshot, o.sourceImage, o.snapshotter
+	var quiesced quiesceState
+	if o.container != "" {
+		cont, err := client.LoadContainer(ctx, o.container)
+		if err != nil {
+			return fmt.Errorf("load container %s: %w", o.container, err)
+		}
+		info, err := cont.Info(ctx)
+		if err != nil {
+			return fmt.Errorf("container info: %w", err)
+		}
+		if info.SnapshotKey == "" {
+			return fmt.Errorf("container %s has no rootfs snapshot", o.container)
+		}
+		if info.Image == "" {
+			return fmt.Errorf("container %s has no source image recorded", o.container)
+		}
+		snapshotKey, sourceImage, snapshotterName = info.SnapshotKey, info.Image, info.Snapshotter
 
-	// Quiesce: if the container is running, pause it so the guest freezes its
-	// filesystems and the snapshot is safe to read while held. Resume on exit.
-	quiesced, err := quiesceContainer(ctx, cont)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if quiesced.resume != nil {
-			if rerr := quiesced.resume(); rerr != nil {
-				fmt.Fprintf(os.Stderr, "warning: resume container: %v\n", rerr)
-				if retErr == nil {
-					retErr = fmt.Errorf("resume container after commit: %w", rerr)
+		// If the container is running, pause it so the guest freezes its
+		// filesystems and the snapshot is safe to read while held; resume on exit.
+		quiesced, err = quiesceContainer(ctx, cont)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if quiesced.resume != nil {
+				if rerr := quiesced.resume(); rerr != nil {
+					fmt.Fprintf(os.Stderr, "warning: resume container: %v\n", rerr)
+					if retErr == nil {
+						retErr = fmt.Errorf("resume container after commit: %w", rerr)
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 
-	srcImage, err := client.GetImage(ctx, info.Image)
+	srcImage, err := client.GetImage(ctx, sourceImage)
 	if err != nil {
-		return fmt.Errorf("get source image %s: %w", info.Image, err)
+		return fmt.Errorf("get source image %s: %w", sourceImage, err)
 	}
 
 	ss := client.SnapshotService(snapshotterName)
@@ -132,9 +179,9 @@ func run(address, namespace, containerID, imageRef string) (retErr error) {
 		diffOpts = append(diffOpts, diff.WithLabels(map[string]string{quiescedLabel: "true"}))
 	}
 
-	layerDesc, err := rootfs.CreateDiff(ctx, info.SnapshotKey, ss, client.DiffService(), diffOpts...)
+	layerDesc, err := rootfs.CreateDiff(ctx, snapshotKey, ss, client.DiffService(), diffOpts...)
 	if err != nil {
-		return fmt.Errorf("create diff from snapshot %s: %w", info.SnapshotKey, err)
+		return fmt.Errorf("create diff from snapshot %s: %w", snapshotKey, err)
 	}
 
 	diffID, err := layerDiffID(ctx, cs, layerDesc)
@@ -142,7 +189,7 @@ func run(address, namespace, containerID, imageRef string) (retErr error) {
 		return err
 	}
 
-	manifestDesc, err := buildImage(ctx, cs, client.ImageService(), imageRef, srcImage.Target(), layerDesc, diffID, info.Image)
+	manifestDesc, err := buildImage(ctx, cs, client.ImageService(), o.imageRef, srcImage.Target(), layerDesc, diffID, sourceImage)
 	if err != nil {
 		return err
 	}
@@ -151,7 +198,7 @@ func run(address, namespace, containerID, imageRef string) (retErr error) {
 	if quiesced.frozen {
 		mode = "hot"
 	}
-	fmt.Printf("committed container %s (%s) -> image %s\n", containerID, mode, imageRef)
+	fmt.Printf("committed snapshot %s (%s) -> image %s\n", snapshotKey, mode, o.imageRef)
 	fmt.Printf("  manifest %s\n", manifestDesc.Digest)
 	fmt.Printf("  layer    %s (diffID %s)\n", layerDesc.Digest, diffID)
 	return nil
