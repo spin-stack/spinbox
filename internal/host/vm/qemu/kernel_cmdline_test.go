@@ -31,8 +31,28 @@ func TestBuildKernelCmdline(t *testing.T) {
 				"systemd.unified_cgroup_hierarchy=1",
 				"cgroup_no_v1=all",
 				"nohz=off",
+				"no_timer_check",
+				"tsc=reliable",
+				"rcupdate.rcu_expedited=1",
 				"init=/sbin/vminitd",
 			},
+			excludes: []string{"initcall_debug"},
+		},
+		{
+			name: "debug boot profiling",
+			cfg: KernelCmdlineConfig{
+				Console:  "ttyS0",
+				Quiet:    true,
+				LogLevel: 3,
+				Debug:    true,
+			},
+			contains: []string{
+				"initcall_debug",
+				"printk.time=1",
+				"loglevel=8",
+				"no_timer_check",
+			},
+			excludes: []string{"quiet", "loglevel=3"},
 		},
 		{
 			name: "with network config",
