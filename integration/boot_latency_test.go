@@ -72,9 +72,13 @@ func TestBootLatency(t *testing.T) {
 	t.Logf("BOOT_METRIC boot_to_output_ms min=%d median=%d max=%d iterations=%d",
 		minD.Milliseconds(), medD.Milliseconds(), maxD.Milliseconds(), bootLatencyIterations)
 
-	if ceiling := bootLatencyCeiling(); minD > ceiling {
-		t.Fatalf("boot latency regression: fastest boot %v exceeds ceiling %v (median %v, max %v)",
-			minD, ceiling, medD, maxD)
+	// Guard on the MEDIAN, not the min: task.Start can occasionally return
+	// before the boot fully overlaps the measured window, producing an
+	// unrealistically fast outlier that would mask a real regression. The
+	// median tracks the typical boot and shifts up if boots get slower.
+	if ceiling := bootLatencyCeiling(); medD > ceiling {
+		t.Fatalf("boot latency regression: median boot %v exceeds ceiling %v (min %v, max %v)",
+			medD, ceiling, minD, maxD)
 	}
 }
 
