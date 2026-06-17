@@ -36,9 +36,12 @@ type kmsgInitcall struct {
 // that run before virtio-console registers and that the hvc0 console therefore
 // never replays. /dev/kmsg holds the full kernel log regardless of console, and
 // log_buf_len=4M (set in debug-boot) keeps it from wrapping. last_ts_us is the
-// timestamp of the last kernel record (~ when the kernel handed off to init),
-// i.e. the kernel-side boot duration; the gap between it and sum_us is the
-// non-initcall kernel work (decompression, mm/SMP bring-up, ...).
+// timestamp of the last kernel record seen at drain time; it is only a rough
+// upper bound on kernel boot - driver/handoff messages emitted after PID1
+// starts push it past the real boundary. For the precise kernel-boot number use
+// the VMINITD_READY pid1-entry stamp (CLOCK_BOOTTIME at init exec). The gap
+// between last_ts_us and sum_us still indicates non-initcall kernel work
+// (decompression, mm/SMP bring-up, ...).
 //
 // No-op unless boot profiling (spin.profile) is enabled.
 func DumpKernelBootProfile(ctx context.Context) {

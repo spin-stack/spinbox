@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
 	cplugins "github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/log"
@@ -17,6 +18,7 @@ import (
 	"github.com/mdlayher/vsock"
 
 	"github.com/spin-stack/spinbox/internal/guest/vminit"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/boottime"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/config"
 )
 
@@ -58,6 +60,7 @@ func New(ctx context.Context, cfg *config.ServiceConfig) (Runnable, error) {
 		"cid":  cfg.VSockContextID,
 		"port": cfg.RPCPort,
 	}).Info("listening on vsock for RPC connections")
+	boottime.LogReady(ctx, "vsock-listen")
 	cfg.Shutdown.RegisterCallback(func(ctx context.Context) error {
 		return l.Close()
 	})
@@ -136,10 +139,33 @@ func New(ctx context.Context, cfg *config.ServiceConfig) (Runnable, error) {
 	}, nil
 }
 
+// firstAcceptListener fires onFirstAccept the first time a connection is
+// accepted. Used to stamp VMINITD_READY phase=first-accept: the gap from the
+// serve phase is how long the guest waited for the host to connect - the host
+// readiness lag, measured guest-side.
+type firstAcceptListener struct {
+	net.Listener
+	once          sync.Once
+	onFirstAccept func()
+}
+
+func (f *firstAcceptListener) Accept() (net.Conn, error) {
+	c, err := f.Listener.Accept()
+	if err == nil && f.onFirstAccept != nil {
+		f.once.Do(f.onFirstAccept)
+	}
+	return c, err
+}
+
 // Run starts the TTRPC server and blocks until it exits.
 func (s *Service) Run(ctx context.Context) error {
 	log.G(ctx).Info("starting TTRPC server")
-	err := s.server.Serve(ctx, s.l)
+	boottime.LogReady(ctx, "serve")
+	l := &firstAcceptListener{
+		Listener:      s.l,
+		onFirstAccept: func() { boottime.LogReady(ctx, "first-accept") },
+	}
+	err := s.server.Serve(ctx, l)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("TTRPC server exited with error")
 	} else {

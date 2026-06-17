@@ -16,6 +16,7 @@ import (
 	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
 
+	"github.com/spin-stack/spinbox/internal/guest/vminit/boottime"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/config"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/service"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/system"
@@ -33,6 +34,10 @@ const (
 )
 
 func main() {
+	// Stamp PID1 entry against CLOCK_BOOTTIME as early as possible: this is the
+	// clean kernel-boot number (kernel start -> init exec).
+	boottime.LogReady(context.Background(), "pid1-entry")
+
 	cfg, setFlags, configFile, err := config.ParseFlags(os.Args[1:])
 	if err != nil {
 		if errors.Is(err, config.ErrVersionRequested) {
@@ -100,6 +105,7 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 	if err := system.Initialize(ctx, prof); err != nil {
 		return err
 	}
+	boottime.LogReady(ctx, "system-init")
 
 	if cfg.Debug {
 		systools.DumpInfo(ctx)
