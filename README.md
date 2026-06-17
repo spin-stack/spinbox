@@ -16,7 +16,7 @@
 
 ---
 
-> **TL;DR**: Experimental containerd runtime providing VM-level isolation with ~300ms boot times.
+> **TL;DR**: Experimental containerd runtime providing VM-level isolation with ~90ms boot times.
 > Get the security of VMs with the UX of containers.
 
 ## Features
@@ -45,7 +45,7 @@
 ### Boot & Docker-in-VM
 [![asciicast](https://asciinema.org/a/AUsqYYTqhmdD3eQz.svg)](https://asciinema.org/a/AUsqYYTqhmdD3eQz)
 
-Launch a full Ubuntu VM with Docker pre-installed. Shows ~300ms boot time with systemd, running containers inside the isolated VM - nested virtualization without the overhead.
+Launch a full Ubuntu VM with Docker pre-installed. Shows ~90ms boot time with systemd, running containers inside the isolated VM - nested virtualization without the overhead.
 
 ### Snapshot & Commit
 [![asciicast](https://asciinema.org/a/1257525.svg)](https://asciinema.org/a/1257525)
