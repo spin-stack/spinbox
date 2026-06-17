@@ -111,6 +111,11 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 	}
 	prof.Mark(ctx, "service-new")
 
+	// Boot profiling: dump the complete kernel initcall profile from /dev/kmsg
+	// (includes the early ACPI/PCI initcalls the hvc0 console hides). No-op
+	// unless spin.profile is set.
+	system.DumpKernelBootProfile(ctx)
+
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
 	// Note: The supervisor agent is now started after container creation
