@@ -88,9 +88,27 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
     --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
     cd qemu-build && \
     if [ ! -f Makefile ]; then \
-        echo "Disabling CXL device support (debloat)..."; \
+        echo "Debloating QEMU device set (smaller binary + faster startup)..."; \
         DEVMAK="/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/default.mak"; \
-        grep -q '^CONFIG_CXL=n' "$DEVMAK" || echo 'CONFIG_CXL=n' >> "$DEVMAK"; \
+        for sym in \
+            CONFIG_CXL \
+            CONFIG_E1000_PCI CONFIG_E1000E_PCI CONFIG_RTL8139_PCI CONFIG_VMXNET3_PCI \
+            CONFIG_PCNET_PCI CONFIG_NE2000_PCI CONFIG_NE2000_ISA CONFIG_EEPRO100_PCI \
+            CONFIG_TULIP CONFIG_SUNGEM \
+            CONFIG_HDA CONFIG_AC97 CONFIG_ES1370 CONFIG_CS4231A CONFIG_SB16 CONFIG_GUS CONFIG_ADLIB \
+            CONFIG_VGA_CIRRUS CONFIG_VGA_PCI CONFIG_VMWARE_VGA CONFIG_QXL CONFIG_ATI_VGA \
+            CONFIG_BOCHS_DISPLAY CONFIG_VIRTIO_VGA CONFIG_VIRTIO_GPU CONFIG_VIRTIO_GPU_PCI CONFIG_RAMFB \
+            CONFIG_USB_UHCI CONFIG_USB_OHCI CONFIG_USB_EHCI CONFIG_USB_XHCI CONFIG_USB_XHCI_NEC \
+            CONFIG_USB_STORAGE_BOT CONFIG_USB_STORAGE_UAS CONFIG_USB_AUDIO CONFIG_USB_SERIAL \
+            CONFIG_USB_NETWORK CONFIG_USB_HID CONFIG_USB_SMARTCARD \
+            CONFIG_MEGASAS_SCSI_PCI CONFIG_MPTSAS_SCSI_PCI CONFIG_LSI_SCSI_PCI \
+            CONFIG_VMW_PVSCSI_SCSI_PCI CONFIG_ESP_PCI CONFIG_VIRTIO_SCSI \
+            CONFIG_NVME_PCI CONFIG_SDHCI CONFIG_SDHCI_PCI \
+            CONFIG_TPM_TIS_ISA CONFIG_TPM_CRB CONFIG_TPM_EMULATOR CONFIG_TPM_PASSTHROUGH \
+            CONFIG_PARALLEL CONFIG_PARALLEL_ISA CONFIG_EDU CONFIG_PCI_TESTDEV CONFIG_IVSHMEM_DEVICE \
+            ; do \
+            grep -q "^${sym}=n" "$DEVMAK" || echo "${sym}=n" >> "$DEVMAK"; \
+        done; \
         echo "Running QEMU configure (first build)..."; \
         /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
         --prefix=/opt/qemu \
