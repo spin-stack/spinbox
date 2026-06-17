@@ -518,6 +518,50 @@ memory_hotplug validation failed: increment_size_mb must be 128MB-aligned, got 1
 ```
 **Solution**: Use 128MB-aligned value (128, 256, 512, 1024, etc.).
 
+## Boot Profiling
+
+Boot profiling is **opt-in** and adds no overhead to normal boots. It is not
+part of the JSON config file - it is enabled per container via an OCI
+annotation, or host-wide via an environment variable.
+
+**Per container** (recommended) - set the annotation on the container spec:
+
+```
+io.spin.debug.boot = "true"   # also accepts "1" / "yes"
+```
+
+**Host-wide** - set on the shim/containerd environment:
+
+```
+SPINBOX_DEBUG_BOOT=1
+```
+
+When enabled, the VM boots with:
+- `initcall_debug` + verbose kernel output (per-initcall timings),
+- the kernel console routed through **virtio-console (`hvc0`)** instead of the
+  emulated UART (`ttyS0`), so the verbose output does not backpressure the guest
+  and skew the timings,
+- `log_buf_len=4M` so the early initcalls are not lost to ring-buffer overflow,
+- a `spin.profile` cmdline marker that makes vminitd emit its own phase timings.
+
+### Profiling output
+
+All metrics are grep-able lines. The kernel ones land in the per-VM console log
+(`<log_dir>/<container>/console.log`); the shim/vminitd ones in the shim journal
+and console log.
+
+| Line | Source | What it measures |
+|------|--------|------------------|
+| `BOOT_TIMELINE` | shim | wall-clock cold-start: `qemu_launch` (exec→QMP) vs `guest_boot` (→vsock ready) |
+| `BOOT_METRIC` | test | `task.Start()` → entrypoint output (container start in a ready VM) |
+| `VMINITD_READY` | vminitd | CLOCK_BOOTTIME milestones: `pid1-entry` (kernel boot), `system-init`, `vsock-listen`, `serve`, `first-accept` |
+| `VMINITD_PROFILE` | vminitd | per-phase deltas of `system.Initialize` |
+| `KERNEL_PROFILE` | test | slowest initcalls from the console (late initcalls only) |
+| `KMSG_PROFILE` | vminitd | **complete** initcall set from `/dev/kmsg` (incl. early ACPI/PCI) |
+
+The integration suite exercises these (`TestBootTimeline`, `TestVminitdReady`,
+`TestKernelBootProfile`, `TestKernelBootProfileComplete`, `TestUserspaceBootProfile`).
+
 ## See Also
 
 - [README.md](../README.md) - Main documentation
