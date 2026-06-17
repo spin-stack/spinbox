@@ -10,21 +10,23 @@ import (
 
 func TestQemuMachineType(t *testing.T) {
 	tests := []struct {
-		name string
-		env  string
-		want string
+		name     string
+		override string // per-VM annotation value
+		env      string // SPINBOX_QEMU_MACHINE
+		want     string
 	}{
-		{name: "unset defaults to q35", env: "", want: "q35"},
-		{name: "explicit q35", env: "q35", want: "q35"},
-		{name: "pc for A/B", env: "pc", want: "pc"},
-		{name: "unknown falls back to q35", env: "microvm", want: "q35"},
-		{name: "garbage falls back to q35", env: "not-a-machine", want: "q35"},
+		{name: "nothing set defaults to q35", override: "", env: "", want: "q35"},
+		{name: "env pc", override: "", env: "pc", want: "pc"},
+		{name: "annotation pc wins over empty env", override: "pc", env: "", want: "pc"},
+		{name: "annotation wins over env", override: "q35", env: "pc", want: "q35"},
+		{name: "invalid annotation falls through to env", override: "bogus", env: "pc", want: "pc"},
+		{name: "invalid annotation and env default q35", override: "bogus", env: "junk", want: "q35"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("SPINBOX_QEMU_MACHINE", tt.env)
-			assert.Equal(t, tt.want, qemuMachineType())
+			assert.Equal(t, tt.want, qemuMachineType(tt.override))
 		})
 	}
 }

@@ -44,6 +44,7 @@ type StartOpts struct {
 	NetworkNamespace string // Path to network namespace (e.g., "/var/run/netns/cni-xxx")
 	ExtrasDiskIndex  *int   // Index of extras disk (0-based), nil if none
 	DebugBoot        bool   // Enable kernel boot profiling (initcall_debug + verbose)
+	MachineType      string // QEMU machine type override ("q35"/"pc"); empty = backend default
 }
 
 // StartOpt configures VM start options.
@@ -61,6 +62,14 @@ func WithInitArgs(args ...string) StartOpt {
 func WithDebugBoot(enabled bool) StartOpt {
 	return func(o *StartOpts) {
 		o.DebugBoot = enabled
+	}
+}
+
+// WithMachineType overrides the QEMU machine type for this VM (e.g. "q35" or
+// "pc"). Empty leaves the backend default. Used for q35-vs-pc A/B testing.
+func WithMachineType(machine string) StartOpt {
+	return func(o *StartOpts) {
+		o.MachineType = machine
 	}
 }
 

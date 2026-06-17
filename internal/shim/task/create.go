@@ -68,13 +68,18 @@ type createState struct {
 	containerIO   stdio.Stdio
 	guestIO       stdio.Stdio
 	cleanup       createCleanup
-	extrasDiskIdx *int // Index of extras disk (0-based) for kernel cmdline
-	debugBoot     bool // Kernel boot profiling requested via annotation
+	extrasDiskIdx *int   // Index of extras disk (0-based) for kernel cmdline
+	debugBoot     bool   // Kernel boot profiling requested via annotation
+	qemuMachine   string // QEMU machine type override requested via annotation
 }
 
 // annotationDebugBoot, when "true"/"1"/"yes" on the OCI spec, boots this VM
 // with kernel boot profiling (initcall_debug + verbose console output).
 const annotationDebugBoot = "io.spin.debug.boot"
+
+// annotationQemuMachine overrides the QEMU machine type for this VM (e.g.
+// "pc"). Empty/absent uses the backend default (q35). Used for q35-vs-pc A/B.
+const annotationQemuMachine = "io.spin.qemu.machine"
 
 // annotationEnabled reports whether a boolean annotation is truthy.
 func annotationEnabled(annotations map[string]string, key string) bool {
@@ -203,6 +208,10 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	// Boot profiling is opt-in per container via the debug-boot annotation.
 	state.debugBoot = annotationEnabled(b.Spec.Annotations, annotationDebugBoot)
 
+	// QEMU machine type is selectable per container (for q35-vs-pc A/B); the
+	// VM backend validates the value and falls back to its default.
+	state.qemuMachine = b.Spec.Annotations[annotationQemuMachine]
+
 	// Build extras disk with files from annotations (k/v: destPath -> sourcePath)
 	// All files including supervisor binary must be specified via io.spin.extras.files
 	extrasBuilder := extras.NewBuilder()
@@ -270,6 +279,11 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 	if state.debugBoot {
 		startOpts = append(startOpts, vm.WithDebugBoot(true))
 		log.G(ctx).Debug("kernel boot profiling enabled (initcall_debug)")
+	}
+
+	if state.qemuMachine != "" {
+		startOpts = append(startOpts, vm.WithMachineType(state.qemuMachine))
+		log.G(ctx).WithField("machine", state.qemuMachine).Debug("QEMU machine type override requested")
 	}
 
 	prestart := time.Now()

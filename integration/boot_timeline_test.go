@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,6 +25,10 @@ import (
 //
 //	BOOT_TIMELINE qemu_launch_us=8123 guest_boot_us=146210 total_us=154333
 var bootTimelineRE = regexp.MustCompile(`BOOT_TIMELINE qemu_launch_us=(\d+) guest_boot_us=(\d+) total_us=(\d+)`)
+
+// annotationQemuMachine selects the QEMU machine type per container (mirrors
+// the shim constant). Empty uses the backend default (q35).
+const annotationQemuMachine = "io.spin.qemu.machine"
 
 type bootTimeline struct {
 	qemuLaunchUS int
@@ -51,7 +56,56 @@ func TestBootTimeline(t *testing.T) {
 		t.Fatalf("get image %s: %v", cfg.Image, err)
 	}
 
-	name := "qbx-timeline-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
+	tl := bootAndMeasureTimeline(t, ctx, client, cfg, image, "")
+	t.Logf("BOOT_TIMELINE qemu_launch_us=%d guest_boot_us=%d total_us=%d (%.1f ms total: %.1f ms qemu + %.1f ms guest)",
+		tl.qemuLaunchUS, tl.guestBootUS, tl.totalUS,
+		float64(tl.totalUS)/1000, float64(tl.qemuLaunchUS)/1000, float64(tl.guestBootUS)/1000)
+}
+
+// TestBootTimelineMachines boots the same workload on q35 and on pc (i440fx) and
+// reports both BOOT_TIMELINE breakdowns plus the delta - the q35-vs-pc A/B. pc
+// is the lighter chipset (still ACPI+PCI+virtio); a clear qemu_launch win argues
+// for pursuing it (and the QEMU build strip), otherwise q35 stays.
+func TestBootTimelineMachines(t *testing.T) {
+	cfg := loadTestConfig()
+
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
+	ensureImagePulled(t, client, cfg)
+
+	ctx := namespaces.WithNamespace(t.Context(), cfg.Namespace)
+
+	image, err := client.GetImage(ctx, cfg.Image)
+	if err != nil {
+		t.Fatalf("get image %s: %v", cfg.Image, err)
+	}
+
+	results := make(map[string]bootTimeline)
+	for _, machine := range []string{"q35", "pc"} {
+		tl := bootAndMeasureTimeline(t, ctx, client, cfg, image, machine)
+		results[machine] = tl
+		t.Logf("BOOT_TIMELINE[%s] qemu_launch_us=%d guest_boot_us=%d total_us=%d (%.1f ms = %.1f qemu + %.1f guest)",
+			machine, tl.qemuLaunchUS, tl.guestBootUS, tl.totalUS,
+			float64(tl.totalUS)/1000, float64(tl.qemuLaunchUS)/1000, float64(tl.guestBootUS)/1000)
+	}
+
+	q, p := results["q35"], results["pc"]
+	t.Logf("BOOT_TIMELINE A/B (pc - q35): qemu_launch %+d us, guest_boot %+d us, total %+d us",
+		p.qemuLaunchUS-q.qemuLaunchUS, p.guestBootUS-q.guestBootUS, p.totalUS-q.totalUS)
+}
+
+// bootAndMeasureTimeline boots one container (optionally pinned to a QEMU
+// machine type via annotation) whose entrypoint prints BOOTED, then returns the
+// BOOT_TIMELINE the shim emitted for that boot. machine "" uses the default.
+func bootAndMeasureTimeline(t *testing.T, ctx context.Context, client *containerd.Client, cfg testConfig, image containerd.Image, machine string) bootTimeline {
+	t.Helper()
+
+	label := machine
+	if label == "" {
+		label = "default"
+	}
+	name := fmt.Sprintf("qbx-timeline-%s-%s", label, strings.ReplaceAll(time.Now().Format("150405.000"), ".", ""))
 
 	stdoutPath := filepath.Join(t.TempDir(), "stdout.log")
 	stdoutFile, err := os.Create(stdoutPath)
@@ -60,15 +114,20 @@ func TestBootTimeline(t *testing.T) {
 	}
 	defer stdoutFile.Close()
 
+	specOpts := []oci.SpecOpts{
+		oci.WithImageConfig(image),
+		oci.WithProcessArgs("/bin/echo", "BOOTED"),
+	}
+	if machine != "" {
+		specOpts = append(specOpts, oci.WithAnnotations(map[string]string{annotationQemuMachine: machine}))
+	}
+
 	container, err := client.NewContainer(ctx, name,
 		containerd.WithSnapshotter(cfg.Snapshotter),
 		containerd.WithImage(image),
 		containerd.WithNewSnapshot(name+"-snapshot", image),
 		containerd.WithRuntime(cfg.Runtime, nil),
-		containerd.WithNewSpec(
-			oci.WithImageConfig(image),
-			oci.WithProcessArgs("/bin/echo", "BOOTED"),
-		),
+		containerd.WithNewSpec(specOpts...),
 	)
 	if err != nil {
 		t.Fatalf("create container %s: %v", name, err)
@@ -103,10 +162,7 @@ func TestBootTimeline(t *testing.T) {
 	}
 	waitForOutput(t, stdoutPath, "BOOTED", 60*time.Second)
 
-	tl := readBootTimeline(t, since)
-	t.Logf("BOOT_TIMELINE qemu_launch_us=%d guest_boot_us=%d total_us=%d (%.1f ms total: %.1f ms qemu + %.1f ms guest)",
-		tl.qemuLaunchUS, tl.guestBootUS, tl.totalUS,
-		float64(tl.totalUS)/1000, float64(tl.qemuLaunchUS)/1000, float64(tl.guestBootUS)/1000)
+	return readBootTimeline(t, since)
 }
 
 // readBootTimeline reads the shim journal since the given time and returns the

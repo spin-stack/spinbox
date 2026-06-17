@@ -397,8 +397,11 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// the cmdline and the QEMU device list stay in agreement.
 	debugBoot := startOpts.DebugBoot || bootDebugEnabled()
 
+	// Resolve the machine type: per-VM annotation > env > q35.
+	machineType := qemuMachineType(startOpts.MachineType)
+
 	// Build QEMU command line (now uses the renamed TAP names)
-	qemuArgs, err := q.buildQemuCommandLine(cmdlineArgs, debugBoot)
+	qemuArgs, err := q.buildQemuCommandLine(cmdlineArgs, debugBoot, machineType)
 	if err != nil {
 		return err
 	}
@@ -486,24 +489,25 @@ func bootDebugEnabled() bool {
 	}
 }
 
-// qemuMachineType selects the QEMU machine type. It defaults to q35; set
-// SPINBOX_QEMU_MACHINE=pc to A/B against the lighter i440fx chipset (still
-// ACPI+PCI+virtio, just a simpler south bridge) and compare BOOT_TIMELINE.
-// Any unrecognized value falls back to q35.
-func qemuMachineType() string {
-	switch m := os.Getenv("SPINBOX_QEMU_MACHINE"); m {
-	case "pc", "q35":
-		return m
-	default:
-		return "q35"
+// qemuMachineType selects the QEMU machine type, in precedence order:
+// per-VM override (io.spin.qemu.machine annotation) > SPINBOX_QEMU_MACHINE env
+// > q35. This enables a q35-vs-pc A/B (pc = lighter i440fx chipset, still
+// ACPI+PCI+virtio) to compare BOOT_TIMELINE. Unrecognized values are ignored.
+func qemuMachineType(override string) string {
+	for _, m := range []string{override, os.Getenv("SPINBOX_QEMU_MACHINE")} {
+		switch m {
+		case "pc", "q35":
+			return m
+		}
 	}
+	return "q35"
 }
 
 // buildQemuCommandLine constructs the QEMU command line arguments.
 // When debug is set, a virtio-console is added and the kernel console is routed
 // through it (the cmdline already selects console=hvc0) so verbose boot
 // profiling output does not backpressure on the emulated UART.
-func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]string, error) {
+func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool, machineType string) ([]string, error) {
 	cfg, err := config.Get()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config: %w", err)
@@ -524,8 +528,9 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		setNoDefaults(). // Disable default devices (prevents e1000e NIC needing ROM files)
 		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
 		// Optimize: use kernel IRQ chip, disable HPET. Machine type is q35 by
-		// default; SPINBOX_QEMU_MACHINE=pc switches to i440fx for A/B testing.
-		setMachine(qemuMachineType(), "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
+		// default; the io.spin.qemu.machine annotation / SPINBOX_QEMU_MACHINE
+		// can switch to i440fx (pc) for A/B testing.
+		setMachine(machineType, "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
 		setCPU("host", "migratable=on").
 		// CPU configuration for hotplug:
 		// Simple topology: just specify initial CPUs and max CPUs, let QEMU handle the rest
