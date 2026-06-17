@@ -486,6 +486,19 @@ func bootDebugEnabled() bool {
 	}
 }
 
+// qemuMachineType selects the QEMU machine type. It defaults to q35; set
+// SPINBOX_QEMU_MACHINE=pc to A/B against the lighter i440fx chipset (still
+// ACPI+PCI+virtio, just a simpler south bridge) and compare BOOT_TIMELINE.
+// Any unrecognized value falls back to q35.
+func qemuMachineType() string {
+	switch m := os.Getenv("SPINBOX_QEMU_MACHINE"); m {
+	case "pc", "q35":
+		return m
+	default:
+		return "q35"
+	}
+}
+
 // buildQemuCommandLine constructs the QEMU command line arguments.
 // When debug is set, a virtio-console is added and the kernel console is routed
 // through it (the cmdline already selects console=hvc0) so verbose boot
@@ -510,8 +523,9 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 	builder := newQemuCommandBuilder().
 		setNoDefaults(). // Disable default devices (prevents e1000e NIC needing ROM files)
 		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
-		// Optimize: use kernel IRQ chip, disable HPET
-		setMachine("q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
+		// Optimize: use kernel IRQ chip, disable HPET. Machine type is q35 by
+		// default; SPINBOX_QEMU_MACHINE=pc switches to i440fx for A/B testing.
+		setMachine(qemuMachineType(), "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
 		setCPU("host", "migratable=on").
 		// CPU configuration for hotplug:
 		// Simple topology: just specify initial CPUs and max CPUs, let QEMU handle the rest
