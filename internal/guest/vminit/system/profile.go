@@ -28,18 +28,24 @@ const profileMarkerParam = "spin.profile"
 // where delta_us is the time since the previous Mark and total_us the time
 // since the profiler's start.
 type BootProfiler struct {
-	enabled bool
-	start   time.Time
-	last    time.Time
+	start time.Time
+	last  time.Time
+
+	// enabled is resolved lazily on the first Mark, not in the constructor: the
+	// profiler is created before system.Initialize mounts /proc, so reading
+	// /proc/cmdline any earlier always fails and would wedge profiling off. The
+	// first Mark fires right after mountFilesystems, by which point /proc exists.
+	resolved bool
+	enabled  bool
 }
 
 // NewBootProfiler returns a profiler whose timings are relative to start.
-// Profiling is enabled only when spin.profile is present in /proc/cmdline.
+// Profiling is enabled only when spin.profile is present in /proc/cmdline; that
+// decision is deferred to the first Mark (see the resolved field).
 func NewBootProfiler(start time.Time) *BootProfiler {
 	return &BootProfiler{
-		enabled: profileEnabled(),
-		start:   start,
-		last:    start,
+		start: start,
+		last:  start,
 	}
 }
 
@@ -52,9 +58,17 @@ func profileEnabled() bool {
 }
 
 // Mark records the elapsed time under phase and resets the per-phase clock. It
-// is safe to call on a nil or disabled profiler (no-op).
+// is safe to call on a nil or disabled profiler (no-op). The enabled decision
+// is resolved on the first call, once /proc/cmdline is readable.
 func (p *BootProfiler) Mark(ctx context.Context, phase string) {
-	if p == nil || !p.enabled {
+	if p == nil {
+		return
+	}
+	if !p.resolved {
+		p.enabled = profileEnabled()
+		p.resolved = true
+	}
+	if !p.enabled {
 		return
 	}
 	now := time.Now()
