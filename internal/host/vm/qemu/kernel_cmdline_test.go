@@ -34,6 +34,7 @@ func TestBuildKernelCmdline(t *testing.T) {
 				"no_timer_check",
 				"tsc=reliable",
 				"rcupdate.rcu_expedited=1",
+				"pci=lastbus=0",
 				"init=/sbin/vminitd",
 			},
 			excludes: []string{"initcall_debug"},

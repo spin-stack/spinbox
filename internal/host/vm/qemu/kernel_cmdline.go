@@ -112,10 +112,17 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	//   no_timer_check            - skip the boot-time timer IRQ delivery probe
 	//   tsc=reliable              - trust the TSC and skip the clocksource watchdog
 	//   rcupdate.rcu_expedited=1  - expedite RCU grace periods during boot
+	//   pci=lastbus=0             - stop PCI enumeration after bus 0. On our q35
+	//                               machine every virtio device sits on the root
+	//                               bus (pcie.0), so scanning buses 1-255 is pure
+	//                               boot-time overhead. If a device is ever placed
+	//                               behind a bridge this must be revisited - the
+	//                               integration tests (virtio-blk/-net) are the gate.
 	parts = append(parts,
 		"no_timer_check",
 		"tsc=reliable",
 		"rcupdate.rcu_expedited=1",
+		"pci=lastbus=0",
 	)
 
 	// Boot profiling: print per-initcall timings to the console log.
