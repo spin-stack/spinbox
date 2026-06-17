@@ -22,7 +22,7 @@
 ## Features
 
 - ✅ **Strong isolation** — One VM per container via KVM hardware virtualization
-- ✅ **Fast boot** — ~300ms with optimized kernel and systemd
+- ✅ **Fast boot** — ~90ms with optimized kernel and systemd
 - ✅ **Standard networking** — CNI plugin compatible (Calico, Cilium, etc.)
 - ✅ **Efficient storage** — EROFS snapshots with inline compression
 - ✅ **Snapshot & commit** — Persist VM state like Docker images ([hot-commit runbook](docs/hot-commit.md))
@@ -43,7 +43,7 @@
 ## Demos
 
 ### Boot & Docker-in-VM
-[![asciicast](https://asciinema.org/a/1257018.svg)](https://asciinema.org/a/1257018)
+[![asciicast](https://asciinema.org/a/AUsqYYTqhmdD3eQz.svg)](https://asciinema.org/a/AUsqYYTqhmdD3eQz)
 
 Launch a full Ubuntu VM with Docker pre-installed. Shows ~300ms boot time with systemd, running containers inside the isolated VM - nested virtualization without the overhead.
 
