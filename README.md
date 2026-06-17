@@ -50,9 +50,7 @@ Launch a full Ubuntu VM with Docker pre-installed. Shows ~90ms boot time with sy
 ### Snapshot & Commit
 [![asciicast](https://asciinema.org/a/1257525.svg)](https://asciinema.org/a/1257525)
 
-Persist disk state between VM runs: install packages, create files, then commit to a new image with `nerdctl commit`. The next VM boots with all changes preserved - like Docker commits, but for entire VMs.
-
-> **Note**: Snapshot support (for EROFS) requires a custom containerd build from [aledbf/containerd@aledbf/erofs-snapshot-narrow](https://github.com/aledbf/containerd/tree/aledbf/erofs-snapshot-narrow) until the changes are upstreamed.
+Persist disk state between VM runs: install packages, create files, then commit to a new image - with the bundled `spinbox-commit` (no nerdctl required) or with `nerdctl commit`. `spinbox-commit` also supports **hot commit** (pause + freeze the running VM, commit, resume). The next VM boots with all changes preserved - like Docker commits, but for entire VMs. See [docs/hot-commit.md](docs/hot-commit.md).
 
 ---
 

@@ -14,7 +14,7 @@ The vminit package implements the guest-side init daemon (PID 1) that runs insid
 │  │  (system/)      │────▶│  ├─ Task Service (Create/Start/etc) │   │
 │  │  • Mounts       │     │  ├─ Streaming Service (I/O)         │   │
 │  │  • Cgroups v2   │     │  └─ Events Service                  │   │
-│  │  • DNS          │     └─────────────────────────────────────┘   │
+│  │  • Network+DNS  │     └─────────────────────────────────────┘   │
 │  └─────────────────┘                    │                          │
 │                                         ▼                          │
 │  ┌──────────────────────────────────────────────────────────────┐  │
@@ -34,7 +34,7 @@ vminit/
 ├── task/        # Task service (containerd API implementation)
 ├── runc/        # Container abstraction over OCI runtime
 ├── process/     # Init and Exec process management
-├── system/      # VM system initialization (mounts, cgroups)
+├── system/      # VM system init (mounts, cgroups, networking via netlink, DNS)
 ├── streaming/   # vsock-based I/O streaming
 ├── events/      # Event publishing to containerd
 ├── devices/     # Block device handling
