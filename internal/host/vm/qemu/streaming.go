@@ -88,9 +88,14 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		"port": vsockports.DefaultRPCPort,
 	}).Info("qemu: connecting to vsock RPC port")
 
+	// Keep the backoff tight: until vminitd listens, vsock.Dial fails fast
+	// (ECONNREFUSED, no guest CPU involved), so frequent retries are cheap. A
+	// large cap meant we could sleep up to that long *past* the moment vminitd
+	// became ready, delaying every boot - the dominant term in the measured
+	// guest-boot time. A 20ms cap bounds that detection lag.
 	const (
-		initialBackoff = 10 * time.Millisecond
-		maxBackoff     = 200 * time.Millisecond
+		initialBackoff = 5 * time.Millisecond
+		maxBackoff     = 20 * time.Millisecond
 	)
 
 	retryStart := time.Now()

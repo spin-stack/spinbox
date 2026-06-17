@@ -134,14 +134,22 @@ func openTAPInNetNSInternal(ctx context.Context, tapName, netnsPath string) (*os
 	return tunFile, nil
 }
 
-// waitForSocket waits for a Unix socket to appear
+// waitForSocket waits for a Unix socket to appear.
+//
+// The QMP socket appears within a few milliseconds of QEMU starting, so it
+// checks immediately and then polls at a fine interval. The previous 50ms
+// ticker that only checked on the first tick added that whole interval to every
+// boot (it dominated the measured QEMU-launch time) for no benefit.
 func waitForSocket(ctx context.Context, socketPath string, timeout time.Duration) error {
-	startedAt := time.Now()
-	ticker := time.NewTicker(50 * time.Millisecond)
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		if time.Since(startedAt) > timeout {
+		if _, err := os.Stat(socketPath); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
 			return fmt.Errorf("timeout waiting for socket: %s", socketPath)
 		}
 
@@ -149,9 +157,6 @@ func waitForSocket(ctx context.Context, socketPath string, timeout time.Duration
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := os.Stat(socketPath); err == nil {
-				return nil
-			}
 		}
 	}
 }
