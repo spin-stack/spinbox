@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
@@ -408,6 +409,9 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		"cmdline": strings.Join(qemuArgs, " "),
 	}).Debug("qemu: starting VM process")
 
+	// tExec marks the QEMU process launch; the deltas below isolate where a
+	// normal (non-debug) boot spends its cold-start time. See BOOT_TIMELINE below.
+	tExec := time.Now()
 	if err := q.startQemuProcess(ctx, qemuArgs); err != nil {
 		return err
 	}
@@ -416,6 +420,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	if err := q.connectQMP(ctx); err != nil {
 		return err
 	}
+	tQMP := time.Now()
 
 	log.G(ctx).Info("qemu: QMP connected, waiting for vsock...")
 
@@ -431,6 +436,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	if err := q.connectVsockClient(ctx); err != nil {
 		return err
 	}
+	tVsock := time.Now()
 
 	// Monitor liveness of the guest RPC server; if it goes away (guest reboot/poweroff)
 	// ensure QEMU exits so the shim can clean up.
@@ -439,6 +445,17 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Mark as successfully started
 	success = true
 	q.setState(vmStateRunning)
+
+	// BOOT_TIMELINE isolates VM cold-start on a normal boot, the half that the
+	// initcall/userspace profiles do not cover:
+	//   qemu_launch = exec + machine/firmware init until QMP responds
+	//   guest_boot  = kernel boot + vminitd init until its vsock RPC accepts
+	// Container create/start happen afterwards over RPC and are logged separately.
+	// Always on (one line per VM start) so plain boots emit it - no debug mode.
+	log.G(ctx).Infof("BOOT_TIMELINE qemu_launch_us=%d guest_boot_us=%d total_us=%d",
+		tQMP.Sub(tExec).Microseconds(),
+		tVsock.Sub(tQMP).Microseconds(),
+		tVsock.Sub(tExec).Microseconds())
 
 	log.G(ctx).Info("qemu: VM fully initialized")
 
