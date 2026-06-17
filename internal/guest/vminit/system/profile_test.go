@@ -11,7 +11,8 @@ import (
 
 func TestBootProfilerDisabledIsNoop(t *testing.T) {
 	// A disabled profiler must not panic and must accept Mark calls.
-	p := &BootProfiler{enabled: false, start: time.Now(), last: time.Now()}
+	// resolved:true pins the decision so Mark does not re-read /proc/cmdline.
+	p := &BootProfiler{resolved: true, enabled: false, start: time.Now(), last: time.Now()}
 	p.Mark(t.Context(), "phase")
 
 	// A nil profiler must also be safe (Initialize may receive nil).
@@ -21,7 +22,7 @@ func TestBootProfilerDisabledIsNoop(t *testing.T) {
 
 func TestBootProfilerAdvancesClock(t *testing.T) {
 	start := time.Now()
-	p := &BootProfiler{enabled: true, start: start, last: start}
+	p := &BootProfiler{resolved: true, enabled: true, start: start, last: start}
 
 	// last starts at start; after a Mark it should move forward so the next
 	// delta is measured from the new point, not from start.
